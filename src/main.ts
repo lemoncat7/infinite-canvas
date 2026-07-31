@@ -202,7 +202,7 @@ function syncDomNodes() {
       const sizeLabel = ({ auto: '自动尺寸', '1024x1024': '1:1', '1536x1024': '3:2', '1024x1536': '2:3' } as Record<string, string>)[node.imageSettings?.size ?? 'auto'] ?? node.imageSettings?.size
       const qualityLabel = ({ auto: '自动质量', high: '高质量', medium: '标准质量', low: '低质量' } as Record<string, string>)[node.imageSettings?.quality ?? 'auto'] ?? node.imageSettings?.quality
       imagePanel.querySelector<HTMLElement>('[data-image-settings-label]')!.textContent = `${qualityLabel} · ${sizeLabel}`
-      const generateButton = imagePanel.querySelector<HTMLButtonElement>('[data-image-generate]')!; generateButton.disabled = locked || !node.body.trim(); generateButton.classList.toggle('is-running', locked); generateButton.innerHTML = locked ? '<span class="generate-loader"><i></i><i></i><i></i></span><b>生成中</b>' : '<svg class="generate-spark" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3-1.4 3.6L7 8l3.6 1.4L12 13l1.4-3.6L17 8l-3.6-1.4Z"></path><path d="m18 14-.9 2.1L15 17l2.1.9L18 20l.9-2.1L21 17l-2.1-.9Z"></path><path d="m6 15-.7 1.3L4 17l1.3.7L6 19l.7-1.3L8 17l-1.3-.7Z"></path></svg><b>生成</b>'
+      const generateButton = imagePanel.querySelector<HTMLButtonElement>('[data-image-generate]')!; generateButton.disabled = locked || !node.body.trim(); generateButton.classList.toggle('is-running', locked); generateButton.innerHTML = '<svg class="generate-spark" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3-1.4 3.6L7 8l3.6 1.4L12 13l1.4-3.6L17 8l-3.6-1.4Z"></path><path d="m18 14-.9 2.1L15 17l2.1.9L18 20l.9-2.1L21 17l-2.1-.9Z"></path><path d="m6 15-.7 1.3L4 17l1.3.7L6 19l.7-1.3L8 17l-1.3-.7Z"></path></svg><b class="generate-label"><span>生</span><span>成</span></b>'
     }
     const media = element.querySelector<HTMLElement>('.node-media')!
     if (node.mediaUrl) { media.dataset.hasMedia = 'true'; if (media.dataset.sourceKey !== node.mediaUrl) { media.dataset.sourceKey = node.mediaUrl; paintNodeMedia(element.querySelector<HTMLCanvasElement>('.node-media-canvas')!, node.mediaUrl) } }
@@ -390,7 +390,7 @@ async function loadCanvas() {
     if (response.status === 404) { await saveCanvas(); return }
     if (!response.ok) throw new Error('load failed')
     const document = await response.json() as { nodes: FlowNode[]; links: Array<FlowLink | [number, number]>; camera?: typeof camera }
-    nodes.splice(0, nodes.length, ...(document.nodes ?? [])); nodes.forEach(node => { if (node.kind === 'image' && !node.mediaUrl && node.body === '等待配置模型与生成参数') node.body = '' }); const migrated = (document.links ?? []).map(link => Array.isArray(link) ? { from: link[0], to: link[1], fromSide: 'right' as PortSide, toSide: 'left' as PortSide } : link); links.splice(0, links.length, ...migrated); nextId = nodes.length ? Math.max(...nodes.map(node => node.id)) + 1 : 1
+    nodes.splice(0, nodes.length, ...(document.nodes ?? [])); nodes.forEach(node => { if (node.kind === 'image' && !node.mediaUrl && node.body === '等待配置模型与生成参数') node.body = '' }); await Promise.all(nodes.filter(node => node.jobId && node.body === '生成完成 · 结果已回写').map(async node => { try { const jobResponse = await fetch(`/api/jobs/${node.jobId}`); if (!jobResponse.ok) return; const job = await jobResponse.json() as { prompt?: string }; if (job.prompt) node.body = job.prompt } catch { /* 保留现有内容，等待用户手动修正 */ } })); const migrated = (document.links ?? []).map(link => Array.isArray(link) ? { from: link[0], to: link[1], fromSide: 'right' as PortSide, toSide: 'left' as PortSide } : link); links.splice(0, links.length, ...migrated); nextId = nodes.length ? Math.max(...nodes.map(node => node.id)) + 1 : 1
     if (document.camera) { Object.assign(camera, document.camera); zoomTarget = camera.zoom }
     selectedId = nodes[0]?.id ?? 0; setSaveState('saved', '已自动保存'); updateEditor(); draw()
     nodes.filter(node => node.jobId && (node.status === 'queued' || node.status === 'running')).forEach(pollJob)
@@ -433,7 +433,7 @@ function pollJob(node: FlowNode) {
       updateEditor(); draw()
       if (job.status === 'succeeded' || job.status === 'failed') {
         window.clearInterval(timer); activeJobPolls.delete(jobId)
-        if (job.status === 'succeeded' && job.result_url) { node.mediaUrl = job.result_url; node.body = '生成完成 · 结果已回写'; imageCache.delete(job.result_url) }
+        if (job.status === 'succeeded' && job.result_url) { node.mediaUrl = job.result_url; imageCache.delete(job.result_url) }
         if (job.status === 'failed') jobLabel.textContent = job.error ? `生成失败：${job.error}` : '生成失败'
         updateEditor(); draw(); scheduleSave()
       }
