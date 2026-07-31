@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#10110f" />
+    <style>.asset-item img,.asset-item video{pointer-events:none;-webkit-user-drag:none;user-select:none}</style>
+    <title>Flow Studio — AI 无限画布</title>
+  </head>
+  <body>
+    <canvas id="canvas" aria-label="AI 创作无限画布"></canvas>
+    <div id="node-viewport"><div id="node-layer"></div></div>
+    <header class="topbar glass">
+      <div class="brand"><span class="brand-mark">F</span><strong>Flow Studio</strong><nav class="main-nav"><button id="open-projects" type="button">项目管理</button><button id="open-assets" type="button">资产库</button></nav></div>
+      <div class="actions"><span id="save-state" class="saved" data-state="saved">已自动保存</span><button id="reset" type="button">适应画布</button><button class="share" type="button">分享</button></div>
+    </header>
+    <aside class="toolbar glass legacy-toolbar" aria-label="节点工具">
+      <button data-tool="select" class="active" title="选择">↖</button>
+      <span></span>
+      <button data-add="prompt" title="提示词">T</button>
+      <button data-add="image" title="图片生成">▧</button>
+      <button data-add="video" title="视频生成">▶</button>
+      <button data-add="note" title="便签">◇</button>
+    </aside>
+    <aside class="inspector glass legacy-editor" aria-hidden="true">
+      <div class="eyebrow">NODE INSPECTOR</div>
+      <h2 id="editor-heading">编辑生成节点</h2>
+      <label>节点名称<input id="node-title" autocomplete="off" /></label>
+      <label>提示词<textarea id="node-prompt" rows="5"></textarea></label>
+      <label>生成模型<select id="node-model"><option>gpt-image-2</option><option>Flux 1.1 Pro</option><option>SDXL</option><option>Kling 2.1</option><option>Veo</option></select></label>
+      <div class="generation-status"><span id="job-label">准备生成</span><div><i id="job-progress"></i></div></div>
+      <button id="generate" class="primary" type="button">✦ 开始生成</button>
+      <button id="quick-create" class="secondary" type="button">＋ 新建生成节点</button>
+      <button id="delete-node" class="danger" type="button">删除当前节点</button>
+      <div class="mini-stats"><span><b id="node-count">4</b> 节点</span></div>
+    </aside>
+    <div class="zoom-slider-wrap"><button id="zoom-out" type="button" aria-label="缩小">−</button><input id="zoom-slider" type="range" min="30" max="250" value="100" aria-label="画布缩放" /><output id="zoom-percent">100%</output><button id="zoom-in" type="button" aria-label="放大">＋</button></div>
+    <nav class="canvas-dock" aria-label="画布工具">
+      <button data-add="prompt" type="button"><b>T</b><span>文字</span></button>
+      <button data-add="image" type="button"><b>▧</b><span>图片</span></button>
+      <button data-add="video" type="button"><b>▶</b><span>视频</span></button>
+      <i></i>
+      <button id="dock-upload" type="button"><b>↑</b><span>上传资产</span></button>
+      <button id="dock-appearance" type="button"><b>◫</b><span>画布外观</span></button>
+      <button id="dock-clear" class="dock-danger" type="button"><b>⌫</b><span>清除画布</span></button>
+    </nav>
+    <div class="hint">拖拽空白处平移 · 滚轮缩放 · 拖动节点编排</div>
+    <div id="context-menu" class="context-menu glass" role="menu">
+      <div class="context-title">创建节点</div>
+      <button data-context-add="prompt">T <span>提示词</span></button>
+      <button data-context-add="image">▧ <span>图片生成</span></button>
+      <button data-context-add="video">▶ <span>视频生成</span></button>
+      <button data-context-add="note">◇ <span>便签</span></button>
+      <i></i>
+      <button id="context-upload">↑ <span>上传图片</span></button>
+      <button id="context-assets">▦ <span>从资产库选择</span></button>
+      <button id="context-url">↗ <span>通过 URL 添加</span></button>
+      <i></i>
+      <button id="context-delete" class="context-danger">⌫ <span>删除节点</span></button>
+    </div>
+    <div id="panel-backdrop" class="panel-backdrop"></div>
+    <aside id="projects-panel" class="workspace-panel glass"><header><div><span>WORKSPACE</span><h2>项目管理</h2></div><button class="panel-close" type="button">×</button></header><button id="new-project" class="panel-primary" type="button">＋ 新建项目</button><div class="panel-section-title">最近项目</div><div id="project-list" class="project-list"><button class="project-card active" type="button"><i>∞</i><span><strong>未命名项目</strong><small>刚刚更新 · 当前画布</small></span><b>进入</b></button></div></aside>
+    <aside id="assets-panel" class="workspace-panel glass"><header><div><span>LIBRARY</span><h2>资产库</h2></div><button class="panel-close" type="button">×</button></header><input id="asset-upload" type="file" accept="image/*,video/*" multiple hidden><button id="upload-assets" class="panel-primary" type="button">↑ 上传图片或视频</button><div class="panel-section-title"><span>全部资产</span><small id="asset-count">0 项</small></div><div id="asset-grid" class="asset-grid"><div class="asset-empty"><b>◇</b><span>还没有素材</span><small>上传后可用于图生图与视频生成</small></div></div></aside>
+    <div id="asset-preview" class="asset-preview" role="dialog" aria-modal="true"><button id="close-preview" type="button" aria-label="关闭">×</button><div class="preview-stage"><img id="preview-image" alt="素材预览"><div><strong id="preview-name"></strong><span>单击素材可放到画布，右击查看更多操作</span></div></div></div>
+    <div id="node-info-modal" class="node-info-modal" role="dialog" aria-modal="true" aria-labelledby="node-info-title"><section><header><h2 id="node-info-title">节点信息</h2><button id="close-node-info" type="button" aria-label="关闭">×</button></header><nav><button class="active" data-info-tab="details" type="button">信息</button><button data-info-tab="json" type="button">JSON</button></nav><div id="node-info-details" class="node-info-details"></div><pre id="node-info-json" hidden></pre></section></div>
+    <div id="asset-context-menu" class="context-menu glass" role="menu"><div class="context-title">素材操作</div><button id="asset-context-place">＋ <span>放到画布</span></button><button id="asset-context-preview">⌕ <span>放大查看</span></button><i></i><button id="asset-context-delete" class="context-danger">⌫ <span>删除素材</span></button></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

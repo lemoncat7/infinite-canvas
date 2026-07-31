@@ -1,0 +1,30 @@
+services:
+  web:
+    build: .
+    container_name: infinite-canvas-web
+    ports:
+      - "4173:80"
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+  api:
+    build: ./api
+    container_name: infinite-canvas-api
+    restart: unless-stopped
+    environment:
+      GENERATION_PROVIDER: ${GENERATION_PROVIDER:-mock}
+      OPENAI_IMAGE_BASE_URL: ${OPENAI_IMAGE_BASE_URL:-}
+      OPENAI_IMAGE_API_KEY: ${OPENAI_IMAGE_API_KEY:-}
+      OPENAI_IMAGE_TIMEOUT_MS: ${OPENAI_IMAGE_TIMEOUT_MS:-600000}
+      CUSTOM_GENERATION_BASE_URL: ${CUSTOM_GENERATION_BASE_URL:-}
+      CUSTOM_GENERATION_API_KEY: ${CUSTOM_GENERATION_API_KEY:-}
+      CUSTOM_GENERATION_SUBMIT_PATH: ${CUSTOM_GENERATION_SUBMIT_PATH:-/generations}
+      CUSTOM_GENERATION_STATUS_PATH: ${CUSTOM_GENERATION_STATUS_PATH:-/generations/{id}}
+      CUSTOM_GENERATION_POLL_INTERVAL_MS: ${CUSTOM_GENERATION_POLL_INTERVAL_MS:-1200}
+      CUSTOM_GENERATION_TIMEOUT_MS: ${CUSTOM_GENERATION_TIMEOUT_MS:-600000}
+    volumes:
+      - canvas-data:/data
+
+volumes:
+  canvas-data:

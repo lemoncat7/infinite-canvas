@@ -1,0 +1,12 @@
+const { chromium } = require('playwright')
+;(async () => {
+  const browser = await chromium.launch({ headless: true })
+  const page = await browser.newPage()
+  await page.addInitScript(projectId => localStorage.setItem('flow-project-id', projectId), '013994da-c554-44a4-b8e4-df3e63728ebe')
+  await page.goto('http://127.0.0.1:4173/', { waitUntil: 'networkidle' })
+  await page.waitForTimeout(1400)
+  const state = await page.evaluate(() => { const node = document.querySelector('.flow-node'), media = node?.querySelector('.node-media'), canvas = node?.querySelector('.node-media-canvas'); return { generating: node?.classList.contains('generating'), hasMedia: media?.getAttribute('data-has-media'), progressVisible: node?.querySelector('.node-progress')?.classList.contains('visible'), nodeRadius: getComputedStyle(node).borderRadius, mediaRadius: getComputedStyle(media).borderRadius, mediaClip: getComputedStyle(media).clipPath, canvasPosition: getComputedStyle(canvas).position } })
+  const canvas = await (await fetch('http://127.0.0.1:4173/api/projects/013994da-c554-44a4-b8e4-df3e63728ebe/canvas')).json()
+  console.log(JSON.stringify({ state, savedNode: { status: canvas.nodes[0].status, progress: canvas.nodes[0].progress, hasMedia: Boolean(canvas.nodes[0].mediaUrl) } }))
+  await browser.close()
+})().catch(error => { console.error(error); process.exit(1) })

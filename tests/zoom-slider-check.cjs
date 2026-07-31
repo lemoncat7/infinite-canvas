@@ -1,0 +1,13 @@
+const { chromium } = require('playwright')
+;(async () => {
+  const browser = await chromium.launch({ headless: true })
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
+  await page.goto('http://127.0.0.1:4173/', { waitUntil: 'networkidle' })
+  const dockBefore = await page.locator('.canvas-dock').boundingBox()
+  await page.locator('#zoom-slider').fill('150')
+  await page.waitForTimeout(50)
+  const result = await page.evaluate(() => ({ value: document.querySelector('#zoom-slider').value, title: document.querySelector('#zoom-slider').title, inDock: Boolean(document.querySelector('.canvas-dock #zoom-slider')), dragHandle: Boolean(document.querySelector('#dock-drag-handle')) }))
+  const dockAfter = await page.locator('.canvas-dock').boundingBox()
+  console.log(JSON.stringify({ ...result, dockFixed: dockBefore.x === dockAfter.x && dockBefore.y === dockAfter.y }))
+  await browser.close()
+})().catch(error => { console.error(error); process.exit(1) })

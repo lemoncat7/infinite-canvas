@@ -1,0 +1,12 @@
+const { chromium } = require('playwright')
+;(async () => {
+  const browser = await chromium.launch({ headless: true }); const page = await browser.newPage()
+  await page.addInitScript(() => localStorage.setItem('flow-theme', 'light'))
+  await page.route('**/api/projects/*/canvas', route => route.request().method() === 'PUT' ? route.fulfill({ status:200, contentType:'application/json', body:'{}' }) : route.continue())
+  await page.goto('http://127.0.0.1:4173/', { waitUntil:'networkidle' }); await page.click('.canvas-dock [data-add="prompt"]')
+  const card = page.locator('.flow-node.kind-prompt').last(), copy = card.locator('.node-copy'); await copy.dblclick(); await copy.fill('双击编辑测试文字'); await copy.press('Control+Enter')
+  const before = await copy.evaluate(el => getComputedStyle(el).fontSize); await card.locator('[data-action="zoom-in"]').click(); const after = await copy.evaluate(el => getComputedStyle(el).fontSize); await card.locator('[data-action="info"]').click()
+  await page.click('[data-info-tab="json"]'); const json = JSON.parse(await page.locator('#node-info-json').textContent()); await page.screenshot({ path:'/tests/node-info-light.png' })
+  console.log(JSON.stringify({ text:await copy.textContent(), editable:await copy.getAttribute('contenteditable'), before, after, modalOpen:await page.locator('#node-info-modal').evaluate(el => el.classList.contains('open')), json, actions:await card.locator('.node-floating-tools button:not([hidden])').evaluateAll(items => items.map(item => item.getAttribute('data-action'))) }))
+  await browser.close()
+})().catch(error => { console.error(error); process.exit(1) })
