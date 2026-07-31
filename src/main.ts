@@ -20,14 +20,12 @@ const saveState = document.querySelector<HTMLSpanElement>('#save-state')!
 const jobLabel = document.querySelector<HTMLSpanElement>('#job-label')!
 const jobProgress = document.querySelector<HTMLElement>('#job-progress')!
 const generateButton = document.querySelector<HTMLButtonElement>('#generate')!
-const contextMenu = document.querySelector<HTMLDivElement>('#context-menu')!
 const camera = { x: 80, y: 10, zoom: 0.9 }
 const pointer = { down: false, x: 0, y: 0, draggingNode: null as number | null }
 let selectedId = 0
 let editingTextNodeId = 0
 let nextId = 1
 let contextPosition: Point = { x: 0, y: 0 }
-let contextNodeId: number | null = null
 let connecting: { nodeId: number; side: PortSide; pointer: Point } | null = null
 let currentProjectId = localStorage.getItem('flow-project-id') ?? 'default'
 let backgroundMode: 'dots' | 'lines' | 'blank' = 'lines'
@@ -204,7 +202,7 @@ function syncDomNodes() {
       const sizeLabel = ({ auto: '自动尺寸', '1024x1024': '1:1', '1536x1024': '3:2', '1024x1536': '2:3' } as Record<string, string>)[node.imageSettings?.size ?? 'auto'] ?? node.imageSettings?.size
       const qualityLabel = ({ auto: '自动质量', high: '高质量', medium: '标准质量', low: '低质量' } as Record<string, string>)[node.imageSettings?.quality ?? 'auto'] ?? node.imageSettings?.quality
       imagePanel.querySelector<HTMLElement>('[data-image-settings-label]')!.textContent = `${qualityLabel} · ${sizeLabel}`
-      const generateButton = imagePanel.querySelector<HTMLButtonElement>('[data-image-generate]')!; generateButton.disabled = locked || !node.body.trim(); generateButton.classList.toggle('is-running', locked); generateButton.innerHTML = locked ? '<i></i><b>生成中</b>' : '<span>↑</span><b>生成</b>'
+      const generateButton = imagePanel.querySelector<HTMLButtonElement>('[data-image-generate]')!; generateButton.disabled = locked || !node.body.trim(); generateButton.classList.toggle('is-running', locked); generateButton.innerHTML = locked ? '<span class="generate-loader"><i></i><i></i><i></i></span><b>生成中</b>' : '<svg class="generate-spark" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3-1.4 3.6L7 8l3.6 1.4L12 13l1.4-3.6L17 8l-3.6-1.4Z"></path><path d="m18 14-.9 2.1L15 17l2.1.9L18 20l.9-2.1L21 17l-2.1-.9Z"></path><path d="m6 15-.7 1.3L4 17l1.3.7L6 19l.7-1.3L8 17l-1.3-.7Z"></path></svg><b>生成</b>'
     }
     const media = element.querySelector<HTMLElement>('.node-media')!
     if (node.mediaUrl) { media.dataset.hasMedia = 'true'; if (media.dataset.sourceKey !== node.mediaUrl) { media.dataset.sourceKey = node.mediaUrl; paintNodeMedia(element.querySelector<HTMLCanvasElement>('.node-media-canvas')!, node.mediaUrl) } }
@@ -218,6 +216,7 @@ function createDomNode(node: FlowNode) {
   const element = document.createElement('article'); element.dataset.id = String(node.id); element.className = 'flow-node'
   element.innerHTML = `<div class="node-floating-tools"><button data-action="info" title="信息">ⓘ</button><button data-action="edit" title="编辑">✎</button><button data-action="zoom-in" title="放大文字">＋</button><button data-action="zoom-out" title="缩小文字">−</button><button data-action="generate" title="生成">✦</button><button data-action="preview" title="预览">⌕</button><button data-action="delete" title="删除">⌫</button></div><div class="node-info-popover"></div><div class="node-port input" data-side="left"></div><div class="node-port output" data-side="right"></div><span class="node-kind"></span><div class="node-media"><canvas class="node-media-canvas" width="560" height="440"></canvas></div><div class="image-empty-state"><span>▧</span><b>空图节点</b><small>连接参考图，或在下方描述要生成的图片</small></div><div class="node-copy"></div><div class="node-progress"><i></i></div><section class="image-config-panel"><div class="image-composer-title"><span>IMAGE</span><small>描述你想创造的画面</small></div><textarea data-image-field="description" rows="4" aria-label="图片描述" placeholder="例如：清晨薄雾中的未来城市，电影感光影…"></textarea><footer><details class="image-model-picker"><summary><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"></path></svg><b data-image-model-label>gpt-image-2</b><i>⌄</i></summary><div class="image-model-menu"><small>选择图像模型</small><button type="button" data-image-model="gpt-image-2"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect></svg><span><b>gpt-image-2</b><small>OpenAI 图像生成</small></span><i>✓</i></button></div><select data-image-field="model" aria-label="模型" hidden><option value="gpt-image-2">gpt-image-2</option></select></details><details><summary><span>⚙</span><b data-image-settings-label>自动质量 · 自动尺寸</b><i>⌃</i></summary><div class="image-settings-popover"><header><span>图像设置</span><small>调整输出规格</small></header><label><span><b>质量</b><small>细节与生成速度</small></span><select data-image-field="quality"><option value="auto">自动质量</option><option value="high">高质量</option><option value="medium">标准质量</option><option value="low">低质量</option></select></label><label><span><b>画面尺寸</b><small>输出宽高比例</small></span><select data-image-field="size"><option value="auto">自动尺寸</option><option value="1024x1024">1:1 · 1024 × 1024</option><option value="1536x1024">3:2 · 1536 × 1024</option><option value="1024x1536">2:3 · 1024 × 1536</option></select></label><label><span><b>背景</b><small>画面底色模式</small></span><select data-image-field="background"><option value="auto">自动背景</option><option value="transparent">透明背景</option><option value="opaque">不透明背景</option></select></label></div></details><button data-image-generate type="button" title="开始生成" aria-label="生成"><span>↑</span></button></footer></section>`
   element.querySelector('.image-config-panel')!.classList.add('image-composer-v2')
+  element.querySelectorAll('.image-model-picker > summary > i,.image-config-panel footer > details:not(.image-model-picker) > summary > i').forEach(icon => icon.remove())
   element.querySelector<HTMLElement>('.image-settings-popover')!.innerHTML = `<header><span>图像设置</span><small>调整输出质量与画面比例</small></header><section class="image-setting-section"><b>质量</b><div class="image-quality-options"><button type="button" data-image-setting="quality" data-value="auto">自动</button><button type="button" data-image-setting="quality" data-value="high">高</button><button type="button" data-image-setting="quality" data-value="medium">中</button><button type="button" data-image-setting="quality" data-value="low">低</button></div><select data-image-field="quality" hidden><option value="auto">自动</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select></section><section class="image-setting-section"><b>尺寸</b><div class="image-dimension-inputs"><label><span>W</span><input type="number" min="1" placeholder="自动" data-image-width></label><i>×</i><label><span>H</span><input type="number" min="1" placeholder="自动" data-image-height></label></div></section><section class="image-setting-section"><b>长宽比</b><div class="image-aspect-options"><button type="button" data-image-setting="size" data-value="auto"><i class="aspect-auto">A</i><span>自动</span></button><button type="button" data-image-setting="size" data-value="1024x1024"><i class="aspect-square"></i><span>1:1</span></button><button type="button" data-image-setting="size" data-value="1536x1024"><i class="aspect-landscape"></i><span>3:2</span></button><button type="button" data-image-setting="size" data-value="1024x1536"><i class="aspect-portrait"></i><span>2:3</span></button></div><select data-image-field="size" hidden><option value="auto">自动</option><option value="1024x1024">1:1</option><option value="1536x1024">3:2</option><option value="1024x1536">2:3</option></select></section><section class="image-setting-section image-background-setting"><span><b>透明背景</b><small>仅部分模型支持</small></span><button type="button" data-image-setting="background" data-value="transparent" aria-label="透明背景"><i></i></button><select data-image-field="background" hidden><option value="auto">自动</option><option value="transparent">透明</option><option value="opaque">不透明</option></select></section>`
   element.addEventListener('mousedown', event => {
     if (event.button !== 0) return
@@ -229,7 +228,7 @@ function createDomNode(node: FlowNode) {
   })
   element.addEventListener('dblclick', event => { event.preventDefault(); event.stopPropagation(); selectedId = node.id; updateEditor(); if (node.kind === 'prompt') enterTextEdit(node, element) })
   element.addEventListener('dragstart', event => event.preventDefault())
-  element.addEventListener('contextmenu', event => { event.preventDefault(); event.stopPropagation(); showContextMenu(event.clientX, event.clientY, node) })
+  element.addEventListener('contextmenu', event => { event.preventDefault(); event.stopPropagation() })
   element.querySelectorAll<HTMLElement>('.node-port').forEach(port => port.addEventListener('pointerdown', event => { event.preventDefault(); event.stopPropagation(); selectedId = node.id; connecting = { nodeId: node.id, side: port.dataset.side as PortSide, pointer: { x: event.clientX, y: event.clientY } }; draw() }))
   element.querySelector('[data-action="info"]')!.addEventListener('click', event => { event.stopPropagation(); openNodeInfo(node) })
   element.querySelector('[data-action="edit"]')!.addEventListener('click', event => { event.stopPropagation(); selectedId = node.id; updateEditor(); if (node.kind === 'prompt') enterTextEdit(node, element); else promptInput.focus() })
@@ -350,17 +349,6 @@ function deleteSelectedNode() {
   updateEditor(); scheduleSave(); draw()
 }
 
-function hideContextMenu() { contextMenu.classList.remove('open') }
-function showContextMenu(clientX: number, clientY: number, node?: FlowNode) {
-  contextPosition = world({ x: clientX, y: clientY }); contextNodeId = node?.id ?? null
-  if (node) { selectedId = node.id; updateEditor(); draw() }
-  document.querySelector<HTMLButtonElement>('#context-delete')!.style.display = node ? 'flex' : 'none'
-  const width = 180, height = node ? 390 : 350
-  contextMenu.style.left = `${Math.min(clientX, innerWidth - width - 10)}px`
-  contextMenu.style.top = `${Math.min(clientY, innerHeight - height - 10)}px`
-  contextMenu.classList.add('open')
-}
-
 function selectedNode() { return nodes.find(node => node.id === selectedId) }
 function updateEditor() {
   const node = selectedNode()
@@ -454,11 +442,11 @@ function pollJob(node: FlowNode) {
   activeJobPolls.set(jobId, timer)
 }
 
-canvas.addEventListener('pointerdown', e => { if (e.button !== 0) return; hideContextMenu(); if (cameraFrame !== null) { cancelAnimationFrame(cameraFrame); cameraFrame = null; zoomTarget = camera.zoom } pointer.down = true; pointer.x = e.clientX; pointer.y = e.clientY; const port = hitPort(e.clientX, e.clientY); if (port) { connecting = { nodeId: port.node.id, side: port.side, pointer: { x: e.clientX, y: e.clientY } }; selectedId = port.node.id; pointer.draggingNode = null; updateEditor() } else { const node = hitNode(e.clientX, e.clientY); pointer.draggingNode = node && node.status !== 'queued' && node.status !== 'running' ? node.id : null; if (node) selectedId = node.id; else selectedId = 0; updateEditor() } canvas.setPointerCapture(e.pointerId); canvas.classList.add('dragging'); draw() })
+canvas.addEventListener('pointerdown', e => { if (e.button !== 0) return; if (cameraFrame !== null) { cancelAnimationFrame(cameraFrame); cameraFrame = null; zoomTarget = camera.zoom } pointer.down = true; pointer.x = e.clientX; pointer.y = e.clientY; const port = hitPort(e.clientX, e.clientY); if (port) { connecting = { nodeId: port.node.id, side: port.side, pointer: { x: e.clientX, y: e.clientY } }; selectedId = port.node.id; pointer.draggingNode = null; updateEditor() } else { const node = hitNode(e.clientX, e.clientY); pointer.draggingNode = node && node.status !== 'queued' && node.status !== 'running' ? node.id : null; if (node) selectedId = node.id; else selectedId = 0; updateEditor() } canvas.setPointerCapture(e.pointerId); canvas.classList.add('dragging'); draw() })
 canvas.addEventListener('pointermove', e => { if (!pointer.down) return; setSaveState('editing', '编辑中…'); if (connecting) { connecting.pointer = { x: e.clientX, y: e.clientY }; draw(); return } const dx = e.clientX - pointer.x, dy = e.clientY - pointer.y; if (pointer.draggingNode) { const node = nodes.find(n => n.id === pointer.draggingNode)!; node.x += dx / camera.zoom; node.y += dy / camera.zoom } else { camera.x += dx; camera.y += dy } pointer.x = e.clientX; pointer.y = e.clientY; draw() })
 canvas.addEventListener('pointerup', e => { if (connecting) { const target = hitPort(e.clientX, e.clientY); if (target && target.node.id !== connecting.nodeId) { const duplicate = links.some(link => link.from === connecting!.nodeId && link.to === target.node.id && link.fromSide === connecting!.side && link.toSide === target.side); if (!duplicate) links.push({ from: connecting.nodeId, to: target.node.id, fromSide: connecting.side, toSide: target.side }) } connecting = null } scheduleSave(); pointer.down = false; pointer.draggingNode = null; canvas.classList.remove('dragging'); draw() })
 canvas.addEventListener('wheel', e => { e.preventDefault(); smoothZoom(zoomTarget * Math.exp(-e.deltaY * .001), { x: e.clientX, y: e.clientY }) }, { passive: false })
-canvas.addEventListener('contextmenu', e => { e.preventDefault(); showContextMenu(e.clientX, e.clientY, hitNode(e.clientX, e.clientY)) })
+canvas.addEventListener('contextmenu', e => e.preventDefault())
 document.querySelector('#reset')!.addEventListener('click', fitCanvas)
 zoomSlider.addEventListener('input', () => { zoomTarget = Number(zoomSlider.value) / 100; setZoom(zoomTarget, { x: innerWidth / 2, y: innerHeight / 2 }) })
 document.querySelector('#zoom-in')!.addEventListener('click', () => smoothZoom(zoomTarget * 1.15, { x: innerWidth / 2, y: innerHeight / 2 }))
@@ -466,12 +454,10 @@ document.querySelector('#zoom-out')!.addEventListener('click', () => smoothZoom(
 document.querySelector('#quick-create')!.addEventListener('click', () => addNode('image'))
 generateButton.addEventListener('click', generate)
 document.querySelector('#delete-node')!.addEventListener('click', deleteSelectedNode)
-document.querySelector('#context-delete')!.addEventListener('click', () => { if (contextNodeId !== null) selectedId = contextNodeId; deleteSelectedNode(); hideContextMenu() })
 titleInput.addEventListener('input', () => { const node = selectedNode(); if (!node) return; node.title = titleInput.value; scheduleSave(); draw() })
 promptInput.addEventListener('input', () => { const node = selectedNode(); if (!node) return; node.body = promptInput.value; scheduleSave(); draw() })
 modelInput.addEventListener('change', () => { const node = selectedNode(); if (!node) return; node.model = modelInput.value; scheduleSave(); draw() })
 document.querySelectorAll<HTMLElement>('[data-add]').forEach(button => button.addEventListener('click', () => addNode(button.dataset.add as NodeKind)))
-document.querySelectorAll<HTMLElement>('[data-context-add]').forEach(button => button.addEventListener('click', () => { addNode(button.dataset.contextAdd as NodeKind, contextPosition); hideContextMenu() }))
 const appearanceButton = document.querySelector<HTMLButtonElement>('#dock-appearance')!
 let themeTransitioning = false
 function refreshAppearanceButton() { appearanceButton.disabled = themeTransitioning || pendingMediaLoads.size > 0; appearanceButton.title = pendingMediaLoads.size ? `等待 ${pendingMediaLoads.size} 个图片资源加载完成` : '切换画布外观' }
@@ -549,9 +535,6 @@ let selectedAsset: { id: string; url: string; name: string } | null = null
 const assetContextMenu = document.querySelector<HTMLElement>('#asset-context-menu')!
 document.querySelector('#upload-assets')!.addEventListener('click', () => assetUpload.click())
 document.querySelector('#dock-upload')!.addEventListener('click', () => assetUpload.click())
-document.querySelector('#context-upload')!.addEventListener('click', () => { contextUploadPosition = { ...contextPosition }; assetUpload.accept = 'image/*'; assetUpload.multiple = false; hideContextMenu(); assetUpload.click() })
-document.querySelector('#context-assets')!.addEventListener('click', () => { hideContextMenu(); openWorkspacePanel('#assets-panel', '#open-assets'); void loadAssets() })
-document.querySelector('#context-url')!.addEventListener('click', () => { const position = { ...contextPosition }; hideContextMenu(); const value = window.prompt('请输入图片 URL（http:// 或 https://）')?.trim(); if (!value) return; try { const url = new URL(value); if (!['http:', 'https:'].includes(url.protocol)) throw new Error(); addMediaNode(url.href, 'URL 图片', position) } catch { window.alert('请输入有效的 http:// 或 https:// 图片地址') } })
 document.querySelector('#new-project')!.addEventListener('click', async () => { const response = await fetch('/api/projects', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: `未命名项目 ${document.querySelectorAll('.project-card').length + 1}` }) }); if (response.ok) { const project = await response.json() as { id: string }; await switchProject(project.id); await loadProjects() } })
 assetUpload.addEventListener('change', async () => { const files = [...(assetUpload.files ?? [])]; if (!files.length) return; const button = document.querySelector<HTMLButtonElement>('#upload-assets')!, placement = contextUploadPosition; contextUploadPosition = null; button.disabled = true; button.textContent = '正在上传…'; try { const payload = await Promise.all(files.map(async file => ({ name: file.name, mimeType: file.type || 'application/octet-stream', data: await fileBase64(file) }))); const response = await fetch(`/api/projects/${currentProjectId}/assets`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ files: payload }) }); if (!response.ok) throw new Error(response.status === 413 ? '图片过大，单个文件不能超过 100MB' : `上传失败（${response.status}）`); const uploaded = await response.json() as Array<{ name: string; mimeType: string; url: string }>; if (placement && uploaded[0]?.mimeType.startsWith('image/')) addMediaNode(uploaded[0].url, uploaded[0].name, placement); await loadAssets() } catch (error) { window.alert(error instanceof Error ? error.message : '上传失败，请重试') } finally { button.disabled = false; button.textContent = '↑ 上传图片或视频'; assetUpload.value = ''; assetUpload.accept = 'image/*,video/*'; assetUpload.multiple = true } })
 async function loadProjects() { const response = await fetch('/api/projects'); if (!response.ok) return; const projects = await response.json() as Array<{ id: string; name: string; updatedAt: string }>; const list = document.querySelector<HTMLElement>('#project-list')!; list.innerHTML = ''; for (const project of projects) { const button = document.createElement('button'); button.className = `project-card${project.id === currentProjectId ? ' active' : ''}`; button.type = 'button'; button.innerHTML = `<i>∞</i><span><strong>${escapeHtml(project.name)}</strong><small>${project.id === currentProjectId ? '当前画布' : '已自动保存'}</small></span><b>进入</b>`; button.addEventListener('click', () => void switchProject(project.id)); list.append(button) } }
@@ -570,7 +553,6 @@ function escapeHtml(value: string) { const element = document.createElement('spa
 function fileBase64(file: File) { return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1] ?? ''); reader.onerror = () => reject(reader.error); reader.readAsDataURL(file) }) }
 document.addEventListener('pointerdown', event => {
   const target = event.target as Node
-  if (!contextMenu.contains(target) && target !== canvas) hideContextMenu()
   if (!assetContextMenu.contains(target)) assetContextMenu.classList.remove('open')
   document.querySelectorAll<HTMLDetailsElement>('.image-config-panel details[open]').forEach(details => { if (!details.contains(target)) details.open = false })
 })

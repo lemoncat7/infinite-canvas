@@ -45,19 +45,6 @@
       <button id="dock-clear" class="dock-danger" type="button"><b>⌫</b><span>清除画布</span></button>
     </nav>
     <div class="hint">拖拽空白处平移 · 滚轮缩放 · 拖动节点编排</div>
-    <div id="context-menu" class="context-menu glass" role="menu">
-      <div class="context-title">创建节点</div>
-      <button data-context-add="prompt">T <span>提示词</span></button>
-      <button data-context-add="image">▧ <span>图片生成</span></button>
-      <button data-context-add="video">▶ <span>视频生成</span></button>
-      <button data-context-add="note">◇ <span>便签</span></button>
-      <i></i>
-      <button id="context-upload">↑ <span>上传图片</span></button>
-      <button id="context-assets">▦ <span>从资产库选择</span></button>
-      <button id="context-url">↗ <span>通过 URL 添加</span></button>
-      <i></i>
-      <button id="context-delete" class="context-danger">⌫ <span>删除节点</span></button>
-    </div>
     <div id="panel-backdrop" class="panel-backdrop"></div>
     <aside id="projects-panel" class="workspace-panel glass"><header><div><span>WORKSPACE</span><h2>项目管理</h2></div><button class="panel-close" type="button">×</button></header><button id="new-project" class="panel-primary" type="button">＋ 新建项目</button><div class="panel-section-title">最近项目</div><div id="project-list" class="project-list"><button class="project-card active" type="button"><i>∞</i><span><strong>未命名项目</strong><small>刚刚更新 · 当前画布</small></span><b>进入</b></button></div></aside>
     <aside id="assets-panel" class="workspace-panel glass"><header><div><span>LIBRARY</span><h2>资产库</h2></div><button class="panel-close" type="button">×</button></header><input id="asset-upload" type="file" accept="image/*,video/*" multiple hidden><button id="upload-assets" class="panel-primary" type="button">↑ 上传图片或视频</button><div class="panel-section-title"><span>全部资产</span><small id="asset-count">0 项</small></div><div id="asset-grid" class="asset-grid"><div class="asset-empty"><b>◇</b><span>还没有素材</span><small>上传后可用于图生图与视频生成</small></div></div></aside>
