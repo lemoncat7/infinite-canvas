@@ -3,7 +3,7 @@ import './style.css'
 type Point = { x: number; y: number }
 type NodeKind = 'prompt' | 'image' | 'video' | 'note'
 type PortSide = 'top' | 'right' | 'bottom' | 'left'
-type FlowNode = Point & { id: number; publicId?: string; kind: NodeKind; width: number; height: number; title: string; body: string; accent: string; model?: string; jobId?: string; progress?: number; status?: string; mediaUrl?: string; fontScale?: number }
+type FlowNode = Point & { id: number; publicId?: string; kind: NodeKind; width: number; height: number; title: string; body: string; accent: string; model?: string; jobId?: string; progress?: number; status?: string; mediaUrl?: string; fontScale?: number; imageSettings?: { size?: string; quality?: string; background?: string } }
 type FlowLink = { from: number; to: number; fromSide: PortSide; toSide: PortSide }
 
 const canvas = document.querySelector<HTMLCanvasElement>('#canvas')!
@@ -161,7 +161,7 @@ function fitCanvas() {
   cameraFrame = requestAnimationFrame(tick)
 }
 function makePublicId(kind: NodeKind) { const type = kind === 'prompt' ? 'text' : kind; return `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}` }
-function addNode(kind: NodeKind = 'image', position?: Point) { const center = position ?? world({ x: innerWidth / 2, y: innerHeight / 2 }); const titles = { prompt: '文本', image: '文生图 · 新任务', video: '图生视频 · 新任务', note: '创作便签' }; nodes.push({ id: nextId, publicId: makePublicId(kind), kind, x: center.x - 130, y: center.y - 80, width: 265, height: kind === 'note' ? 135 : 175, title: titles[kind], body: kind === 'prompt' ? '输入你的创意描述' : '等待配置模型与生成参数', accent: kind === 'video' ? '#ffb774' : kind === 'prompt' ? '#e7ff70' : kind === 'note' ? '#b6efa2' : '#8ee7ff', model: kind === 'video' ? 'Kling 2.1' : 'gpt-image-2' }); selectedId = nextId++; updateEditor(); scheduleSave(); draw() }
+function addNode(kind: NodeKind = 'image', position?: Point) { const center = position ?? world({ x: innerWidth / 2, y: innerHeight / 2 }); const titles = { prompt: '文本', image: '文生图 · 新任务', video: '图生视频 · 新任务', note: '创作便签' }; nodes.push({ id: nextId, publicId: makePublicId(kind), kind, x: center.x - 130, y: center.y - 80, width: 265, height: kind === 'note' ? 135 : 175, title: titles[kind], body: kind === 'image' ? '' : kind === 'prompt' ? '输入你的创意描述' : '等待配置模型与生成参数', accent: kind === 'video' ? '#ffb774' : kind === 'prompt' ? '#e7ff70' : kind === 'note' ? '#b6efa2' : '#8ee7ff', model: kind === 'video' ? 'Kling 2.1' : 'gpt-image-2' }); selectedId = nextId++; updateEditor(); scheduleSave(); draw() }
 function addMediaNode(url: string, title: string, position = contextPosition) { nodes.push({ id: nextId, kind: 'image', x: position.x - 145, y: position.y - 120, width: 290, height: 240, title, body: '项目素材', accent: '#8ee7ff', mediaUrl: url, model: 'Flux 1.1 Pro' }); selectedId = nextId++; updateEditor(); scheduleSave(); draw() }
 
 function syncDomNodes() {
@@ -178,10 +178,32 @@ function syncDomNodes() {
     const copy = element.querySelector<HTMLElement>('.node-copy')!; if (editingTextNodeId !== node.id) copy.textContent = node.body || defaultNodeCopy(node.kind)
     element.querySelector<HTMLElement>('.node-kind')!.textContent = node.kind === 'prompt' ? 'TEXT' : node.kind === 'note' ? 'NOTE' : node.kind === 'video' ? 'VIDEO' : 'IMAGE'
     element.querySelectorAll<HTMLElement>('[data-action]').forEach(button => button.hidden = false)
-    for (const action of ['info', 'zoom-in', 'zoom-out']) element.querySelector<HTMLElement>(`[data-action="${action}"]`)!.hidden = node.kind !== 'prompt'
+    for (const action of ['zoom-in', 'zoom-out']) element.querySelector<HTMLElement>(`[data-action="${action}"]`)!.hidden = node.kind !== 'prompt'
     element.querySelector<HTMLElement>('[data-action="preview"]')!.hidden = !node.mediaUrl
     element.querySelector<HTMLElement>('[data-action="generate"]')!.hidden = node.kind === 'note' || node.kind === 'prompt'
+    if (node.kind === 'image') for (const action of ['edit', 'zoom-in', 'zoom-out', 'generate', 'preview']) element.querySelector<HTMLElement>(`[data-action="${action}"]`)!.hidden = true
+    if (node.kind === 'image') {
+      element.querySelector<HTMLElement>('[data-action="info"]')!.innerHTML = '<span class="node-tool-content"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg><span>信息</span></span>'
+      element.querySelector<HTMLElement>('[data-action="delete"]')!.innerHTML = '<span class="node-tool-content"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path><path d="M3 6h18"></path><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg><span>删除</span></span>'
+    }
+    if (node.kind === 'prompt') {
+      element.querySelector<HTMLElement>('[data-action="info"]')!.innerHTML = '<span class="node-tool-content"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg><span>信息</span></span>'
+      element.querySelector<HTMLElement>('[data-action="edit"]')!.innerHTML = '<span class="node-tool-content"><svg viewBox="0 0 24 24"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg><span>编辑</span></span>'
+      element.querySelector<HTMLElement>('[data-action="zoom-in"]')!.innerHTML = '<span class="node-tool-content"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path><path d="M11 8v6"></path><path d="M8 11h6"></path></svg><span>放大</span></span>'
+      element.querySelector<HTMLElement>('[data-action="zoom-out"]')!.innerHTML = '<span class="node-tool-content"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path><path d="M8 11h6"></path></svg><span>缩小</span></span>'
+      element.querySelector<HTMLElement>('[data-action="delete"]')!.innerHTML = '<span class="node-tool-content"><svg viewBox="0 0 24 24"><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path><path d="M3 6h18"></path><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg><span>删除</span></span>'
+    }
     element.querySelector<HTMLElement>('.node-info-popover')!.textContent = `文字节点 · ${node.body.length} 字 · ${Math.round((node.fontScale ?? 1) * 100)}%`
+    const imagePanel = element.querySelector<HTMLElement>('.image-config-panel')!; const imagePanelOpen = node.kind === 'image' && node.id === selectedId; imagePanel.classList.toggle('open', imagePanelOpen); if (!imagePanelOpen) imagePanel.querySelectorAll<HTMLDetailsElement>('details[open]').forEach(details => details.open = false)
+    if (node.kind === 'image') {
+      const model = imagePanel.querySelector<HTMLSelectElement>('[data-image-field="model"]')!, description = imagePanel.querySelector<HTMLTextAreaElement>('[data-image-field="description"]')!
+      if (document.activeElement !== model) model.value = node.model ?? 'gpt-image-2'; imagePanel.querySelector<HTMLElement>('[data-image-model-label]')!.textContent = node.model ?? 'gpt-image-2'; if (document.activeElement !== description) description.value = node.body
+      for (const key of ['size', 'quality', 'background'] as const) { const input = imagePanel.querySelector<HTMLSelectElement>(`[data-image-field="${key}"]`)!; if (document.activeElement !== input) input.value = node.imageSettings?.[key] ?? 'auto' }
+      const sizeLabel = ({ auto: '自动尺寸', '1024x1024': '1:1', '1536x1024': '3:2', '1024x1536': '2:3' } as Record<string, string>)[node.imageSettings?.size ?? 'auto'] ?? node.imageSettings?.size
+      const qualityLabel = ({ auto: '自动质量', high: '高质量', medium: '标准质量', low: '低质量' } as Record<string, string>)[node.imageSettings?.quality ?? 'auto'] ?? node.imageSettings?.quality
+      imagePanel.querySelector<HTMLElement>('[data-image-settings-label]')!.textContent = `${qualityLabel} · ${sizeLabel}`
+      const generateButton = imagePanel.querySelector<HTMLButtonElement>('[data-image-generate]')!; generateButton.disabled = locked || !node.body.trim(); generateButton.classList.toggle('is-running', locked); generateButton.innerHTML = locked ? '<i></i><b>生成中</b>' : '<span>↑</span><b>生成</b>'
+    }
     const media = element.querySelector<HTMLElement>('.node-media')!
     if (node.mediaUrl) { media.dataset.hasMedia = 'true'; if (media.dataset.sourceKey !== node.mediaUrl) { media.dataset.sourceKey = node.mediaUrl; paintNodeMedia(element.querySelector<HTMLCanvasElement>('.node-media-canvas')!, node.mediaUrl) } }
     else { delete media.dataset.hasMedia; delete media.dataset.sourceKey; const mediaCanvas = element.querySelector<HTMLCanvasElement>('.node-media-canvas')!; mediaCanvas.getContext('2d')!.clearRect(0, 0, mediaCanvas.width, mediaCanvas.height) }
@@ -192,11 +214,11 @@ function syncDomNodes() {
 
 function createDomNode(node: FlowNode) {
   const element = document.createElement('article'); element.dataset.id = String(node.id); element.className = 'flow-node'
-  element.innerHTML = `<div class="node-floating-tools"><button data-action="info" title="信息">ⓘ</button><button data-action="edit" title="编辑">✎</button><button data-action="zoom-in" title="放大文字">＋</button><button data-action="zoom-out" title="缩小文字">−</button><button data-action="generate" title="生成">✦</button><button data-action="preview" title="预览">⌕</button><button data-action="delete" title="删除">⌫</button></div><div class="node-info-popover"></div><div class="node-port input" data-side="left"></div><div class="node-port output" data-side="right"></div><span class="node-kind"></span><div class="node-media"><canvas class="node-media-canvas" width="560" height="440"></canvas></div><div class="node-copy"></div><div class="node-progress"><i></i></div>`
+  element.innerHTML = `<div class="node-floating-tools"><button data-action="info" title="信息">ⓘ</button><button data-action="edit" title="编辑">✎</button><button data-action="zoom-in" title="放大文字">＋</button><button data-action="zoom-out" title="缩小文字">−</button><button data-action="generate" title="生成">✦</button><button data-action="preview" title="预览">⌕</button><button data-action="delete" title="删除">⌫</button></div><div class="node-info-popover"></div><div class="node-port input" data-side="left"></div><div class="node-port output" data-side="right"></div><span class="node-kind"></span><div class="node-media"><canvas class="node-media-canvas" width="560" height="440"></canvas></div><div class="image-empty-state"><span>▧</span><b>空图节点</b><small>连接参考图，或在下方描述要生成的图片</small></div><div class="node-copy"></div><div class="node-progress"><i></i></div><section class="image-config-panel"><div class="image-composer-title"><span>IMAGE</span><small>描述你想创造的画面</small></div><textarea data-image-field="description" rows="4" aria-label="图片描述" placeholder="例如：清晨薄雾中的未来城市，电影感光影…"></textarea><footer><details class="image-model-picker"><summary><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"></path></svg><b data-image-model-label>gpt-image-2</b><i>⌄</i></summary><div class="image-model-menu"><small>选择图像模型</small><button type="button" data-image-model="gpt-image-2"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect></svg><span><b>gpt-image-2</b><small>OpenAI 图像生成</small></span><i>✓</i></button></div><select data-image-field="model" aria-label="模型" hidden><option value="gpt-image-2">gpt-image-2</option></select></details><details><summary><span>⚙</span><b data-image-settings-label>自动质量 · 自动尺寸</b><i>⌃</i></summary><div class="image-settings-popover"><header><span>图像设置</span><small>调整输出规格</small></header><label><span><b>质量</b><small>细节与生成速度</small></span><select data-image-field="quality"><option value="auto">自动质量</option><option value="high">高质量</option><option value="medium">标准质量</option><option value="low">低质量</option></select></label><label><span><b>画面尺寸</b><small>输出宽高比例</small></span><select data-image-field="size"><option value="auto">自动尺寸</option><option value="1024x1024">1:1 · 1024 × 1024</option><option value="1536x1024">3:2 · 1536 × 1024</option><option value="1024x1536">2:3 · 1024 × 1536</option></select></label><label><span><b>背景</b><small>画面底色模式</small></span><select data-image-field="background"><option value="auto">自动背景</option><option value="transparent">透明背景</option><option value="opaque">不透明背景</option></select></label></div></details><button data-image-generate type="button" title="开始生成" aria-label="生成"><span>↑</span></button></footer></section>`
   element.addEventListener('mousedown', event => {
     if (event.button !== 0) return
     const target = event.target as HTMLElement
-    if (target.closest('button,.node-port') || target.closest('.node-copy[contenteditable="true"]')) return
+    if (target.closest('button,.node-port,.image-config-panel') || target.closest('.node-copy[contenteditable="true"]')) return
     event.preventDefault(); event.stopPropagation(); selectedId = node.id; updateEditor()
     if (node.status === 'queued' || node.status === 'running') { draw(); return }
     domDrag = { id: node.id, startX: event.clientX, startY: event.clientY, initialX: node.x, initialY: node.y, element, moved: false }; element.classList.add('dragging'); draw()
@@ -212,6 +234,14 @@ function createDomNode(node: FlowNode) {
   element.querySelector('[data-action="generate"]')!.addEventListener('click', event => { event.stopPropagation(); selectedId = node.id; updateEditor(); void generate() })
   element.querySelector('[data-action="preview"]')!.addEventListener('click', event => { event.stopPropagation(); if (node.mediaUrl) openAssetPreview(node.mediaUrl, node.title) })
   element.querySelector('[data-action="delete"]')!.addEventListener('click', event => { event.stopPropagation(); selectedId = node.id; deleteSelectedNode() })
+  const imagePanel = element.querySelector<HTMLElement>('.image-config-panel')!
+  imagePanel.addEventListener('mousedown', event => event.stopPropagation())
+  imagePanel.addEventListener('click', event => event.stopPropagation())
+  imagePanel.querySelector<HTMLSelectElement>('[data-image-field="model"]')!.addEventListener('change', event => { node.model = (event.target as HTMLSelectElement).value; scheduleSave() })
+  imagePanel.querySelectorAll<HTMLButtonElement>('[data-image-model]').forEach(button => button.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); const select = imagePanel.querySelector<HTMLSelectElement>('[data-image-field="model"]')!; select.value = button.dataset.imageModel!; select.dispatchEvent(new Event('change')); imagePanel.querySelector<HTMLDetailsElement>('.image-model-picker')!.open = false; draw() }))
+  imagePanel.querySelector<HTMLTextAreaElement>('[data-image-field="description"]')!.addEventListener('input', event => { node.body = (event.target as HTMLTextAreaElement).value; setSaveState('editing', '编辑中…'); scheduleSave(); draw() })
+  for (const key of ['size', 'quality', 'background'] as const) imagePanel.querySelector<HTMLSelectElement>(`[data-image-field="${key}"]`)!.addEventListener('change', event => { node.imageSettings = { ...(node.imageSettings ?? {}), [key]: (event.target as HTMLSelectElement).value }; scheduleSave() })
+  imagePanel.querySelector('[data-image-generate]')!.addEventListener('click', event => { event.stopPropagation(); selectedId = node.id; updateEditor(); void generate() })
   return element
 }
 
@@ -245,7 +275,7 @@ document.querySelector('#close-node-info')!.addEventListener('click', closeNodeI
 nodeInfoModal.addEventListener('click', event => { if (event.target === nodeInfoModal) closeNodeInfo() })
 nodeInfoModal.querySelectorAll<HTMLElement>('[data-info-tab]').forEach(button => button.addEventListener('click', () => { const json = button.dataset.infoTab === 'json'; nodeInfoDetails.hidden = json; nodeInfoJson.hidden = !json; nodeInfoModal.querySelectorAll('[data-info-tab]').forEach(item => item.classList.toggle('active', item === button)) }))
 
-function defaultNodeCopy(kind: NodeKind) { return kind === 'prompt' ? '双击输入提示词' : kind === 'image' ? '连接提示词或参考图片，然后开始生成' : kind === 'video' ? '连接提示词或图片，生成视频' : '双击添加说明文字' }
+function defaultNodeCopy(kind: NodeKind) { return kind === 'prompt' ? '双击输入提示词' : kind === 'image' ? '空图节点' : kind === 'video' ? '连接提示词或图片，生成视频' : '双击添加说明文字' }
 
 function paintNodeMedia(target: HTMLCanvasElement, url: string) {
   let image = imageCache.get(url)
@@ -365,7 +395,7 @@ async function loadCanvas() {
     if (response.status === 404) { await saveCanvas(); return }
     if (!response.ok) throw new Error('load failed')
     const document = await response.json() as { nodes: FlowNode[]; links: Array<FlowLink | [number, number]>; camera?: typeof camera }
-    nodes.splice(0, nodes.length, ...(document.nodes ?? [])); const migrated = (document.links ?? []).map(link => Array.isArray(link) ? { from: link[0], to: link[1], fromSide: 'right' as PortSide, toSide: 'left' as PortSide } : link); links.splice(0, links.length, ...migrated); nextId = nodes.length ? Math.max(...nodes.map(node => node.id)) + 1 : 1
+    nodes.splice(0, nodes.length, ...(document.nodes ?? [])); nodes.forEach(node => { if (node.kind === 'image' && !node.mediaUrl && node.body === '等待配置模型与生成参数') node.body = '' }); const migrated = (document.links ?? []).map(link => Array.isArray(link) ? { from: link[0], to: link[1], fromSide: 'right' as PortSide, toSide: 'left' as PortSide } : link); links.splice(0, links.length, ...migrated); nextId = nodes.length ? Math.max(...nodes.map(node => node.id)) + 1 : 1
     if (document.camera) { Object.assign(camera, document.camera); zoomTarget = camera.zoom }
     selectedId = nodes[0]?.id ?? 0; setSaveState('saved', '已自动保存'); updateEditor(); draw()
     nodes.filter(node => node.jobId && (node.status === 'queued' || node.status === 'running')).forEach(pollJob)
@@ -380,7 +410,8 @@ async function generate() {
     const upstream = links.filter(link => link.to === node.id).map(link => nodes.find(item => item.id === link.from)).filter((item): item is FlowNode => Boolean(item))
     const inputUrls = upstream.map(item => item.mediaUrl).filter((url): url is string => Boolean(url))
     const promptParts = [...upstream.filter(item => item.kind === 'prompt' || item.kind === 'note').map(item => item.body.trim()).filter(Boolean), node.body.trim()]
-    const response = await fetch('/api/jobs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ projectId: currentProjectId, nodeId: node.id, kind: node.kind === 'video' ? 'video' : 'image', prompt: promptParts.join('\n\n'), model: node.model, inputUrls }) })
+    const parameters = node.kind === 'image' ? Object.fromEntries(Object.entries(node.imageSettings ?? {}).filter(([, value]) => value && value !== 'auto')) : undefined
+    const response = await fetch('/api/jobs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ projectId: currentProjectId, nodeId: node.id, kind: node.kind === 'video' ? 'video' : 'image', prompt: promptParts.join('\n\n'), model: node.model, inputUrls, parameters }) })
     if (!response.ok) throw new Error('job failed')
     const job = await response.json() as { id: string; status: string; progress: number }
     node.jobId = job.id; node.status = job.status; node.progress = job.progress; updateEditor(); scheduleSave(); pollJob(node)
@@ -530,7 +561,12 @@ document.addEventListener('dragover', event => { event.preventDefault(); if (eve
 document.addEventListener('drop', event => { event.preventDefault(); event.stopPropagation(); if (!draggingAsset) return; const asset = draggingAsset; draggingAsset = null; closeWorkspacePanels(); addMediaNode(asset.url, asset.name, world({ x: event.clientX, y: event.clientY })) })
 function escapeHtml(value: string) { const element = document.createElement('span'); element.textContent = value; return element.innerHTML }
 function fileBase64(file: File) { return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1] ?? ''); reader.onerror = () => reject(reader.error); reader.readAsDataURL(file) }) }
-document.addEventListener('pointerdown', event => { if (!contextMenu.contains(event.target as Node) && event.target !== canvas) hideContextMenu(); if (!assetContextMenu.contains(event.target as Node)) assetContextMenu.classList.remove('open') })
+document.addEventListener('pointerdown', event => {
+  const target = event.target as Node
+  if (!contextMenu.contains(target) && target !== canvas) hideContextMenu()
+  if (!assetContextMenu.contains(target)) assetContextMenu.classList.remove('open')
+  document.querySelectorAll<HTMLDetailsElement>('.image-config-panel details[open]').forEach(details => { if (!details.contains(target)) details.open = false })
+})
 window.addEventListener('keydown', event => {
   if (event.key === 'Escape' && nodeInfoModal.classList.contains('open')) { closeNodeInfo(); return }
   if (event.key === 'Escape' && assetPreview.classList.contains('open')) { closeAssetPreview(); return }
