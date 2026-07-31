@@ -195,7 +195,7 @@ function syncDomNodes() {
     const imagePanel = element.querySelector<HTMLElement>('.image-config-panel')!; const imagePanelOpen = node.kind === 'image' && node.id === selectedId; imagePanel.classList.toggle('open', imagePanelOpen); if (!imagePanelOpen) imagePanel.querySelectorAll<HTMLDetailsElement>('details[open]').forEach(details => details.open = false)
     if (node.kind === 'image') {
       const model = imagePanel.querySelector<HTMLSelectElement>('[data-image-field="model"]')!, description = imagePanel.querySelector<HTMLTextAreaElement>('[data-image-field="description"]')!
-      if (document.activeElement !== model) model.value = node.model ?? 'gpt-image-2'; imagePanel.querySelector<HTMLElement>('[data-image-model-label]')!.textContent = node.model ?? 'gpt-image-2'; if (document.activeElement !== description) description.value = node.body
+      if (document.activeElement !== model) model.value = node.model ?? 'gpt-image-2'; imagePanel.querySelector<HTMLElement>('[data-image-model-label]')!.textContent = node.model ?? 'gpt-image-2'; description.placeholder = node.mediaUrl ? '描述你想如何修改这张图片' : '描述要生成的图片内容'; if (document.activeElement !== description) description.value = node.body
       for (const key of ['size', 'quality', 'background'] as const) { const input = imagePanel.querySelector<HTMLSelectElement>(`[data-image-field="${key}"]`)!; if (document.activeElement !== input) input.value = node.imageSettings?.[key] ?? 'auto' }
       imagePanel.querySelectorAll<HTMLElement>('[data-image-setting]').forEach(button => button.classList.toggle('active', node.imageSettings?.[button.dataset.imageSetting as 'size' | 'quality' | 'background'] === button.dataset.value || ((!node.imageSettings?.[button.dataset.imageSetting as 'size' | 'quality' | 'background'] || node.imageSettings?.[button.dataset.imageSetting as 'size' | 'quality' | 'background'] === 'auto') && button.dataset.value === 'auto')))
       const dimensions = (node.imageSettings?.size ?? '').match(/^(\d+)x(\d+)$/); const widthInput = imagePanel.querySelector<HTMLInputElement>('[data-image-width]')!, heightInput = imagePanel.querySelector<HTMLInputElement>('[data-image-height]')!; if (document.activeElement !== widthInput) widthInput.value = dimensions?.[1] ?? ''; if (document.activeElement !== heightInput) heightInput.value = dimensions?.[2] ?? ''
@@ -398,19 +398,40 @@ async function loadCanvas() {
 }
 
 async function generate() {
-  const node = selectedNode()
-  if (!node || !node.body.trim()) { promptInput.focus(); return }
+  const source = selectedNode()
+  if (!source || !source.body.trim()) { promptInput.focus(); return }
   jobLabel.textContent = '正在提交…'
+  const editsExistingImage = source.kind === 'image' && Boolean(source.mediaUrl)
+  const node = editsExistingImage ? createImageRevisionNode(source) : source
   try {
-    const upstream = links.filter(link => link.to === node.id).map(link => nodes.find(item => item.id === link.from)).filter((item): item is FlowNode => Boolean(item))
-    const inputUrls = upstream.map(item => item.mediaUrl).filter((url): url is string => Boolean(url))
-    const promptParts = [...upstream.filter(item => item.kind === 'prompt' || item.kind === 'note').map(item => item.body.trim()).filter(Boolean), node.body.trim()]
-    const parameters = node.kind === 'image' ? Object.fromEntries(Object.entries(node.imageSettings ?? {}).filter(([, value]) => value && value !== 'auto')) : undefined
+    const upstream = links.filter(link => link.to === source.id && link.from !== node.id).map(link => nodes.find(item => item.id === link.from)).filter((item): item is FlowNode => Boolean(item))
+    const inputUrls = [...new Set([...(source.mediaUrl ? [source.mediaUrl] : []), ...upstream.map(item => item.mediaUrl).filter((url): url is string => Boolean(url))])]
+    const promptParts = [...upstream.filter(item => item.kind === 'prompt' || item.kind === 'note').map(item => item.body.trim()).filter(Boolean), source.body.trim()]
+    const parameters = source.kind === 'image' ? Object.fromEntries(Object.entries(source.imageSettings ?? {}).filter(([, value]) => value && value !== 'auto')) : undefined
     const response = await fetch('/api/jobs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ projectId: currentProjectId, nodeId: node.id, kind: node.kind === 'video' ? 'video' : 'image', prompt: promptParts.join('\n\n'), model: node.model, inputUrls, parameters }) })
     if (!response.ok) throw new Error('job failed')
     const job = await response.json() as { id: string; status: string; progress: number }
     node.jobId = job.id; node.status = job.status; node.progress = job.progress; updateEditor(); scheduleSave(); pollJob(node)
-  } catch { jobLabel.textContent = '提交失败，请检查 API' }
+  } catch { node.status = 'failed'; node.progress = 0; jobLabel.textContent = '提交失败，请检查 API'; updateEditor(); scheduleSave(); draw() }
+}
+
+function createImageRevisionNode(source: FlowNode) {
+  const position = findRevisionPosition(source)
+  const revision: FlowNode = { id: nextId++, publicId: makePublicId('image'), kind: 'image', x: position.x, y: position.y, width: 280, height: 220, title: '图片修改结果', body: source.body, accent: source.accent, model: source.model ?? 'gpt-image-2', imageSettings: { ...(source.imageSettings ?? {}) }, status: 'queued', progress: 0 }
+  nodes.push(revision)
+  links.push({ from: source.id, to: revision.id, fromSide: 'right', toSide: 'left' })
+  selectedId = revision.id; updateEditor(); scheduleSave(); draw()
+  return revision
+}
+
+function findRevisionPosition(source: FlowNode) {
+  const gap = 110, step = 260
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const candidate = { x: source.x + source.width + gap, y: source.y + (attempt === 0 ? 0 : Math.ceil(attempt / 2) * step * (attempt % 2 ? 1 : -1)) }
+    const occupied = nodes.some(node => node.id !== source.id && candidate.x < node.x + node.width + 24 && candidate.x + 280 + 24 > node.x && candidate.y < node.y + node.height + 24 && candidate.y + 220 + 24 > node.y)
+    if (!occupied) return candidate
+  }
+  return { x: source.x + source.width + gap, y: source.y + nodes.length * 24 }
 }
 
 function pollJob(node: FlowNode) {
