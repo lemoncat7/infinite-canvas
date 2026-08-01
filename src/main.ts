@@ -734,7 +734,7 @@ const workspacePanels = document.querySelectorAll<HTMLElement>('.workspace-panel
 function closeWorkspacePanels() { workspacePanels.forEach(panel => panel.classList.remove('open')); panelBackdrop.classList.remove('open'); document.querySelectorAll('.main-nav button').forEach(button => button.classList.remove('active')) }
 function openWorkspacePanel(id: string, trigger: string) { closeWorkspacePanels(); document.querySelector<HTMLElement>(id)!.classList.add('open'); panelBackdrop.classList.add('open'); document.querySelector<HTMLElement>(trigger)!.classList.add('active') }
 document.querySelector('#open-projects')!.addEventListener('click', () => { openWorkspacePanel('#projects-panel', '#open-projects'); void loadProjects() })
-document.querySelector('#open-assets')!.addEventListener('click', () => { openWorkspacePanel('#assets-panel', '#open-assets'); void loadAssets() })
+document.querySelector('#open-assets')!.addEventListener('click', () => { openWorkspacePanel('#assets-panel', '#open-assets'); if (!libraryAssets.length) void loadAssets() })
 document.querySelectorAll('.panel-close').forEach(button => button.addEventListener('click', closeWorkspacePanels))
 panelBackdrop.addEventListener('click', closeWorkspacePanels)
 const assetUpload = document.querySelector<HTMLInputElement>('#asset-upload')!, assetGrid = document.querySelector<HTMLElement>('#asset-grid')!, assetCount = document.querySelector<HTMLElement>('#asset-count')!
