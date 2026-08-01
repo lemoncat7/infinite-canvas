@@ -20,11 +20,13 @@ export class OpenAiVideoProvider implements GenerationProvider {
     const aspectRatio = String(parameters.aspect_ratio || '16:9')
     const requestedResolution = String(parameters.resolution || '720p')
     const resolution = requestedResolution === '480p' ? '480p' : '720p'
+    const prompt = imageUrls.length > 1 ? `${input.prompt}\n\nReference image order: ${imageUrls.map((_, index) => `<IMAGE_${index + 1}>`).join(', ')}. Use the numbered reference images as visual guidance and preserve their defining subjects, appearance, and style.` : input.prompt
+    console.info('[openai-video] creating task', { internalJobId: input.internalJobId, model: input.model, imageCount: imageUrls.length, mode: imageUrls.length > 1 ? 'reference-to-video' : imageUrls.length ? 'image-to-video' : 'text-to-video' })
     const created = await this.request('/v1/videos/generations', {
       method: 'POST',
       body: JSON.stringify({
-        model: input.model, prompt: input.prompt, seconds, aspect_ratio: aspectRatio, resolution,
-        ...(imageUrls.length > 1 ? { reference_image_urls: imageUrls } : imageUrls.length === 1 ? { input_reference: { image_url: imageUrls[0] } } : {}),
+        model: input.model, prompt, seconds, aspect_ratio: aspectRatio, resolution,
+        ...(imageUrls.length > 1 ? { reference_images: imageUrls.map(url => ({ url })) } : imageUrls.length === 1 ? { input_reference: { image_url: imageUrls[0] } } : {}),
       }),
     })
     const immediate = normalize(created)

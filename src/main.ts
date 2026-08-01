@@ -636,7 +636,12 @@ function pollJob(node: FlowNode) {
       updateEditor(); draw()
       if (job.status === 'succeeded' || job.status === 'failed') {
         window.clearInterval(timer); activeJobPolls.delete(jobId)
-        if (job.status === 'succeeded' && job.result_url) { node.mediaUrl = job.result_url; imageCache.delete(job.result_url); if (node.kind === 'video') showToast('视频已生成并加入资产库', 'success') }
+        if (job.status === 'succeeded' && job.result_url) {
+          node.mediaUrl = job.result_url
+          imageCache.delete(job.result_url)
+          await loadAssets()
+          if (node.kind === 'video') showToast('视频已生成并加入资产库', 'success')
+        }
         if (job.status === 'failed') { const message = job.error || '视频生成失败'; jobLabel.textContent = `生成失败：${message}`; showToast(message, 'error'); if (node.role === 'result') removeFailedResult(node) }
         updateEditor(); draw(); scheduleSave()
       }
