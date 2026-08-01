@@ -12,25 +12,33 @@ export class OpenAiVideoProvider implements GenerationProvider {
 
   async run(input: GenerationInput, onUpdate: (update: GenerationUpdate) => void) {
     if (input.kind !== 'video') throw new Error('OpenAI Video Adapter 仅支持视频任务')
-    onUpdate({ status: 'running', progress: 5 })
+    onUpdate({ status: 'queued', progress: 0 })
     const parameters = input.parameters ?? {}
-    const imageUrl = input.inputUrls?.[0] ? await this.resolveImage(input.inputUrls[0]) : undefined
+    if ((input.inputUrls?.length ?? 0) > 7) throw new Error('Grok 多图视频最多支持 7 张参考图片')
+    const imageUrls = await Promise.all((input.inputUrls ?? []).map(source => this.resolveImage(source)))
     const seconds = String(parameters.seconds || '5')
     const aspectRatio = String(parameters.aspect_ratio || '16:9')
     const requestedResolution = String(parameters.resolution || '720p')
     const resolution = requestedResolution === '480p' ? '480p' : '720p'
     const created = await this.request('/v1/videos/generations', {
       method: 'POST',
-      body: JSON.stringify({ model: input.model, prompt: input.prompt, seconds, aspect_ratio: aspectRatio, resolution, ...(imageUrl ? { input_reference: { image_url: imageUrl } } : {}) }),
+      body: JSON.stringify({
+        model: input.model, prompt: input.prompt, seconds, aspect_ratio: aspectRatio, resolution,
+        ...(imageUrls.length > 1 ? { reference_image_urls: imageUrls } : imageUrls.length === 1 ? { input_reference: { image_url: imageUrls[0] } } : {}),
+      }),
     })
     const immediate = normalize(created)
     if (immediate.status === 'succeeded' && immediate.resultUrl) { onUpdate(immediate); return immediate }
     const id = text(created.request_id) || text(created.id) || text(created.video_id) || text(nested(created, 'data', 'id'))
     if (!id) throw new Error(`CPA/Grok 创建响应未返回 request_id（字段：${Object.keys(created).join(', ') || '空响应'}）`)
-    const startedAt = Date.now()
+    const startedAt = Date.now(); let lastProgress = 0, started = false
     while (Date.now() - startedAt < this.timeout) {
       const payload = await this.request(`/v1/videos/${encodeURIComponent(id)}`)
-      const update = normalize(payload, id, this.baseUrl)
+      const normalized = normalize(payload, id, this.baseUrl)
+      const update = { ...normalized, status: started && normalized.status === 'queued' ? 'running' as const : normalized.status, progress: Math.max(lastProgress, normalized.progress) }
+      if (update.status === 'running') started = true
+      lastProgress = update.progress
+      console.info('[openai-video] task progress', { internalJobId: input.internalJobId, requestId: id, status: update.status, progress: update.progress, imageCount: imageUrls.length })
       onUpdate(update)
       if (update.status === 'succeeded') {
         if (!update.resultUrl) throw new Error('CPA video API 已完成但未返回视频地址')
@@ -69,7 +77,7 @@ export class OpenAiVideoProvider implements GenerationProvider {
 function normalize(payload: Payload, id?: string, baseUrl?: string): GenerationUpdate {
   const raw = String(payload.status ?? nested(payload, 'data', 'status') ?? '').toLowerCase()
   const status: GenerationStatus = ['completed', 'complete', 'succeeded', 'success', 'done'].includes(raw) ? 'succeeded' : ['failed', 'error', 'cancelled', 'canceled'].includes(raw) ? 'failed' : ['queued', 'pending'].includes(raw) ? 'queued' : 'running'
-  const rawProgress = Number(payload.progress ?? nested(payload, 'data', 'progress') ?? (status === 'succeeded' ? 100 : 10))
+  const rawProgress = Number(payload.progress ?? nested(payload, 'data', 'progress') ?? (status === 'succeeded' ? 100 : 0))
   const direct = text(payload.video_url) || text(nested(payload, 'video', 'url')) || text(payload.url) || text(payload.result_url) || text(payload.output_url) || text(nested(payload, 'data', 'url')) || text(nested(payload, 'output', 'url'))
   const resultUrl = direct || (status === 'succeeded' && id && baseUrl ? `${baseUrl}/v1/videos/${encodeURIComponent(id)}/content` : undefined)
   return { status, progress: Math.max(0, Math.min(100, Number.isFinite(rawProgress) ? rawProgress : 10)), resultUrl, error: text(nested(payload, 'error', 'message')) || text(payload.error) || text(payload.message) }

@@ -34,6 +34,7 @@ const developmentUserId = 'dev-user'
 const defaultProjectId = 'default'
 const generationProvider = createGenerationProvider()
 const bootTime = new Date().toISOString()
+database.run("UPDATE jobs SET status = 'failed', progress = 0, error = ?, updated_at = ? WHERE status IN ('queued', 'running')", ['生成服务曾重启，任务已中断，请重新生成', bootTime])
 database.run('INSERT OR IGNORE INTO users (id, name, created_at) VALUES (?, ?, ?)', [developmentUserId, '开发用户', bootTime])
 database.run('INSERT OR IGNORE INTO projects (id, user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', [defaultProjectId, developmentUserId, '未命名项目', bootTime, bootTime])
 const legacyCanvas = getOne('SELECT document, updated_at FROM canvases WHERE id = ?', [defaultProjectId])

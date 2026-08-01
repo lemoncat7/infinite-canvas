@@ -162,6 +162,17 @@ function controlPoint(point: Point, side: PortSide, distance: number): Point {
 }
 
 function linkIsGenerating(link: FlowLink) { const target = nodes.find(node => node.id === link.to); return target?.status === 'queued' || target?.status === 'running' }
+function orderedImageInputs(targetId: number) {
+  return links
+    .filter(link => link.to === targetId)
+    .map(link => ({ link, node: nodes.find(node => node.id === link.from) }))
+    .filter((input): input is { link: FlowLink; node: FlowNode } => Boolean(input.node?.kind === 'image' && input.node.mediaUrl))
+    .sort((left, right) => left.node.y - right.node.y || left.node.x - right.node.x || left.node.id - right.node.id)
+}
+function imageInputOrder(link: FlowLink) {
+  const index = orderedImageInputs(link.to).findIndex(input => input.link === link)
+  return index < 0 ? undefined : index + 1
+}
 function drawLink(link: FlowLink, index: number) {
   const from = nodes.find(n => n.id === link.from), to = nodes.find(n => n.id === link.to)
   if (!from || !to) return
@@ -177,6 +188,14 @@ function drawLink(link: FlowLink, index: number) {
   else { ctx.strokeStyle = 'rgba(183,190,201,.5)'; ctx.lineWidth = 2 * camera.zoom }
   ctx.stroke(); ctx.restore()
   for (const p of [a, b]) { ctx.beginPath(); ctx.arc(p.x, p.y, 5 * camera.zoom, 0, Math.PI * 2); ctx.fillStyle = '#aab1ba'; ctx.fill() }
+  const inputOrder = imageInputOrder(link)
+  if (inputOrder !== undefined) {
+    const badge = { x: a.x + (ca.x - a.x) * .24, y: a.y + (ca.y - a.y) * .24 }
+    ctx.save(); ctx.beginPath(); ctx.arc(badge.x, badge.y, 10 * camera.zoom, 0, Math.PI * 2)
+    ctx.fillStyle = colorTheme === 'dark' ? 'rgba(238,241,245,.96)' : 'rgba(35,39,43,.94)'; ctx.fill()
+    ctx.strokeStyle = colorTheme === 'dark' ? 'rgba(20,22,24,.5)' : 'rgba(255,255,255,.78)'; ctx.lineWidth = 1.5 * camera.zoom; ctx.stroke()
+    ctx.fillStyle = colorTheme === 'dark' ? '#202327' : '#fff'; ctx.font = `700 ${10 * camera.zoom}px system-ui`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(inputOrder), badge.x, badge.y + .5 * camera.zoom); ctx.restore()
+  }
 }
 
 function drawNode(node: FlowNode) {
@@ -564,7 +583,7 @@ async function generate() {
   const createsOutput = source.kind === 'video' || (source.kind === 'image' && Boolean(source.mediaUrl))
   const node = createsOutput ? createRevisionNode(source) : source
   try {
-    const upstream = links.filter(link => link.to === source.id && link.from !== node.id).map(link => nodes.find(item => item.id === link.from)).filter((item): item is FlowNode => Boolean(item))
+    const upstream = links.filter(link => link.to === source.id && link.from !== node.id).map(link => nodes.find(item => item.id === link.from)).filter((item): item is FlowNode => Boolean(item)).sort((left, right) => left.y - right.y || left.x - right.x || left.id - right.id)
     const inputUrls = source.kind === 'video'
       ? [...new Set(upstream.filter(item => item.kind === 'image').map(item => item.mediaUrl).filter((url): url is string => Boolean(url)))]
       : [...new Set([...(source.mediaUrl ? [source.mediaUrl] : []), ...upstream.map(item => item.mediaUrl).filter((url): url is string => Boolean(url))])]

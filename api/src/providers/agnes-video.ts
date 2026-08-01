@@ -33,21 +33,21 @@ export class AgnesVideoProvider implements GenerationProvider {
   async run(input: GenerationInput, onUpdate: (update: GenerationUpdate) => void) {
     if (input.kind !== 'video') throw new Error('Agnes Video Adapter 仅支持视频任务')
     const settings = normalizeSettings(input.parameters)
-    const imageSource = input.inputUrls?.[0]
-    let image = imageSource ? await this.resolveImage(imageSource) : undefined
+    const imageSources = input.inputUrls ?? []
+    let images = await Promise.all(imageSources.map(source => this.resolveImage(source)))
     onUpdate({ status: 'running', progress: 0 })
-    let response = await this.request('/v1/videos', { method: 'POST', body: createBody(input, image, settings, this.defaultModel) }, this.timeoutForImage(image))
+    let response = await this.request('/v1/videos', { method: 'POST', body: createBody(input, images, settings, this.defaultModel) }, this.timeoutForImages(images))
     let created = await readTask(response)
-    if (!response.ok && imageSource && /^https?:\/\//i.test(image || '') && /image URL|image.*download/i.test(taskError(created))) {
-      console.info('[agnes-video] public image rejected, retrying with embedded image', { internalJobId: input.internalJobId })
-      image = await this.resolveImage(imageSource, true)
-      response = await this.request('/v1/videos', { method: 'POST', body: createBody(input, image, settings, this.defaultModel) }, this.timeoutForImage(image))
+    if (!response.ok && imageSources.length && images.some(image => /^https?:\/\//i.test(image)) && /image URL|image.*download/i.test(taskError(created))) {
+      console.info('[agnes-video] public image rejected, retrying with embedded images', { internalJobId: input.internalJobId, imageCount: imageSources.length })
+      images = await Promise.all(imageSources.map(source => this.resolveImage(source, true)))
+      response = await this.request('/v1/videos', { method: 'POST', body: createBody(input, images, settings, this.defaultModel) }, this.timeoutForImages(images))
       created = await readTask(response)
     }
     if (!response.ok) throw new Error(taskError(created) || `Agnes 创建视频任务失败（${response.status}）`)
     const videoId = created.video_id || created.task_id || created.id
     if (!videoId) throw new Error('Agnes 创建任务响应中没有 video_id 或 task_id')
-    console.info('[agnes-video] task created', { internalJobId: input.internalJobId, videoId, model: input.model || this.defaultModel })
+    console.info('[agnes-video] task created', { internalJobId: input.internalJobId, videoId, model: input.model || this.defaultModel, imageCount: images.length, mode: images.length > 1 ? 'keyframes' : images.length ? 'ti2vid' : 'text' })
 
     const startedAt = Date.now()
     while (Date.now() - startedAt < this.timeout) {
@@ -102,8 +102,8 @@ export class AgnesVideoProvider implements GenerationProvider {
     }
   }
 
-  private timeoutForImage(image: string | undefined) {
-    return image?.startsWith('data:') ? this.embeddedCreateTimeout : this.createTimeout
+  private timeoutForImages(images: string[]) {
+    return images.some(image => image.startsWith('data:')) ? this.embeddedCreateTimeout : this.createTimeout
   }
 
   private async resolveImage(source: string, forceEmbedded = false) {
@@ -181,8 +181,11 @@ async function readTask(response: Response) { try { return await response.json()
 function taskError(task: AgnesTask) { return typeof task.error === 'string' ? task.error : task.error?.message || task.message || '' }
 function wait(ms: number) { return new Promise(resolve => setTimeout(resolve, ms)) }
 function required(name: string) { const value = process.env[name]; if (!value) throw new Error(`${name} is required`); return value }
-function createBody(input: GenerationInput, image: string | undefined, settings: Record<string, unknown>, defaultModel: string) {
-  return JSON.stringify({ model: input.model || defaultModel, prompt: input.prompt, ...(image ? { image, mode: 'ti2vid' } : {}), ...settings })
+function createBody(input: GenerationInput, images: string[], settings: Record<string, unknown>, defaultModel: string) {
+  const media = images.length > 1
+    ? { mode: 'keyframes', extra_body: { image: images, mode: 'keyframes' } }
+    : images.length === 1 ? { image: images[0], mode: 'ti2vid' } : {}
+  return JSON.stringify({ model: input.model || defaultModel, prompt: input.prompt, ...media, ...settings })
 }
 function sanitizeError(message: string) { return message.replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]').replace(/sk-[A-Za-z0-9_-]+/g, '[REDACTED]') }
 
