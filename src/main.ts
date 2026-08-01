@@ -29,6 +29,8 @@ let editingTextNodeId = 0
 let nextId = 1
 let contextPosition: Point = { x: 0, y: 0 }
 let connecting: { nodeId: number; side: PortSide; pointer: Point } | null = null
+let connectionSnap: { nodeId: number; side: PortSide } | null = null
+let hoveredLinkIndex = -1
 let currentProjectId = localStorage.getItem('flow-project-id') ?? 'default'
 let backgroundMode: 'dots' | 'lines' | 'blank' = 'lines'
 let colorTheme: 'light' | 'dark' = localStorage.getItem('flow-theme') === 'light' ? 'light' : 'dark'
@@ -89,7 +91,8 @@ function controlPoint(point: Point, side: PortSide, distance: number): Point {
   return { x: point.x - distance, y: point.y }
 }
 
-function drawLink(link: FlowLink) {
+function linkIsGenerating(link: FlowLink) { const target = nodes.find(node => node.id === link.to); return target?.status === 'queued' || target?.status === 'running' }
+function drawLink(link: FlowLink, index: number) {
   const from = nodes.find(n => n.id === link.from), to = nodes.find(n => n.id === link.to)
   if (!from || !to) return
   const a = screen(portWorld(from, link.fromSide)), b = screen(portWorld(to, link.toSide))
@@ -97,7 +100,12 @@ function drawLink(link: FlowLink) {
   const curve = Math.max(55, Math.hypot(b.x - a.x, b.y - a.y) * .35)
   const ca = controlPoint(a, link.fromSide, curve), cb = controlPoint(b, link.toSide, curve)
   ctx.bezierCurveTo(ca.x, ca.y, cb.x, cb.y, b.x, b.y)
-  ctx.strokeStyle = 'rgba(183,190,201,.5)'; ctx.lineWidth = 2 * camera.zoom; ctx.stroke()
+  const generating = linkIsGenerating(link), hovered = index === hoveredLinkIndex
+  ctx.save()
+  if (generating) { ctx.setLineDash([10 * camera.zoom, 8 * camera.zoom]); ctx.lineDashOffset = -(performance.now() / 28) % (18 * camera.zoom); ctx.strokeStyle = colorTheme === 'dark' ? 'rgba(115,145,175,.62)' : 'rgba(68,105,140,.58)'; ctx.lineWidth = 2.25 * camera.zoom }
+  else if (hovered) { ctx.strokeStyle = colorTheme === 'dark' ? 'rgba(210,210,205,.68)' : 'rgba(38,38,36,.76)'; ctx.lineWidth = 3 * camera.zoom; ctx.shadowColor = 'rgba(0,0,0,.16)'; ctx.shadowBlur = 4 * camera.zoom }
+  else { ctx.strokeStyle = 'rgba(183,190,201,.5)'; ctx.lineWidth = 2 * camera.zoom }
+  ctx.stroke(); ctx.restore()
   for (const p of [a, b]) { ctx.beginPath(); ctx.arc(p.x, p.y, 5 * camera.zoom, 0, Math.PI * 2); ctx.fillStyle = '#aab1ba'; ctx.fill() }
 }
 
@@ -118,7 +126,8 @@ function drawNode(node: FlowNode) {
 }
 
 function hitNode(sx: number, sy: number) { const p = world({ x: sx, y: sy }); return [...nodes].reverse().find(n => p.x >= n.x && p.x <= n.x + n.width && p.y >= n.y && p.y <= n.y + n.height) }
-function hitPort(sx: number, sy: number) { const sides: PortSide[] = ['top', 'right', 'bottom', 'left']; for (const node of [...nodes].reverse()) { if (node.kind === 'video' && node.role === 'result') continue; for (const side of sides) { const p = screen(portWorld(node, side)); if (Math.hypot(sx - p.x, sy - p.y) <= 12) return { node, side } } } }
+function hitPort(sx: number, sy: number, radius = 12, excludeNodeId?: number) { const sides: PortSide[] = ['top', 'right', 'bottom', 'left']; let closest: { node: FlowNode; side: PortSide; distance: number } | undefined; for (const node of [...nodes].reverse()) { if (node.id === excludeNodeId || (node.kind === 'video' && node.role === 'result')) continue; for (const side of sides) { const p = screen(portWorld(node, side)), distance = Math.hypot(sx - p.x, sy - p.y); if (distance <= radius && (!closest || distance < closest.distance)) closest = { node, side, distance } } } return closest && { node: closest.node, side: closest.side } }
+function updateConnectionPointer(sx: number, sy: number) { if (!connecting) return; const target = hitPort(sx, sy, 32, connecting.nodeId); connectionSnap = target ? { nodeId: target.node.id, side: target.side } : null; connecting.pointer = target ? screen(portWorld(target.node, target.side)) : { x: sx, y: sy } }
 function hitLink(sx: number, sy: number) {
   for (let index = links.length - 1; index >= 0; index--) {
     const link = links[index], from = nodes.find(node => node.id === link.from), to = nodes.find(node => node.id === link.to)
@@ -129,8 +138,8 @@ function hitLink(sx: number, sy: number) {
   }
   return -1
 }
-function drawPendingLink() { if (!connecting) return; const node = nodes.find(item => item.id === connecting!.nodeId); if (!node) return; const a = screen(portWorld(node, connecting.side)), b = connecting.pointer; ctx.beginPath(); ctx.moveTo(a.x, a.y); const distance = Math.max(55, Math.hypot(b.x - a.x, b.y - a.y) * .3), control = controlPoint(a, connecting.side, distance); ctx.quadraticCurveTo(control.x, control.y, b.x, b.y); ctx.strokeStyle = node.accent; ctx.lineWidth = 2; ctx.setLineDash([6, 5]); ctx.stroke(); ctx.setLineDash([]) }
-function paint() { drawFrame = null; ctx.fillStyle = colorTheme === 'dark' ? '#181715' : '#f4f2ed'; ctx.fillRect(0, 0, innerWidth, innerHeight); drawGrid(); links.forEach(drawLink); drawPendingLink(); syncDomNodes(); zoomSlider.value = String(Math.round(camera.zoom * 100)); zoomSlider.title = `${Math.round(camera.zoom * 100)}%`; zoomPercent.value = `${Math.round(camera.zoom * 100)}%`; nodeCount.textContent = String(nodes.length) }
+function drawPendingLink() { if (!connecting) return; const node = nodes.find(item => item.id === connecting!.nodeId); if (!node) return; const a = screen(portWorld(node, connecting.side)), b = connecting.pointer; ctx.beginPath(); ctx.moveTo(a.x, a.y); const distance = Math.max(55, Math.hypot(b.x - a.x, b.y - a.y) * .3), control = controlPoint(a, connecting.side, distance); ctx.quadraticCurveTo(control.x, control.y, b.x, b.y); ctx.strokeStyle = node.accent; ctx.lineWidth = 2; ctx.setLineDash([6, 5]); ctx.stroke(); ctx.setLineDash([]); if (connectionSnap) { ctx.beginPath(); ctx.arc(b.x, b.y, 10, 0, Math.PI * 2); ctx.fillStyle = 'rgba(47,128,255,.16)'; ctx.fill(); ctx.beginPath(); ctx.arc(b.x, b.y, 5, 0, Math.PI * 2); ctx.fillStyle = '#2f80ff'; ctx.fill() } }
+function paint() { drawFrame = null; ctx.fillStyle = colorTheme === 'dark' ? '#181715' : '#f4f2ed'; ctx.fillRect(0, 0, innerWidth, innerHeight); drawGrid(); links.forEach(drawLink); drawPendingLink(); syncDomNodes(); zoomSlider.value = String(Math.round(camera.zoom * 100)); zoomSlider.title = `${Math.round(camera.zoom * 100)}%`; zoomPercent.value = `${Math.round(camera.zoom * 100)}%`; nodeCount.textContent = String(nodes.length); if (links.some(linkIsGenerating)) draw() }
 function draw() { if (drawFrame === null) drawFrame = requestAnimationFrame(paint) }
 function resize() { const ratio = devicePixelRatio || 1; canvas.width = innerWidth * ratio; canvas.height = innerHeight * ratio; canvas.style.width = `${innerWidth}px`; canvas.style.height = `${innerHeight}px`; ctx.setTransform(ratio, 0, 0, ratio, 0, 0); draw() }
 function setZoom(next: number, anchor = { x: innerWidth / 2, y: innerHeight / 2 }) { const old = camera.zoom; next = Math.min(2.5, Math.max(.3, next)); const cx = innerWidth / 2 + camera.x, cy = innerHeight / 2 + camera.y; camera.x += (anchor.x - cx) * (1 - next / old); camera.y += (anchor.y - cy) * (1 - next / old); camera.zoom = next; draw() }
@@ -290,7 +299,7 @@ function createDomNode(node: FlowNode) {
   })
   element.addEventListener('dragstart', event => event.preventDefault())
   element.addEventListener('contextmenu', event => { event.preventDefault(); event.stopPropagation() })
-  element.querySelectorAll<HTMLElement>('.node-port').forEach(port => port.addEventListener('pointerdown', event => { event.preventDefault(); event.stopPropagation(); selectedId = node.id; connecting = { nodeId: node.id, side: port.dataset.side as PortSide, pointer: { x: event.clientX, y: event.clientY } }; draw() }))
+  element.querySelectorAll<HTMLElement>('.node-port').forEach(port => port.addEventListener('pointerdown', event => { event.preventDefault(); event.stopPropagation(); selectedId = node.id; connectionSnap = null; connecting = { nodeId: node.id, side: port.dataset.side as PortSide, pointer: { x: event.clientX, y: event.clientY } }; draw() }))
   element.querySelector('[data-action="info"]')!.addEventListener('click', event => { event.stopPropagation(); openNodeInfo(node) })
   element.querySelector('[data-action="edit"]')!.addEventListener('click', event => { event.stopPropagation(); selectedId = node.id; updateEditor(); if (node.kind === 'prompt') enterTextEdit(node, element); else promptInput.focus() })
   element.querySelector('[data-action="zoom-in"]')!.addEventListener('click', event => { event.stopPropagation(); node.fontScale = Math.min(2, (node.fontScale ?? 1) + .1); scheduleSave(); draw() })
@@ -372,14 +381,14 @@ function repaintAllMedia() { nodes.filter(node => node.mediaUrl).forEach(node =>
 
 window.addEventListener('pointermove', event => {
   if (domResize) { const node = nodes.find(item => item.id === domResize!.id); if (!node) return; const width = Math.max(220, domResize.width + (event.clientX - domResize.startX) / camera.zoom); let height = Math.max(160, domResize.height + (event.clientY - domResize.startY) / camera.zoom); if (node.mediaUrl && !event.shiftKey) height = Math.max(180, domResize.height * width / domResize.width); node.width = width; node.height = height; setSaveState('editing', '编辑中…'); draw() }
-  if (connecting) { connecting.pointer = { x: event.clientX, y: event.clientY }; draw() }
+  if (connecting) { updateConnectionPointer(event.clientX, event.clientY); draw() }
 })
 window.addEventListener('pointerup', event => {
   if (domResize) { domResize = null; scheduleSave() }
   if (!connecting) return
-  const target = (event.target as HTMLElement | null)?.closest<HTMLElement>('.node-port'); const targetNode = target?.closest<HTMLElement>('.flow-node'); const toId = Number(targetNode?.dataset.id)
-  if (target && toId && toId !== connecting.nodeId) { const side = target.dataset.side as PortSide; const next = connecting.side === 'left' ? { from: toId, to: connecting.nodeId, fromSide: side, toSide: connecting.side } : { from: connecting.nodeId, to: toId, fromSide: connecting.side, toSide: side }; if (!links.some(link => link.from === next.from && link.to === next.to)) links.push(next); scheduleSave() }
-  connecting = null; draw()
+  const snappedNode = connectionSnap ? nodes.find(node => node.id === connectionSnap!.nodeId) : undefined; const target = snappedNode ? { node: snappedNode, side: connectionSnap!.side } : hitPort(event.clientX, event.clientY, 32, connecting.nodeId)
+  if (target) { const next = connecting.side === 'left' ? { from: target.node.id, to: connecting.nodeId, fromSide: target.side, toSide: connecting.side } : { from: connecting.nodeId, to: target.node.id, fromSide: connecting.side, toSide: target.side }; if (!links.some(link => link.from === next.from && link.to === next.to)) links.push(next); scheduleSave() }
+  connecting = null; connectionSnap = null; draw()
 })
 window.addEventListener('mousemove', event => {
   if (!domDrag) return
@@ -547,14 +556,14 @@ function pollJob(node: FlowNode) {
   activeJobPolls.set(jobId, timer)
 }
 
-canvas.addEventListener('pointerdown', e => { if (e.button !== 0) return; if (cameraFrame !== null) { cancelAnimationFrame(cameraFrame); cameraFrame = null; zoomTarget = camera.zoom } pointer.down = true; pointer.x = e.clientX; pointer.y = e.clientY; const port = hitPort(e.clientX, e.clientY); if (port) { connecting = { nodeId: port.node.id, side: port.side, pointer: { x: e.clientX, y: e.clientY } }; selectedId = port.node.id; pointer.draggingNode = null; updateEditor() } else { const node = hitNode(e.clientX, e.clientY); pointer.draggingNode = node && node.status !== 'queued' && node.status !== 'running' ? node.id : null; if (node) selectedId = node.id; else selectedId = 0; updateEditor() } canvas.setPointerCapture(e.pointerId); canvas.classList.add('dragging'); draw() })
-canvas.addEventListener('pointermove', e => { if (!pointer.down) return; setSaveState('editing', '编辑中…'); if (connecting) { connecting.pointer = { x: e.clientX, y: e.clientY }; draw(); return } const dx = e.clientX - pointer.x, dy = e.clientY - pointer.y; if (pointer.draggingNode) { const node = nodes.find(n => n.id === pointer.draggingNode)!; node.x += dx / camera.zoom; node.y += dy / camera.zoom } else { camera.x += dx; camera.y += dy } pointer.x = e.clientX; pointer.y = e.clientY; draw() })
-canvas.addEventListener('pointerup', e => { if (connecting) { const target = hitPort(e.clientX, e.clientY); if (target && target.node.id !== connecting.nodeId) { const duplicate = links.some(link => link.from === connecting!.nodeId && link.to === target.node.id && link.fromSide === connecting!.side && link.toSide === target.side); if (!duplicate) links.push({ from: connecting.nodeId, to: target.node.id, fromSide: connecting.side, toSide: target.side }) } connecting = null } scheduleSave(); pointer.down = false; pointer.draggingNode = null; canvas.classList.remove('dragging'); draw() })
+canvas.addEventListener('pointerdown', e => { if (e.button !== 0) return; if (cameraFrame !== null) { cancelAnimationFrame(cameraFrame); cameraFrame = null; zoomTarget = camera.zoom } pointer.down = true; pointer.x = e.clientX; pointer.y = e.clientY; const port = hitPort(e.clientX, e.clientY); if (port) { connectionSnap = null; connecting = { nodeId: port.node.id, side: port.side, pointer: { x: e.clientX, y: e.clientY } }; selectedId = port.node.id; pointer.draggingNode = null; updateEditor() } else { const node = hitNode(e.clientX, e.clientY); pointer.draggingNode = node && node.status !== 'queued' && node.status !== 'running' ? node.id : null; if (node) selectedId = node.id; else selectedId = 0; updateEditor() } canvas.setPointerCapture(e.pointerId); canvas.classList.add('dragging'); draw() })
+canvas.addEventListener('pointermove', e => { if (!pointer.down) return; setSaveState('editing', '编辑中…'); if (connecting) { updateConnectionPointer(e.clientX, e.clientY); draw(); return } const dx = e.clientX - pointer.x, dy = e.clientY - pointer.y; if (pointer.draggingNode) { const node = nodes.find(n => n.id === pointer.draggingNode)!; node.x += dx / camera.zoom; node.y += dy / camera.zoom } else { camera.x += dx; camera.y += dy } pointer.x = e.clientX; pointer.y = e.clientY; draw() })
+canvas.addEventListener('pointerup', e => { if (connecting) { const snappedNode = connectionSnap ? nodes.find(node => node.id === connectionSnap!.nodeId) : undefined, target = snappedNode ? { node: snappedNode, side: connectionSnap!.side } : hitPort(e.clientX, e.clientY, 32, connecting.nodeId); if (target) { const duplicate = links.some(link => link.from === connecting!.nodeId && link.to === target.node.id && link.fromSide === connecting!.side && link.toSide === target.side); if (!duplicate) links.push({ from: connecting.nodeId, to: target.node.id, fromSide: connecting.side, toSide: target.side }) } connecting = null; connectionSnap = null } scheduleSave(); pointer.down = false; pointer.draggingNode = null; canvas.classList.remove('dragging'); draw() })
 canvas.addEventListener('wheel', e => { e.preventDefault(); smoothZoom(zoomTarget * Math.exp(-e.deltaY * .001), { x: e.clientX, y: e.clientY }) }, { passive: false })
-const linkContextMenu = document.querySelector<HTMLElement>('#link-context-menu')!
-let selectedLinkIndex = -1
-canvas.addEventListener('contextmenu', event => { event.preventDefault(); const index = hitLink(event.clientX, event.clientY); selectedLinkIndex = index; if (index < 0) { linkContextMenu.classList.remove('open'); return } linkContextMenu.style.left = `${Math.min(event.clientX, innerWidth - 190)}px`; linkContextMenu.style.top = `${Math.min(event.clientY, innerHeight - 90)}px`; linkContextMenu.classList.add('open') })
-document.querySelector('#link-context-delete')!.addEventListener('click', () => { if (selectedLinkIndex >= 0 && selectedLinkIndex < links.length) { links.splice(selectedLinkIndex, 1); scheduleSave(); draw() } selectedLinkIndex = -1; linkContextMenu.classList.remove('open') })
+const linkHoverHint = document.querySelector<HTMLElement>('#link-hover-hint')!
+canvas.addEventListener('pointermove', event => { if (pointer.down || connecting) return; const index = hitLink(event.clientX, event.clientY); if (index !== hoveredLinkIndex) { hoveredLinkIndex = index; draw() } linkHoverHint.classList.toggle('open', index >= 0); if (index >= 0) { const generating = linkIsGenerating(links[index]); linkHoverHint.classList.toggle('locked', generating); linkHoverHint.textContent = generating ? '生成中 · 连线已锁定' : '右键 · 删除连线'; linkHoverHint.style.left = `${event.clientX + 14}px`; linkHoverHint.style.top = `${event.clientY + 14}px`; canvas.style.cursor = 'pointer' } else canvas.style.removeProperty('cursor') })
+canvas.addEventListener('pointerleave', () => { if (hoveredLinkIndex >= 0) { hoveredLinkIndex = -1; draw() } linkHoverHint.classList.remove('open'); canvas.style.removeProperty('cursor') })
+canvas.addEventListener('contextmenu', event => { event.preventDefault(); const index = hitLink(event.clientX, event.clientY); if (index < 0) return; if (linkIsGenerating(links[index])) { showToast('生成过程中不能删除连线', 'warning'); return } links.splice(index, 1); hoveredLinkIndex = -1; linkHoverHint.classList.remove('open'); scheduleSave(); draw() })
 document.querySelector('#reset')!.addEventListener('click', fitCanvas)
 zoomSlider.addEventListener('input', () => { zoomTarget = Number(zoomSlider.value) / 100; setZoom(zoomTarget, { x: innerWidth / 2, y: innerHeight / 2 }) })
 document.querySelector('#zoom-in')!.addEventListener('click', () => smoothZoom(zoomTarget * 1.15, { x: innerWidth / 2, y: innerHeight / 2 }))
@@ -662,7 +671,6 @@ function fileBase64(file: File) { return new Promise<string>((resolve, reject) =
 document.addEventListener('pointerdown', event => {
   const target = event.target as Node
   if (!assetContextMenu.contains(target)) assetContextMenu.classList.remove('open')
-  if (!linkContextMenu.contains(target)) linkContextMenu.classList.remove('open')
   document.querySelectorAll<HTMLDetailsElement>('.image-config-panel details[open]').forEach(details => { if (!details.contains(target)) details.open = false })
 })
 window.addEventListener('keydown', event => {

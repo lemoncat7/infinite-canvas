@@ -73,6 +73,11 @@ body[data-theme="dark"] .text-generate-panel button,body[data-theme="dark"] .tex
 .flow-node:hover .node-port,.flow-node.selected .node-port { opacity:1; }
 .node-port:hover { transform:scale(1.35); background:#2f80ff; }
 .node-port[hidden],.flow-node.node-result.kind-video .node-port { display:none!important; }
+.link-hover-hint { position:fixed; z-index:18; display:none; align-items:center; gap:7px; padding:7px 10px; color:#3f3f46; background:rgba(255,255,255,.9); border:1px solid rgba(24,24,27,.1); border-radius:999px; box-shadow:0 8px 24px rgba(24,24,27,.12); font-size:10px; font-weight:550; letter-spacing:.01em; pointer-events:none; backdrop-filter:blur(12px); }
+.link-hover-hint::before { content:''; width:5px; height:5px; flex:none; background:#71717a; border-radius:50%; }
+.link-hover-hint.locked::before { background:#718da7; box-shadow:0 0 0 3px rgba(113,141,167,.12); }
+.link-hover-hint.open { display:flex; }
+body[data-theme="dark"] .link-hover-hint { color:#e4e4e7; background:rgba(39,39,42,.88); border-color:rgba(255,255,255,.1); box-shadow:0 8px 24px rgba(0,0,0,.22); }
 .node-floating-tools { position:absolute; z-index:8; left:50%; top:-12px; display:flex; gap:2px; padding:4px; translate:-50% -100%; color:#242724; background:#fff; border:1px solid rgba(0,0,0,.1); border-radius:11px; box-shadow:0 8px 26px rgba(0,0,0,.22); opacity:0; pointer-events:none; transition:opacity .14s,top .14s; }
 .flow-node.selected .node-floating-tools { top:-8px; opacity:1; pointer-events:auto; }
 .node-floating-tools button { display:grid; place-items:center; width:31px; height:29px; padding:0; color:#454a45; background:transparent; border:0; border-radius:7px; }

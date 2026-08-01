@@ -51,7 +51,7 @@
     <div id="asset-preview" class="asset-preview" role="dialog" aria-modal="true"><button id="close-preview" type="button" aria-label="关闭">×</button><div class="preview-stage"><img id="preview-image" alt="素材预览"><video id="preview-video" controls playsinline preload="metadata" hidden></video><div><strong id="preview-name"></strong><span>单击素材可放到画布，右击查看更多操作</span></div></div></div>
     <div id="node-info-modal" class="node-info-modal" role="dialog" aria-modal="true" aria-labelledby="node-info-title"><section><header><h2 id="node-info-title">节点信息</h2><button id="close-node-info" type="button" aria-label="关闭">×</button></header><nav><button class="active" data-info-tab="details" type="button">信息</button><button data-info-tab="json" type="button">JSON</button></nav><div id="node-info-details" class="node-info-details"></div><pre id="node-info-json" hidden></pre></section></div>
     <div id="asset-context-menu" class="context-menu glass" role="menu"><div class="context-title">素材操作</div><button id="asset-context-place">＋ <span>放到画布</span></button><button id="asset-context-preview">⌕ <span>放大查看</span></button><i></i><button id="asset-context-delete" class="context-danger">⌫ <span>删除素材</span></button></div>
-    <div id="link-context-menu" class="context-menu glass" role="menu"><div class="context-title">连线操作</div><button id="link-context-delete" class="context-danger">⌫ <span>删除连线</span></button></div>
+    <div id="link-hover-hint" class="link-hover-hint">右键 · 删除连线</div>
     <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
