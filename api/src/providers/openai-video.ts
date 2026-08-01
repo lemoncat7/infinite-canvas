@@ -35,7 +35,7 @@ export class OpenAiVideoProvider implements GenerationProvider {
     while (Date.now() - startedAt < this.timeout) {
       const payload = await this.request(`/v1/videos/${encodeURIComponent(id)}`)
       const normalized = normalize(payload, id, this.baseUrl)
-      const update = { ...normalized, status: started && normalized.status === 'queued' ? 'running' as const : normalized.status, progress: Math.max(lastProgress, normalized.progress) }
+      const update = { ...normalized, status: (started || normalized.progress > 1) && normalized.status === 'queued' ? 'running' as const : normalized.status, progress: Math.max(lastProgress, normalized.progress) }
       if (update.status === 'running') started = true
       lastProgress = update.progress
       console.info('[openai-video] task progress', { internalJobId: input.internalJobId, requestId: id, status: update.status, progress: update.progress, imageCount: imageUrls.length })

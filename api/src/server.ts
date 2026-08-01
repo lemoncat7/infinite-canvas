@@ -1,7 +1,7 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify'
 import initSqlJs, { type Database } from 'sql.js'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
-import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
 import { createGenerationProvider, type GenerationUpdate } from './providers/index.js'
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
 
@@ -33,6 +33,8 @@ ensureColumn('projects', 'last_opened_at', 'TEXT')
 const developmentUserId = 'dev-user'
 const defaultProjectId = 'default'
 const generationProvider = createGenerationProvider()
+const generationInputSigningSecret = process.env.GENERATION_INPUT_SIGNING_SECRET || randomBytes(32).toString('hex')
+const generationPublicBaseUrl = String(process.env.GENERATION_PUBLIC_BASE_URL || '').replace(/\/$/, '')
 const bootTime = new Date().toISOString()
 database.run("UPDATE jobs SET status = 'failed', progress = 0, error = ?, updated_at = ? WHERE status IN ('queued', 'running')", ['生成服务曾重启，任务已中断，请重新生成', bootTime])
 database.run('INSERT OR IGNORE INTO users (id, name, created_at) VALUES (?, ?, ?)', [developmentUserId, '开发用户', bootTime])
@@ -46,6 +48,15 @@ app.get('/health', async () => ({ ok: true, service: 'flow-studio-api', generati
 app.get('/generation/capabilities', async () => generationProvider.capabilities ?? {
   image: { provider: generationProvider.name, defaultModel: process.env.OPENAI_IMAGE_DEFAULT_MODEL || 'gpt-image-2' },
   video: { provider: generationProvider.name, defaultModel: process.env.AGNES_VIDEO_DEFAULT_MODEL || 'agnes-video-v2.0', seconds: { min: 1, max: 18, default: 5 }, resolutions: ['480p', '720p', '1080p'], aspectRatios: ['1:1', '4:3', '16:9'] },
+})
+app.get('/generation-inputs/:assetId', async (request, reply) => {
+  const { assetId } = request.params as { assetId: string }
+  const { expires, signature } = request.query as { expires?: string; signature?: string }
+  const expiry = Number(expires)
+  if (!Number.isFinite(expiry) || expiry < Math.floor(Date.now() / 1000) || expiry > Math.floor(Date.now() / 1000) + 3600 || !signature || !validGenerationInputSignature(assetId, expiry, signature)) return reply.code(403).send({ error: 'Generation input URL is invalid or expired' })
+  const asset = getOne('SELECT mime_type, storage_name FROM assets WHERE id = ?', [assetId])
+  if (!asset) return reply.code(404).send({ error: 'Asset not found' })
+  return reply.type(String(asset.mime_type)).header('cache-control', 'private, no-store').send(readFileSync(`${uploadDirectory}/${asset.storage_name}`))
 })
 app.post('/client-logs', async request => {
   const input = request.body as { event?: string; details?: unknown; userAgent?: string; path?: string; timestamp?: string }
@@ -135,10 +146,11 @@ app.post('/jobs', async (request, reply) => {
   if (!input.prompt?.trim()) return reply.code(400).send({ error: 'Prompt is required' })
   const projectId = input.projectId ?? defaultProjectId
   if (!ownsProject(projectId, userId)) return reply.code(404).send({ error: 'Project not found' })
+  const model = input.model ?? (input.kind === 'video' ? process.env.AGNES_VIDEO_DEFAULT_MODEL || 'agnes-video-v2.0' : process.env.OPENAI_IMAGE_DEFAULT_MODEL || 'gpt-image-2')
   let inputUrls: string[]
-  try { inputUrls = resolveOwnedInputUrls(input.inputUrls ?? [], userId, input.kind) }
+  try { inputUrls = resolveOwnedInputUrls(input.inputUrls ?? [], userId, input.kind, model) }
   catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : '无法读取输入素材' }) }
-  const id = randomUUID(), now = new Date().toISOString(), model = input.model ?? (input.kind === 'video' ? process.env.AGNES_VIDEO_DEFAULT_MODEL || 'agnes-video-v2.0' : process.env.OPENAI_IMAGE_DEFAULT_MODEL || 'gpt-image-2')
+  const id = randomUUID(), now = new Date().toISOString()
   database.run('INSERT INTO jobs (id, project_id, user_id, node_id, kind, prompt, model, status, progress, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [id, projectId, userId, input.nodeId, input.kind, input.prompt, model, 'queued', 0, now, now])
   persist()
   void generationProvider.run({ internalJobId: id, projectId, nodeId: input.nodeId, kind: input.kind, prompt: input.prompt, model, inputUrls, parameters: input.parameters ?? {} }, update => { void updateJob(id, update) }).catch(error => { void updateJob(id, { status: 'failed', progress: 0, error: error instanceof Error ? error.message : 'Generation failed' }) })
@@ -164,7 +176,9 @@ function normalizeEmail(value: unknown) { return String(value ?? '').trim().toLo
 function validEmail(email: string) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 254 }
 function assetDisposition(name: string) { const safe = name.replace(/[\r\n]/g, '').slice(0, 240) || 'asset'; return `inline; filename="asset"; filename*=UTF-8''${encodeURIComponent(safe)}` }
 function namedAssetUrl(id: string, name: string, isPublic = false) { const safe = name.replace(/[\r\n/\\]/g, '').slice(0, 240) || 'asset'; return `/api/${isPublic ? 'public/' : ''}assets/${id}/content/${encodeURIComponent(safe)}` }
-function resolveOwnedInputUrls(urls: string[], userId: string, kind: JobInput['kind']) { return urls.map(source => { const match = source.match(/^\/api\/assets\/([^/]+)\/content(?:\/|$)/); if (!match) return source; const asset = getOne('SELECT mime_type, size, storage_name FROM assets WHERE id = ? AND user_id = ?', [decodeURIComponent(match[1]), userId]); if (!asset) throw new Error('输入素材不存在或不属于当前用户'); const size = Number(asset.size ?? 0); if (kind === 'video' && size > 15 * 1024 * 1024) throw new Error('首帧图片超过 15MB'); const bytes = readFileSync(`${uploadDirectory}/${asset.storage_name}`); if (!bytes.length) throw new Error('输入素材为空'); return `data:${String(asset.mime_type || 'application/octet-stream')};base64,${bytes.toString('base64')}` }) }
+function resolveOwnedInputUrls(urls: string[], userId: string, kind: JobInput['kind'], model: string) { return urls.map(source => { const match = source.match(/^\/api\/assets\/([^/]+)\/content(?:\/|$)/); if (!match) return source; const assetId = decodeURIComponent(match[1]), asset = getOne('SELECT mime_type, size, storage_name FROM assets WHERE id = ? AND user_id = ?', [assetId, userId]); if (!asset) throw new Error('输入素材不存在或不属于当前用户'); const size = Number(asset.size ?? 0); if (kind === 'video' && size > 15 * 1024 * 1024) throw new Error('参考图片超过 15MB'); const bytes = readFileSync(`${uploadDirectory}/${asset.storage_name}`); if (!bytes.length) throw new Error('输入素材为空'); if (kind === 'video' && !model.startsWith('agnes-')) { if (!generationPublicBaseUrl) throw new Error('Grok 图生视频需要配置公网访问地址'); return signedGenerationInputUrl(assetId) } return `data:${String(asset.mime_type || 'application/octet-stream')};base64,${bytes.toString('base64')}` }) }
+function signedGenerationInputUrl(assetId: string) { const expires = Math.floor(Date.now() / 1000) + 1800, signature = createHmac('sha256', generationInputSigningSecret).update(`${assetId}:${expires}`).digest('base64url'); return `${generationPublicBaseUrl}/api/generation-inputs/${encodeURIComponent(assetId)}?expires=${expires}&signature=${signature}` }
+function validGenerationInputSignature(assetId: string, expires: number, signature: string) { const expected = createHmac('sha256', generationInputSigningSecret).update(`${assetId}:${expires}`).digest('base64url'); return secureTextEqual(signature, expected) }
 function hashPassword(password: string) { const salt = randomBytes(16).toString('hex'), digest = scryptSync(password, salt, 64).toString('hex'); return `scrypt:${salt}:${digest}` }
 function verifyPassword(password: string, stored: string) { const [, salt, expected] = stored.split(':'); if (!salt || !expected) return false; try { const actual = scryptSync(password, salt, 64), expectedBytes = Buffer.from(expected, 'hex'); return actual.length === expectedBytes.length && timingSafeEqual(actual, expectedBytes) } catch { return false } }
 function secureTextEqual(actual: string, expected: string) { const left = createHash('sha256').update(actual).digest(), right = createHash('sha256').update(expected).digest(); return timingSafeEqual(left, right) }
