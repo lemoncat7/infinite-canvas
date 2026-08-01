@@ -66,17 +66,27 @@ const homePage = document.querySelector<HTMLElement>('#home-page')!
 const homeGallery = document.querySelector<HTMLElement>('#home-gallery')!
 const homeLoginModal = document.querySelector<HTMLElement>('#home-login-modal')!
 const homePreview = document.querySelector<HTMLElement>('#home-preview')!
+type AuthUser = { id: string; name: string; email: string; createdAt: string }
+let authUser: AuthUser | null = null
+let authReady = false
+let authMode: 'login' | 'register' = 'login'
 let showcaseLoaded = false
 function applyAppRoute() {
-  const home = location.hash !== '#/canvas'
+  const home = location.hash !== '#/canvas' || !authUser
   document.body.classList.toggle('home-mode', home)
   if (home && !showcaseLoaded) void loadShowcase()
   if (!home) requestAnimationFrame(resize)
+  if (authReady && location.hash === '#/canvas' && !authUser) openAuth('login')
 }
 function requestWorkspace() {
-  if (localStorage.getItem('flow-authenticated') === 'true') location.hash = '#/canvas'
-  else homeLoginModal.classList.add('open')
+  if (authUser) void enterWorkspace()
+  else openAuth('login')
 }
+function openAuth(mode: 'login' | 'register') { setAuthMode(mode); homeLoginModal.classList.add('open'); homeLoginModal.querySelector<HTMLInputElement>('input[name="email"]')!.focus() }
+function setAuthMode(mode: 'login' | 'register') { authMode = mode; homeLoginModal.querySelectorAll<HTMLElement>('[data-auth-mode]').forEach(button => button.classList.toggle('active', button.dataset.authMode === mode)); homeLoginModal.querySelector<HTMLElement>('[data-register-field]')!.hidden = mode !== 'register'; const name = homeLoginModal.querySelector<HTMLInputElement>('input[name="name"]')!; name.required = mode === 'register'; homeLoginModal.querySelector<HTMLElement>('.home-login-submit')!.textContent = mode === 'register' ? '创建账号并进入工作台' : '登录并进入工作台'; homeLoginModal.querySelector<HTMLElement>('.home-login-error')!.textContent = '' }
+function renderAuthenticatedUser() { const login = document.querySelector<HTMLButtonElement>('#home-login')!, userButton = document.querySelector<HTMLButtonElement>('#workspace-user')!, menu = document.querySelector<HTMLElement>('#workspace-user-menu')!; login.textContent = authUser?.name ?? '登录'; userButton.querySelector('span')!.textContent = authUser?.name?.slice(0, 1).toUpperCase() ?? 'F'; userButton.querySelector('b')!.textContent = authUser?.name ?? '用户'; menu.querySelector('strong')!.textContent = authUser?.name ?? ''; menu.querySelector('small')!.textContent = authUser?.email ?? '' }
+async function ensureCurrentUserProject() { const response = await fetch('/api/projects'); if (!response.ok) return false; const projects = await response.json() as Array<{ id: string }>; if (!projects.length) return false; if (!projects.some(project => project.id === currentProjectId)) { currentProjectId = projects[0].id; localStorage.setItem('flow-project-id', currentProjectId) } return true }
+async function enterWorkspace() { if (!authUser || !await ensureCurrentUserProject()) return; location.hash = '#/canvas'; await Promise.all([loadCanvas(), loadAssets()]); applyAppRoute() }
 async function loadShowcase() {
   showcaseLoaded = true
   try {
@@ -103,14 +113,19 @@ function openHomePreview(asset: { name: string; mimeType: string; author: string
   homePreview.querySelector<HTMLElement>('strong')!.textContent = asset.name; homePreview.querySelector<HTMLElement>('footer span')!.textContent = asset.author || 'Flow 创作者'; homePreview.classList.add('open')
 }
 function closeHomePreview() { const video = homePreview.querySelector<HTMLVideoElement>('video')!; video.pause(); video.removeAttribute('src'); homePreview.querySelector<HTMLImageElement>('img')!.removeAttribute('src'); homePreview.classList.remove('open') }
-document.querySelector('#home-login')!.addEventListener('click', () => homeLoginModal.classList.add('open'))
+document.querySelector('#home-login')!.addEventListener('click', () => authUser ? void enterWorkspace() : openAuth('login'))
 document.querySelector('#home-enter')!.addEventListener('click', requestWorkspace)
 document.querySelector('#home-start')!.addEventListener('click', requestWorkspace)
 homeLoginModal.querySelector('.home-login-close')!.addEventListener('click', () => homeLoginModal.classList.remove('open'))
 homeLoginModal.addEventListener('click', event => { if (event.target === homeLoginModal) homeLoginModal.classList.remove('open') })
-homeLoginModal.querySelector('form')!.addEventListener('submit', event => { event.preventDefault(); localStorage.setItem('flow-authenticated', 'true'); homeLoginModal.classList.remove('open'); location.hash = '#/canvas' })
+homeLoginModal.querySelectorAll<HTMLElement>('[data-auth-mode]').forEach(button => button.addEventListener('click', () => setAuthMode(button.dataset.authMode as 'login' | 'register')))
+homeLoginModal.querySelector('form')!.addEventListener('submit', async event => { event.preventDefault(); const form = event.currentTarget as HTMLFormElement, submit = form.querySelector<HTMLButtonElement>('.home-login-submit')!, error = form.querySelector<HTMLOutputElement>('.home-login-error')!, data = new FormData(form); submit.disabled = true; error.textContent = ''; try { const response = await fetch(`/api/auth/${authMode}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: data.get('name'), email: data.get('email'), password: data.get('password') }) }); const result = await response.json() as AuthUser & { error?: string }; if (!response.ok) throw new Error(result.error || '登录失败'); authUser = result; authReady = true; renderAuthenticatedUser(); homeLoginModal.classList.remove('open'); form.reset(); await enterWorkspace() } catch (reason) { error.textContent = reason instanceof Error ? reason.message : '登录失败，请重试' } finally { submit.disabled = false } })
 homePreview.querySelector(':scope > button')!.addEventListener('click', closeHomePreview)
 homePreview.addEventListener('click', event => { if (event.target === homePreview) closeHomePreview() })
+const workspaceUserMenu = document.querySelector<HTMLElement>('#workspace-user-menu')!
+document.querySelector('#workspace-user')!.addEventListener('click', event => { event.stopPropagation(); workspaceUserMenu.classList.toggle('open') })
+document.querySelector('#workspace-logout')!.addEventListener('click', async () => { await fetch('/api/auth/logout', { method: 'POST' }); authUser = null; nodes.splice(0); links.splice(0); selectedId = 0; workspaceUserMenu.classList.remove('open'); renderAuthenticatedUser(); location.hash = '#/'; applyAppRoute() })
+document.addEventListener('pointerdown', event => { if (!(event.target as HTMLElement | null)?.closest('#workspace-user,#workspace-user-menu')) workspaceUserMenu.classList.remove('open') })
 window.addEventListener('hashchange', applyAppRoute)
 applyAppRoute()
 
@@ -790,4 +805,10 @@ window.addEventListener('keydown', event => {
   event.preventDefault(); deleteSelectedNode()
 })
 async function loadGenerationCapabilities() { try { const response = await fetch('/api/generation/capabilities'); if (response.ok) generationCapabilities = await response.json() as GenerationCapabilities } catch { /* 使用通用默认配置 */ } }
-window.addEventListener('resize', resize); resize(); updateEditor(); void loadGenerationCapabilities().then(loadCanvas)
+async function bootstrapApplication() {
+  try { const response = await fetch('/api/users/me'); if (response.ok) authUser = await response.json() as AuthUser } catch { authUser = null }
+  authReady = true; localStorage.removeItem('flow-authenticated'); renderAuthenticatedUser(); await loadGenerationCapabilities()
+  if (authUser && await ensureCurrentUserProject() && location.hash === '#/canvas') await Promise.all([loadCanvas(), loadAssets()])
+  applyAppRoute()
+}
+window.addEventListener('resize', resize); resize(); updateEditor(); void bootstrapApplication()

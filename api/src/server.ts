@@ -1,7 +1,7 @@
-import Fastify from 'fastify'
+import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify'
 import initSqlJs, { type Database } from 'sql.js'
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
 import { createGenerationProvider, type GenerationUpdate } from './providers/index.js'
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
 
@@ -19,6 +19,7 @@ database.run(`
   CREATE TABLE IF NOT EXISTS canvases (id TEXT PRIMARY KEY, title TEXT NOT NULL, document TEXT NOT NULL, updated_at TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, node_id INTEGER NOT NULL, kind TEXT NOT NULL, prompt TEXT NOT NULL, model TEXT NOT NULL, status TEXT NOT NULL, progress INTEGER NOT NULL DEFAULT 0, result_url TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS project_canvases (project_id TEXT PRIMARY KEY, document TEXT NOT NULL, updated_at TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, user_id TEXT NOT NULL, name TEXT NOT NULL, mime_type TEXT NOT NULL, size INTEGER NOT NULL, storage_name TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -26,6 +27,8 @@ database.run(`
 ensureColumn('jobs', 'project_id', 'TEXT')
 ensureColumn('jobs', 'user_id', 'TEXT')
 ensureColumn('assets', 'is_public', 'INTEGER NOT NULL DEFAULT 0')
+ensureColumn('users', 'email', 'TEXT')
+ensureColumn('users', 'password_hash', 'TEXT')
 const developmentUserId = 'dev-user'
 const defaultProjectId = 'default'
 const generationProvider = createGenerationProvider()
@@ -53,33 +56,57 @@ app.get('/mock/:file', async (request, reply) => {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"><defs><linearGradient id="g" x2="1" y2="1"><stop stop-color="#172d30"/><stop offset=".5" stop-color="#315f69"/><stop offset="1" stop-color="#c5e969"/></linearGradient></defs><rect width="100%" height="100%" fill="url(#g)"/><circle cx="960" cy="180" r="210" fill="#fff" opacity=".08"/><circle cx="210" cy="620" r="330" fill="#fff" opacity=".06"/><text x="72" y="570" fill="#fff" font-family="system-ui" font-size="54" font-weight="700">${label}</text><text x="76" y="625" fill="#fff" opacity=".7" font-family="system-ui" font-size="24">Custom provider result pipeline is ready</text></svg>`
   return reply.type('image/svg+xml').header('cache-control', 'no-store').send(svg)
 })
-app.get('/users/me', async () => getOne('SELECT id, name, created_at AS createdAt FROM users WHERE id = ?', [developmentUserId]))
+app.post('/auth/register', async (request, reply) => {
+  const body = request.body as { name?: string; email?: string; password?: string }, name = String(body.name ?? '').trim(), email = normalizeEmail(body.email), password = String(body.password ?? '')
+  if (name.length < 2 || name.length > 40) return reply.code(400).send({ error: '昵称长度需要在 2 到 40 个字符之间' })
+  if (!validEmail(email)) return reply.code(400).send({ error: '请输入有效邮箱' })
+  if (password.length < 8 || password.length > 128) return reply.code(400).send({ error: '密码至少需要 8 个字符' })
+  if (getOne('SELECT id FROM users WHERE lower(email) = ?', [email])) return reply.code(409).send({ error: '该邮箱已注册' })
+  const now = new Date().toISOString(), legacy = getOne('SELECT id FROM users WHERE id = ? AND (email IS NULL OR email = ?)', [developmentUserId, ''])
+  let userId: string
+  if (legacy) { userId = developmentUserId; database.run('UPDATE users SET name = ?, email = ?, password_hash = ? WHERE id = ?', [name, email, hashPassword(password), userId]) }
+  else { userId = randomUUID(); database.run('INSERT INTO users (id, name, email, password_hash, created_at) VALUES (?, ?, ?, ?, ?)', [userId, name, email, hashPassword(password), now]); createDefaultProject(userId, now) }
+  const token = createSession(userId, now); persist(); setSessionCookie(request, reply, token)
+  return reply.code(201).send({ id: userId, name, email, createdAt: now })
+})
+app.post('/auth/login', async (request, reply) => {
+  const body = request.body as { email?: string; password?: string }, email = normalizeEmail(body.email), password = String(body.password ?? ''), user = getOne('SELECT id, name, email, password_hash, created_at AS createdAt FROM users WHERE lower(email) = ?', [email])
+  if (!user || !verifyPassword(password, String(user.password_hash ?? ''))) return reply.code(401).send({ error: '邮箱或密码错误' })
+  const token = createSession(String(user.id)); persist(); setSessionCookie(request, reply, token)
+  return { id: user.id, name: user.name, email: user.email, createdAt: user.createdAt }
+})
+app.post('/auth/logout', async (request, reply) => { const token = sessionToken(request); if (token) database.run('DELETE FROM sessions WHERE id = ?', [sessionId(token)]); persist(); clearSessionCookie(request, reply); return { ok: true } })
+app.get('/users/me', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; return { id: user.id, name: user.name, email: user.email, createdAt: user.createdAt } })
 app.get('/showcase', async () => getAll(`SELECT assets.id, assets.name, assets.mime_type AS mimeType, assets.created_at AS createdAt, users.name AS author
   FROM assets JOIN users ON users.id = assets.user_id WHERE assets.is_public = 1 ORDER BY assets.created_at DESC LIMIT 30`, []).map(asset => ({ ...asset, url: `/api/public/assets/${asset.id}/content` })))
 
-app.get('/projects', async () => getAll('SELECT id, name, created_at AS createdAt, updated_at AS updatedAt FROM projects WHERE user_id = ? ORDER BY updated_at DESC', [developmentUserId]))
-app.post('/projects', async (request, reply) => { const body = request.body as { name?: string }, id = randomUUID(), now = new Date().toISOString(); database.run('INSERT INTO projects (id, user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', [id, developmentUserId, body.name?.trim() || '未命名项目', now, now]); database.run('INSERT INTO project_canvases (project_id, document, updated_at) VALUES (?, ?, ?)', [id, JSON.stringify({ nodes: [], links: [], camera: { x: 0, y: 0, zoom: 1 } }), now]); persist(); return reply.code(201).send({ id, name: body.name?.trim() || '未命名项目', createdAt: now, updatedAt: now }) })
-app.delete('/projects/:projectId', async (request, reply) => { const { projectId } = request.params as { projectId: string }; if (!ownsProject(projectId)) return reply.code(404).send({ error: 'Project not found' }); if (projectId === defaultProjectId) return reply.code(409).send({ error: 'Default project cannot be deleted' }); const files = getAll('SELECT storage_name FROM assets WHERE project_id = ? AND user_id = ?', [projectId, developmentUserId]); for (const file of files) { const path = `${uploadDirectory}/${file.storage_name}`; if (existsSync(path)) unlinkSync(path) } database.run('DELETE FROM assets WHERE project_id = ? AND user_id = ?', [projectId, developmentUserId]); database.run('DELETE FROM project_canvases WHERE project_id = ?', [projectId]); database.run('DELETE FROM jobs WHERE project_id = ? AND user_id = ?', [projectId, developmentUserId]); database.run('DELETE FROM projects WHERE id = ? AND user_id = ?', [projectId, developmentUserId]); persist(); return reply.code(204).send() })
+app.get('/projects', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; return getAll('SELECT id, name, created_at AS createdAt, updated_at AS updatedAt FROM projects WHERE user_id = ? ORDER BY updated_at DESC', [String(user.id)]) })
+app.post('/projects', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const body = request.body as { name?: string }, id = randomUUID(), now = new Date().toISOString(); database.run('INSERT INTO projects (id, user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', [id, String(user.id), body.name?.trim() || '未命名项目', now, now]); database.run('INSERT INTO project_canvases (project_id, document, updated_at) VALUES (?, ?, ?)', [id, emptyCanvas(), now]); persist(); return reply.code(201).send({ id, name: body.name?.trim() || '未命名项目', createdAt: now, updatedAt: now }) })
+app.delete('/projects/:projectId', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const userId = String(user.id), { projectId } = request.params as { projectId: string }; if (!ownsProject(projectId, userId)) return reply.code(404).send({ error: 'Project not found' }); const projectCount = Number(getOne('SELECT count(*) AS count FROM projects WHERE user_id = ?', [userId])?.count ?? 0); if (projectCount <= 1) return reply.code(409).send({ error: '至少需要保留一个项目' }); const files = getAll('SELECT storage_name FROM assets WHERE project_id = ? AND user_id = ?', [projectId, userId]); for (const file of files) { const path = `${uploadDirectory}/${file.storage_name}`; if (existsSync(path)) unlinkSync(path) } database.run('DELETE FROM assets WHERE project_id = ? AND user_id = ?', [projectId, userId]); database.run('DELETE FROM project_canvases WHERE project_id = ?', [projectId]); database.run('DELETE FROM jobs WHERE project_id = ? AND user_id = ?', [projectId, userId]); database.run('DELETE FROM projects WHERE id = ? AND user_id = ?', [projectId, userId]); persist(); return reply.code(204).send() })
 
-app.get('/projects/:projectId/canvas', async (request, reply) => { const { projectId } = request.params as { projectId: string }; if (!ownsProject(projectId)) return reply.code(404).send({ error: 'Project not found' }); const row = getOne('SELECT document, updated_at FROM project_canvases WHERE project_id = ?', [projectId]); if (!row) return reply.code(404).send({ error: 'Canvas not found' }); return { projectId, ...JSON.parse(String(row.document)), updatedAt: row.updated_at } })
-app.put('/projects/:projectId/canvas', async (request, reply) => { const { projectId } = request.params as { projectId: string }; if (!ownsProject(projectId)) return reply.code(404).send({ error: 'Project not found' }); const body = request.body as CanvasPayload, now = new Date().toISOString(); database.run('INSERT INTO project_canvases (project_id, document, updated_at) VALUES (?, ?, ?) ON CONFLICT(project_id) DO UPDATE SET document=excluded.document, updated_at=excluded.updated_at', [projectId, JSON.stringify({ nodes: body.nodes, links: body.links, camera: body.camera }), now]); database.run('UPDATE projects SET updated_at = ? WHERE id = ?', [now, projectId]); persist(); return { projectId, updatedAt: now } })
+app.get('/projects/:projectId/canvas', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const { projectId } = request.params as { projectId: string }; if (!ownsProject(projectId, String(user.id))) return reply.code(404).send({ error: 'Project not found' }); const row = getOne('SELECT document, updated_at FROM project_canvases WHERE project_id = ?', [projectId]); if (!row) return reply.code(404).send({ error: 'Canvas not found' }); return { projectId, ...JSON.parse(String(row.document)), updatedAt: row.updated_at } })
+app.put('/projects/:projectId/canvas', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const { projectId } = request.params as { projectId: string }; if (!ownsProject(projectId, String(user.id))) return reply.code(404).send({ error: 'Project not found' }); const body = request.body as CanvasPayload, now = new Date().toISOString(); database.run('INSERT INTO project_canvases (project_id, document, updated_at) VALUES (?, ?, ?) ON CONFLICT(project_id) DO UPDATE SET document=excluded.document, updated_at=excluded.updated_at', [projectId, JSON.stringify({ nodes: body.nodes, links: body.links, camera: body.camera }), now]); database.run('UPDATE projects SET updated_at = ? WHERE id = ?', [now, projectId]); persist(); return { projectId, updatedAt: now } })
 
-app.get('/projects/:projectId/assets', async (request, reply) => { const { projectId } = request.params as { projectId: string }; if (!ownsProject(projectId)) return reply.code(404).send({ error: 'Project not found' }); return getAll('SELECT id, name, mime_type AS mimeType, size, is_public AS isPublic, created_at AS createdAt FROM assets WHERE project_id = ? AND user_id = ? ORDER BY created_at DESC', [projectId, developmentUserId]).map(asset => ({ ...asset, isPublic: Boolean(asset.isPublic), url: `/api/assets/${asset.id}/content` })) })
-app.post('/projects/:projectId/assets', async (request, reply) => { const { projectId } = request.params as { projectId: string }; if (!ownsProject(projectId)) return reply.code(404).send({ error: 'Project not found' }); const body = request.body as { files?: Array<{ name: string; mimeType: string; data: string }> }, uploaded = []; for (const file of body.files ?? []) { const bytes = Buffer.from(file.data, 'base64'); if (bytes.length > 100 * 1024 * 1024) return reply.code(413).send({ error: 'Asset exceeds 100MB' }); const id = randomUUID(), storageName = `${id}.bin`, now = new Date().toISOString(); writeFileSync(`${uploadDirectory}/${storageName}`, bytes); database.run('INSERT INTO assets (id, project_id, user_id, name, mime_type, size, storage_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [id, projectId, developmentUserId, file.name, file.mimeType, bytes.length, storageName, now]); uploaded.push({ id, name: file.name, mimeType: file.mimeType, size: bytes.length, createdAt: now, url: `/api/assets/${id}/content` }) } persist(); return reply.code(201).send(uploaded) })
-app.get('/assets/:assetId/content', async (request, reply) => { const { assetId } = request.params as { assetId: string }; const asset = getOne('SELECT mime_type, storage_name FROM assets WHERE id = ? AND user_id = ?', [assetId, developmentUserId]); if (!asset) return reply.code(404).send({ error: 'Asset not found' }); reply.type(String(asset.mime_type)).header('cache-control', 'private, max-age=3600'); return reply.send(readFileSync(`${uploadDirectory}/${asset.storage_name}`)) })
+app.get('/projects/:projectId/assets', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const userId = String(user.id), { projectId } = request.params as { projectId: string }; if (!ownsProject(projectId, userId)) return reply.code(404).send({ error: 'Project not found' }); return getAll('SELECT id, name, mime_type AS mimeType, size, is_public AS isPublic, created_at AS createdAt FROM assets WHERE project_id = ? AND user_id = ? ORDER BY created_at DESC', [projectId, userId]).map(asset => ({ ...asset, isPublic: Boolean(asset.isPublic), url: `/api/assets/${asset.id}/content` })) })
+app.post('/projects/:projectId/assets', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const userId = String(user.id), { projectId } = request.params as { projectId: string }; if (!ownsProject(projectId, userId)) return reply.code(404).send({ error: 'Project not found' }); const body = request.body as { files?: Array<{ name: string; mimeType: string; data: string }> }, uploaded = []; for (const file of body.files ?? []) { const bytes = Buffer.from(file.data, 'base64'); if (bytes.length > 100 * 1024 * 1024) return reply.code(413).send({ error: 'Asset exceeds 100MB' }); const id = randomUUID(), storageName = `${id}.bin`, now = new Date().toISOString(); writeFileSync(`${uploadDirectory}/${storageName}`, bytes); database.run('INSERT INTO assets (id, project_id, user_id, name, mime_type, size, storage_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [id, projectId, userId, file.name, file.mimeType, bytes.length, storageName, now]); uploaded.push({ id, name: file.name, mimeType: file.mimeType, size: bytes.length, createdAt: now, url: `/api/assets/${id}/content` }) } persist(); return reply.code(201).send(uploaded) })
+app.get('/assets/:assetId/content', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const { assetId } = request.params as { assetId: string }; const asset = getOne('SELECT mime_type, storage_name FROM assets WHERE id = ? AND user_id = ?', [assetId, String(user.id)]); if (!asset) return reply.code(404).send({ error: 'Asset not found' }); reply.type(String(asset.mime_type)).header('cache-control', 'private, max-age=3600'); return reply.send(readFileSync(`${uploadDirectory}/${asset.storage_name}`)) })
 app.get('/public/assets/:assetId/content', async (request, reply) => { const { assetId } = request.params as { assetId: string }; const asset = getOne('SELECT mime_type, storage_name FROM assets WHERE id = ? AND is_public = 1', [assetId]); if (!asset) return reply.code(404).send({ error: 'Asset not found' }); reply.type(String(asset.mime_type)).header('cache-control', 'public, max-age=3600'); return reply.send(readFileSync(`${uploadDirectory}/${asset.storage_name}`)) })
-app.patch('/assets/:assetId/visibility', async (request, reply) => { const { assetId } = request.params as { assetId: string }; const asset = getOne('SELECT id FROM assets WHERE id = ? AND user_id = ?', [assetId, developmentUserId]); if (!asset) return reply.code(404).send({ error: 'Asset not found' }); const body = request.body as { isPublic?: boolean }; database.run('UPDATE assets SET is_public = ? WHERE id = ? AND user_id = ?', [body.isPublic ? 1 : 0, assetId, developmentUserId]); persist(); return { id: assetId, isPublic: Boolean(body.isPublic) } })
-app.delete('/assets/:assetId', async (request, reply) => { const { assetId } = request.params as { assetId: string }; const asset = getOne('SELECT storage_name FROM assets WHERE id = ? AND user_id = ?', [assetId, developmentUserId]); if (!asset) return reply.code(404).send({ error: 'Asset not found' }); const path = `${uploadDirectory}/${asset.storage_name}`; if (existsSync(path)) unlinkSync(path); database.run('DELETE FROM assets WHERE id = ? AND user_id = ?', [assetId, developmentUserId]); persist(); return reply.code(204).send() })
+app.patch('/assets/:assetId/visibility', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const userId = String(user.id), { assetId } = request.params as { assetId: string }; const asset = getOne('SELECT id FROM assets WHERE id = ? AND user_id = ?', [assetId, userId]); if (!asset) return reply.code(404).send({ error: 'Asset not found' }); const body = request.body as { isPublic?: boolean }; database.run('UPDATE assets SET is_public = ? WHERE id = ? AND user_id = ?', [body.isPublic ? 1 : 0, assetId, userId]); persist(); return { id: assetId, isPublic: Boolean(body.isPublic) } })
+app.delete('/assets/:assetId', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const userId = String(user.id), { assetId } = request.params as { assetId: string }; const asset = getOne('SELECT storage_name FROM assets WHERE id = ? AND user_id = ?', [assetId, userId]); if (!asset) return reply.code(404).send({ error: 'Asset not found' }); const path = `${uploadDirectory}/${asset.storage_name}`; if (existsSync(path)) unlinkSync(path); database.run('DELETE FROM assets WHERE id = ? AND user_id = ?', [assetId, userId]); persist(); return reply.code(204).send() })
 
 app.get('/canvases/:id', async (request, reply) => {
+  const user = requireUser(request, reply); if (!user) return
   const { id } = request.params as { id: string }
+  if (!ownsProject(id, String(user.id))) return reply.code(404).send({ error: 'Canvas not found' })
   const row = getOne('SELECT id, title, document, updated_at FROM canvases WHERE id = ?', [id])
   if (!row) return reply.code(404).send({ error: 'Canvas not found' })
   return { id: row.id, title: row.title, ...JSON.parse(String(row.document)), updatedAt: row.updated_at }
 })
 
-app.put('/canvases/:id', async (request) => {
+app.put('/canvases/:id', async (request, reply) => {
+  const user = requireUser(request, reply); if (!user) return
   const { id } = request.params as { id: string }
+  if (!ownsProject(id, String(user.id))) return reply.code(404).send({ error: 'Canvas not found' })
   const body = request.body as CanvasPayload & { title?: string }
   const now = new Date().toISOString()
   database.run(`INSERT INTO canvases (id, title, document, updated_at) VALUES (?, ?, ?, ?)
@@ -90,20 +117,23 @@ app.put('/canvases/:id', async (request) => {
 })
 
 app.post('/jobs', async (request, reply) => {
+  const user = requireUser(request, reply); if (!user) return
+  const userId = String(user.id)
   const input = request.body as JobInput
   if (!input.prompt?.trim()) return reply.code(400).send({ error: 'Prompt is required' })
   const projectId = input.projectId ?? defaultProjectId
-  if (!ownsProject(projectId)) return reply.code(404).send({ error: 'Project not found' })
+  if (!ownsProject(projectId, userId)) return reply.code(404).send({ error: 'Project not found' })
   const id = randomUUID(), now = new Date().toISOString(), model = input.model ?? (input.kind === 'video' ? process.env.AGNES_VIDEO_DEFAULT_MODEL || 'agnes-video-v2.0' : process.env.OPENAI_IMAGE_DEFAULT_MODEL || 'gpt-image-2')
-  database.run('INSERT INTO jobs (id, project_id, user_id, node_id, kind, prompt, model, status, progress, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [id, projectId, developmentUserId, input.nodeId, input.kind, input.prompt, model, 'queued', 0, now, now])
+  database.run('INSERT INTO jobs (id, project_id, user_id, node_id, kind, prompt, model, status, progress, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [id, projectId, userId, input.nodeId, input.kind, input.prompt, model, 'queued', 0, now, now])
   persist()
   void generationProvider.run({ internalJobId: id, projectId, nodeId: input.nodeId, kind: input.kind, prompt: input.prompt, model, inputUrls: input.inputUrls ?? [], parameters: input.parameters ?? {} }, update => { void updateJob(id, update) }).catch(error => { void updateJob(id, { status: 'failed', progress: 0, error: error instanceof Error ? error.message : 'Generation failed' }) })
   return reply.code(202).send({ id, status: 'queued', progress: 0, model, provider: generationProvider.name })
 })
 
 app.get('/jobs/:id', async (request, reply) => {
+  const user = requireUser(request, reply); if (!user) return
   const { id } = request.params as { id: string }
-  const row = getOne('SELECT * FROM jobs WHERE id = ? AND user_id = ?', [id, developmentUserId])
+  const row = getOne('SELECT * FROM jobs WHERE id = ? AND user_id = ?', [id, String(user.id)])
   return row ?? reply.code(404).send({ error: 'Job not found' })
 })
 
@@ -113,8 +143,23 @@ function getOne(sql: string, values: Array<string | number>) {
   statement.free(); return row
 }
 function getAll(sql: string, values: Array<string | number>) { const statement = database.prepare(sql); statement.bind(values); const rows = []; while (statement.step()) rows.push(statement.getAsObject()); statement.free(); return rows }
-function ownsProject(projectId: string) { return Boolean(getOne('SELECT id FROM projects WHERE id = ? AND user_id = ?', [projectId, developmentUserId])) }
+function ownsProject(projectId: string, userId: string) { return Boolean(getOne('SELECT id FROM projects WHERE id = ? AND user_id = ?', [projectId, userId])) }
 function ensureColumn(table: string, column: string, definition: string) { const columns = getAll(`PRAGMA table_info(${table})`, []); if (!columns.some(item => item.name === column)) database.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`) }
+function normalizeEmail(value: unknown) { return String(value ?? '').trim().toLowerCase() }
+function validEmail(email: string) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 254 }
+function hashPassword(password: string) { const salt = randomBytes(16).toString('hex'), digest = scryptSync(password, salt, 64).toString('hex'); return `scrypt:${salt}:${digest}` }
+function verifyPassword(password: string, stored: string) { const [, salt, expected] = stored.split(':'); if (!salt || !expected) return false; try { const actual = scryptSync(password, salt, 64), expectedBytes = Buffer.from(expected, 'hex'); return actual.length === expectedBytes.length && timingSafeEqual(actual, expectedBytes) } catch { return false } }
+function sessionId(token: string) { return createHash('sha256').update(token).digest('hex') }
+function sessionToken(request: FastifyRequest) { const cookie = String(request.headers.cookie ?? '').split(';').map(part => part.trim()).find(part => part.startsWith('flow_session=')); return cookie ? decodeURIComponent(cookie.slice('flow_session='.length)) : '' }
+function createSession(userId: string, createdAt = new Date().toISOString()) { const token = randomBytes(32).toString('base64url'), expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); database.run('DELETE FROM sessions WHERE expires_at <= ?', [createdAt]); database.run('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)', [sessionId(token), userId, createdAt, expiresAt]); return token }
+function currentUser(request: FastifyRequest) { const token = sessionToken(request); if (!token) return undefined; return getOne(`SELECT users.id, users.name, users.email, users.created_at AS createdAt FROM sessions JOIN users ON users.id = sessions.user_id
+  WHERE sessions.id = ? AND sessions.expires_at > ?`, [sessionId(token), new Date().toISOString()]) }
+function requireUser(request: FastifyRequest, reply: FastifyReply) { const user = currentUser(request); if (!user) { void reply.code(401).send({ error: 'Unauthorized' }); return undefined } return user }
+function secureRequest(request: FastifyRequest) { const proto = request.headers['x-forwarded-proto']; return (Array.isArray(proto) ? proto[0] : proto) === 'https' }
+function setSessionCookie(request: FastifyRequest, reply: FastifyReply, token: string) { reply.header('set-cookie', `flow_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${30 * 24 * 60 * 60}${secureRequest(request) ? '; Secure' : ''}`) }
+function clearSessionCookie(request: FastifyRequest, reply: FastifyReply) { reply.header('set-cookie', `flow_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureRequest(request) ? '; Secure' : ''}`) }
+function emptyCanvas() { return JSON.stringify({ nodes: [], links: [], camera: { x: 0, y: 0, zoom: 1 } }) }
+function createDefaultProject(userId: string, now = new Date().toISOString()) { const id = randomUUID(); database.run('INSERT INTO projects (id, user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', [id, userId, '未命名项目', now, now]); database.run('INSERT INTO project_canvases (project_id, document, updated_at) VALUES (?, ?, ?)', [id, emptyCanvas(), now]); return id }
 
 function persist() { writeFileSync(databasePath, Buffer.from(database.export())) }
 
@@ -130,7 +175,7 @@ async function updateJob(id: string, update: GenerationUpdate) {
 }
 
 async function archiveJobResult(jobId: string, source: string) {
-  const job = getOne('SELECT project_id, kind, prompt FROM jobs WHERE id = ? AND user_id = ?', [jobId, developmentUserId])
+  const job = getOne('SELECT project_id, user_id, kind, prompt FROM jobs WHERE id = ?', [jobId])
   if (!job) throw new Error('Job not found')
   let bytes: Buffer, mimeType: string
   if (source.startsWith('data:')) {
@@ -150,7 +195,7 @@ async function archiveJobResult(jobId: string, source: string) {
   const extension = mimeType.split('/')[1]?.replace('svg+xml', 'svg') || 'bin'
   const name = `AI 生成-${new Date().toLocaleString('zh-CN').replace(/[/:]/g, '-')}.${extension}`
   writeFileSync(`${uploadDirectory}/${storageName}`, bytes)
-  database.run('INSERT INTO assets (id, project_id, user_id, name, mime_type, size, storage_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [assetId, String(job.project_id), developmentUserId, name, mimeType, bytes.length, storageName, now])
+  database.run('INSERT INTO assets (id, project_id, user_id, name, mime_type, size, storage_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [assetId, String(job.project_id), String(job.user_id), name, mimeType, bytes.length, storageName, now])
   return `/api/assets/${assetId}/content`
 }
 
