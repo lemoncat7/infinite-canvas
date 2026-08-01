@@ -64,7 +64,27 @@ function modelDisplayName(value?: string) { if (!value?.startsWith('custom:')) r
 const activeJobPolls = new Map<string, number>()
 const retryNotifiedJobs = new Set<string>()
 const toastStack = document.querySelector<HTMLElement>('#toast-stack')!
-function showToast(message: string, type: 'error' | 'success' | 'warning' = 'error', detail = '') { const toast = document.createElement('div'); toast.className = `app-toast ${type}`; toast.innerHTML = `<i>${type === 'error' ? '!' : type === 'success' ? '✓' : 'i'}</i><span><b>${type === 'error' ? '生成失败' : type === 'success' ? '生成完成' : '提示'}</b><small>${escapeHtml(message)}</small>${detail ? `<em>${escapeHtml(detail)}</em>` : ''}</span><button type="button" aria-label="关闭">×</button>`; toast.querySelector('button')!.addEventListener('click', () => toast.remove()); toastStack.append(toast); while (toastStack.children.length > 3) toastStack.firstElementChild?.remove(); window.setTimeout(() => toast.remove(), type === 'error' ? 12000 : 6000) }
+function friendlyGenerationError(raw: string, fallback: string) {
+  const text = raw.trim() || fallback, lower = text.toLowerCase(), requestId = text.match(/request id\s*[:：]?\s*([a-z0-9-]+)/i)?.[1]
+  if (/safety system|content.?policy|safety_violations|安全(?:系统|检查)|内容政策/.test(lower)) return { title:'图片未通过安全检查', message:'提示词或参考图片可能触发了内容安全规则。', advice:'尝试使用更中性的描述，移除危险动作；如果使用了参考图，请逐张排查或更换图片。', requestId }
+  if (/\b401\b|unauthorized|invalid api key|incorrect api key|鉴权|密钥.*(?:无效|错误)/.test(lower)) return { title:'接口认证失败', message:'当前 API 密钥无效、已过期或没有该模型权限。', advice:'请检查接口地址、密钥和模型权限后重试。', requestId }
+  if (/\b403\b|forbidden|permission denied|无权限/.test(lower)) return { title:'接口没有访问权限', message:'当前账号或密钥无权执行这项生成任务。', advice:'检查模型授权、账号权限或代理服务配置。', requestId }
+  if (/\b429\b|rate.?limit|too many requests|quota|额度|请求过多/.test(lower)) return { title:'请求过于频繁', message:'生成接口当前繁忙，或账号额度已经用完。', advice:'稍后重试，并检查接口额度与并发限制。', requestId }
+  if (/timeout|timed out|aborted due to timeout|超时/.test(lower)) return { title:'生成等待时间过长', message:'接口在限定时间内没有返回完整结果。', advice:'稍后重试；复杂提示词可以切换为简洁模式，并减少参考图片数量。', requestId }
+  if (/download.*image|image.*download|读取.*图片|参考图片.*(?:读取|下载)|首帧图片/.test(lower)) return { title:'参考图片读取失败', message:'生成服务暂时无法访问其中一张参考图片。', advice:'重新上传图片、检查公网地址，或稍后再试。', requestId }
+  if (/未返回任务 id|没有.*task.?id|without.*(?:task|request).*id/.test(lower)) return { title:'接口格式不兼容', message:'视频接口没有返回可用于查询进度的任务编号。', advice:'检查所选模型与 Provider 适配方式是否匹配。', requestId }
+  if (/\b5\d\d\b|bad gateway|service unavailable|internal server error|upstream/.test(lower)) return { title:'生成服务暂时异常', message:'上游接口当前不可用或返回了服务端错误。', advice:'稍后重试；如果持续发生，请检查 CPA 或模型服务日志。', requestId }
+  return { title:'生成失败', message:fallback || '任务未能完成。', advice:'可以重试一次；若仍然失败，请展开技术详情查看接口返回。', requestId }
+}
+function showToast(message: string, type: 'error' | 'success' | 'warning' = 'error', detail = '') {
+  const toast = document.createElement('div'), raw = detail || message, friendly = type === 'error' ? friendlyGenerationError(raw, message) : null
+  toast.className = `app-toast ${type}`
+  toast.innerHTML = `<i>${type === 'error' ? '!' : type === 'success' ? '✓' : 'i'}</i><span><b>${escapeHtml(friendly?.title || (type === 'success' ? '生成完成' : type === 'warning' ? '提示' : '生成失败'))}</b><small>${escapeHtml(friendly?.message || message)}</small>${friendly ? `<p>${escapeHtml(friendly.advice)}</p><details><summary>技术详情</summary><em>${escapeHtml(raw)}${friendly.requestId ? `\nRequest ID: ${escapeHtml(friendly.requestId)}` : ''}</em></details>` : detail ? `<em>${escapeHtml(detail)}</em>` : ''}</span><button type="button" aria-label="关闭">×</button>`
+  let timer = window.setTimeout(() => toast.remove(), type === 'error' ? 20000 : 6000)
+  toast.querySelector('button')!.addEventListener('click', () => { window.clearTimeout(timer); toast.remove() })
+  toast.querySelector('details')?.addEventListener('toggle', event => { if ((event.currentTarget as HTMLDetailsElement).open) window.clearTimeout(timer); else timer = window.setTimeout(() => toast.remove(), 12000) })
+  toastStack.append(toast); while (toastStack.children.length > 3) toastStack.firstElementChild?.remove()
+}
 
 const homePage = document.querySelector<HTMLElement>('#home-page')!
 const homeGallery = document.querySelector<HTMLElement>('#home-gallery')!
@@ -339,8 +359,7 @@ function syncDomNodes() {
   for (const node of nodes) {
     let element = nodeLayer.querySelector<HTMLElement>(`.flow-node[data-id="${node.id}"]`)
     if (!element) { element = createDomNode(node); nodeLayer.append(element) }
-    const childGenerating = node.kind === 'video' && node.role !== 'result' && links.some(link => link.from === node.id && nodes.some(item => item.id === link.to && item.role === 'result' && (item.status === 'queued' || item.status === 'running')))
-    const locked = node.status === 'queued' || node.status === 'running' || childGenerating
+    const locked = node.status === 'queued' || node.status === 'running'
     node.width = 280; node.height = 220
     element.className = `flow-node kind-${node.kind}${node.role === 'result' ? ' node-result' : ' node-generator'}${node.id === selectedId ? ' selected' : ''}${locked ? ' generating' : ''}`
     element.querySelectorAll<HTMLElement>('.node-port').forEach(port => { port.hidden = node.kind === 'video' && node.role === 'result' })
@@ -355,7 +374,7 @@ function syncDomNodes() {
         const referenceCount = references.length
         const mode = referenceCount > 1 ? '多图生视频' : referenceCount === 1 ? '图生视频' : '文生视频'
         const settings = node.videoSettings ?? {}
-        const frames = references.map((reference, index) => `<i class="has-image"><img src="${escapeHtml(reference.mediaUrl!)}" alt="参考图 ${index + 1}" draggable="false"><b>${index + 1}</b></i>`).join('')
+        const frames = references.map((reference, index) => `<i class="has-image" title="参考图 ${index + 1}"><img src="${escapeHtml(reference.mediaUrl!)}" alt="参考图 ${index + 1}" draggable="false"><b>${index + 1}</b></i>`).join('')
         const placeholders = referenceCount ? '' : '<i><span>1</span></i><i><span>2</span></i><i><span>3</span></i>'
         emptyState.innerHTML = `<header class="video-node-heading"><div><b>视频生成</b><small>${mode}${referenceCount ? ` · ${referenceCount} 张参考图` : ''}</small></div></header><div class="video-storyboard" style="--frame-count:${referenceCount || 3}">${frames}${placeholders}<em>→</em></div><div class="video-node-summary"><em>${settings.seconds ?? '5'} 秒</em><em>${settings.resolution ?? '720p'}</em><em>${settings.aspectRatio ?? '16:9'}</em></div><p>${node.body.trim() ? escapeHtml(node.body.trim()) : referenceCount ? '参考图已就绪，在下方描述画面运动' : '连接图片，或直接输入视频描述'}</p>`
       }
@@ -390,7 +409,7 @@ function syncDomNodes() {
       const sizeLabel = ({ auto: '自动尺寸', '1024x1024': '1:1', '1344x1008': '4:3', '1008x1344': '3:4', '1536x1024': '3:2', '1024x1536': '2:3', '1536x864': '16:9', '864x1536': '9:16' } as Record<string, string>)[node.imageSettings?.size ?? 'auto'] ?? node.imageSettings?.size
       const qualityLabel = ({ auto: '自动质量', high: '高质量', medium: '标准质量', low: '低质量' } as Record<string, string>)[node.imageSettings?.quality ?? 'auto'] ?? node.imageSettings?.quality
       imagePanel.querySelector<HTMLElement>('[data-image-settings-label]')!.textContent = `${qualityLabel} · ${sizeLabel}`
-      const generateButton = imagePanel.querySelector<HTMLButtonElement>('[data-image-generate]')!; generateButton.disabled = locked || !canGenerateNode(node); generateButton.classList.toggle('is-running', locked); generateButton.innerHTML = '<span>▶</span><b>生成</b>'
+      const generateButton = imagePanel.querySelector<HTMLButtonElement>('[data-image-generate]')!; generateButton.disabled = locked || !canGenerateNode(node); generateButton.classList.toggle('is-running', locked); generateButton.innerHTML = locked ? '<i aria-hidden="true"></i><b>生成中</b>' : '<span>▶</span><b>生成</b>'
     }
     if (node.kind === 'video') {
       const count = (node.role !== 'result' && node.mediaUrl ? 1 : 0) + links.filter(link => link.from === node.id).map(link => nodes.find(item => item.id === link.to)).filter(item => item?.kind === 'video' && item.role === 'result' && item.status === 'succeeded').length
@@ -445,7 +464,7 @@ function createDomNode(node: FlowNode) {
   element.addEventListener('pointerdown', event => {
     if (event.button !== 0 || domDrag) return
     const target = event.target as HTMLElement
-    if (target.closest('button,.node-port,.image-config-panel') || target.closest('.node-copy[contenteditable="true"]')) return
+    if (target.closest('button,input,textarea,select,details,.node-port,.image-config-panel,.video-config-panel,.node-floating-tools') || target.closest('.node-copy[contenteditable="true"]')) return
     event.preventDefault(); event.stopPropagation(); selectedId = node.id; updateEditor()
     if (node.status === 'queued' || node.status === 'running') { draw(); return }
     element.setPointerCapture(event.pointerId); domDrag = { id: node.id, pointerId:event.pointerId, startX: event.clientX, startY: event.clientY, initialX: node.x, initialY: node.y, element, moved: false }; element.classList.add('dragging'); draw()
@@ -461,7 +480,7 @@ function createDomNode(node: FlowNode) {
   })
   element.addEventListener('dragstart', event => event.preventDefault())
   element.addEventListener('contextmenu', event => { event.preventDefault(); event.stopPropagation() })
-  element.querySelectorAll<HTMLElement>('.node-port').forEach(port => port.addEventListener('pointerdown', event => { event.preventDefault(); event.stopPropagation(); selectedId = node.id; connectionSnap = null; connecting = { nodeId: node.id, side: port.dataset.side as PortSide, pointer: { x: event.clientX, y: event.clientY } }; draw() }))
+  element.querySelectorAll<HTMLElement>('.node-port').forEach(port => port.addEventListener('pointerdown', event => { event.preventDefault(); event.stopPropagation(); selectedId = 0; updateEditor(); connectionSnap = null; connecting = { nodeId: node.id, side: port.dataset.side as PortSide, pointer: { x: event.clientX, y: event.clientY } }; draw() }))
   element.querySelector('[data-action="info"]')!.addEventListener('click', event => { event.stopPropagation(); openNodeInfo(node) })
   element.querySelector('[data-action="edit"]')!.addEventListener('click', event => { event.stopPropagation(); selectedId = node.id; updateEditor(); if (node.kind === 'prompt') enterTextEdit(node, element); else promptInput.focus() })
   element.querySelector('[data-action="zoom-in"]')!.addEventListener('click', event => { event.stopPropagation(); node.fontScale = Math.min(2, (node.fontScale ?? 1) + .1); scheduleSave(); draw() })
@@ -478,7 +497,11 @@ function createDomNode(node: FlowNode) {
   for (const key of ['size', 'quality', 'background'] as const) imagePanel.querySelector<HTMLSelectElement>(`[data-image-field="${key}"]`)!.addEventListener('change', event => { node.imageSettings = { ...(node.imageSettings ?? {}), [key]: (event.target as HTMLSelectElement).value }; scheduleSave() })
   imagePanel.querySelectorAll<HTMLButtonElement>('[data-image-setting]').forEach(button => button.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); const key = button.dataset.imageSetting as 'size' | 'quality' | 'background', current = node.imageSettings?.[key] ?? 'auto', value = key === 'background' && current === 'transparent' ? 'auto' : button.dataset.value!; const select = imagePanel.querySelector<HTMLSelectElement>(`[data-image-field="${key}"]`)!; select.value = value; select.dispatchEvent(new Event('change')); draw() }))
   imagePanel.querySelector('[data-image-generate]')!.addEventListener('click', event => { event.stopPropagation(); selectedId = node.id; updateEditor(); void generate() })
-  videoPanel.addEventListener('mousedown', event => event.stopPropagation()); videoPanel.addEventListener('click', event => event.stopPropagation())
+  videoPanel.addEventListener('pointerdown', event => {
+    const target = event.target as Node
+    videoPanel.querySelectorAll<HTMLDetailsElement>('details[open]').forEach(details => { if (!details.contains(target)) details.open = false })
+    event.stopPropagation()
+  }); videoPanel.addEventListener('mousedown', event => event.stopPropagation()); videoPanel.addEventListener('click', event => event.stopPropagation())
   videoPanel.querySelector<HTMLTextAreaElement>('[data-video-description]')!.addEventListener('input', event => { node.body = (event.target as HTMLTextAreaElement).value; scheduleSave(); draw() })
   videoPanel.querySelector<HTMLInputElement>('[data-video-model]')!.addEventListener('input', event => { node.model = (event.target as HTMLInputElement).value; scheduleSave() })
   videoPanel.querySelectorAll<HTMLButtonElement>('[data-video-model-option]').forEach(option => option.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); const input = videoPanel.querySelector<HTMLInputElement>('[data-video-model]')!; input.value = option.dataset.videoModelOption!; input.dispatchEvent(new Event('input')); videoPanel.querySelector<HTMLDetailsElement>('.video-model-picker')!.open = false; draw() }))
@@ -598,7 +621,7 @@ function deleteSelectedNode() {
 }
 
 function selectedNode() { return nodes.find(node => node.id === selectedId) }
-function canGenerateNode(node: FlowNode) { if ((node.kind !== 'image' && node.kind !== 'video') || node.role === 'result' || !node.body.trim()) return false; return node.kind !== 'video' || !links.some(link => link.from === node.id && nodes.some(item => item.id === link.to && item.role === 'result' && (item.status === 'queued' || item.status === 'running'))) }
+function canGenerateNode(node: FlowNode) { return (node.kind === 'image' || node.kind === 'video') && node.role !== 'result' && Boolean(node.body.trim()) }
 function updateEditor() {
   const node = selectedNode()
   if (!node) {
@@ -656,10 +679,11 @@ async function generate() {
   jobLabel.textContent = '正在提交…'
   const createsOutput = source.kind === 'video' || (source.kind === 'image' && Boolean(source.mediaUrl))
   const node = createsOutput ? createRevisionNode(source) : source
+  node.status = 'queued'; node.progress = 0; updateEditor(); draw()
   try {
     const upstream = links.filter(link => link.to === source.id && link.from !== node.id).map(link => nodes.find(item => item.id === link.from)).filter((item): item is FlowNode => Boolean(item)).sort((left, right) => left.y - right.y || left.x - right.x || left.id - right.id)
     const inputUrls = source.kind === 'video'
-      ? [...new Set(upstream.filter(item => item.kind === 'image').map(item => item.mediaUrl).filter((url): url is string => Boolean(url)))]
+      ? upstream.filter(item => item.kind === 'image').map(item => item.mediaUrl).filter((url): url is string => Boolean(url))
       : [...new Set([...(source.mediaUrl ? [source.mediaUrl] : []), ...upstream.map(item => item.mediaUrl).filter((url): url is string => Boolean(url))])]
     const resolvedPrompt = source.body.trim()
     const requestPrompt = source.kind === 'image' ? appendImageSizeHint(resolvedPrompt, node.imageSettings?.size) : resolvedPrompt
@@ -669,7 +693,7 @@ async function generate() {
     const response = await fetch('/api/jobs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ projectId: currentProjectId, nodeId: node.id, kind: node.kind === 'video' ? 'video' : 'image', prompt: requestPrompt, model: node.model, inputUrls, parameters }) })
     if (!response.ok) throw new Error('job failed')
     const job = await response.json() as { id: string; status: string; progress: number }
-    node.jobId = job.id; node.status = job.status; node.progress = job.progress; node.generationPrompt = resolvedPrompt; if (node.role !== 'result') node.body = ''; updateEditor(); scheduleSave(); pollJob(node)
+    node.jobId = job.id; node.status = job.status; node.progress = job.progress; node.generationPrompt = resolvedPrompt; if (node.role !== 'result') node.body = ''; updateEditor(); scheduleSave(); draw(); pollJob(node)
   } catch (error) { node.status = 'failed'; node.progress = 0; jobLabel.textContent = '提交失败，请检查 API'; showToast('任务提交失败，请检查接口配置', 'error', error instanceof Error ? error.message : '未知错误'); if (node.role === 'result') removeFailedResult(node, source.id); updateEditor(); scheduleSave(); draw() }
 }
 
@@ -748,7 +772,7 @@ function resumeActiveJobPolls() { nodes.filter(node => node.jobId && (node.statu
 window.addEventListener('online', resumeActiveJobPolls)
 window.addEventListener('focus', resumeActiveJobPolls)
 
-canvas.addEventListener('pointerdown', e => { if (e.button !== 0) return; if (cameraFrame !== null) { cancelAnimationFrame(cameraFrame); cameraFrame = null; zoomTarget = camera.zoom } pointer.down = true; pointer.x = e.clientX; pointer.y = e.clientY; const port = hitPort(e.clientX, e.clientY); if (port) { connectionSnap = null; connecting = { nodeId: port.node.id, side: port.side, pointer: { x: e.clientX, y: e.clientY } }; selectedId = port.node.id; pointer.draggingNode = null; updateEditor() } else { const node = hitNode(e.clientX, e.clientY); pointer.draggingNode = node && node.status !== 'queued' && node.status !== 'running' ? node.id : null; if (node) selectedId = node.id; else selectedId = 0; updateEditor() } canvas.setPointerCapture(e.pointerId); canvas.classList.add('dragging'); draw() })
+canvas.addEventListener('pointerdown', e => { if (e.button !== 0) return; if (cameraFrame !== null) { cancelAnimationFrame(cameraFrame); cameraFrame = null; zoomTarget = camera.zoom } pointer.down = true; pointer.x = e.clientX; pointer.y = e.clientY; const port = hitPort(e.clientX, e.clientY); if (port) { connectionSnap = null; connecting = { nodeId: port.node.id, side: port.side, pointer: { x: e.clientX, y: e.clientY } }; selectedId = 0; pointer.draggingNode = null; updateEditor() } else { const node = hitNode(e.clientX, e.clientY); pointer.draggingNode = node && node.status !== 'queued' && node.status !== 'running' ? node.id : null; if (node) selectedId = node.id; else selectedId = 0; updateEditor() } canvas.setPointerCapture(e.pointerId); canvas.classList.add('dragging'); draw() })
 canvas.addEventListener('pointermove', e => { if (!pointer.down) return; setSaveState('editing', '编辑中…'); if (connecting) { updateConnectionPointer(e.clientX, e.clientY); draw(); return } const dx = e.clientX - pointer.x, dy = e.clientY - pointer.y; if (pointer.draggingNode) { const node = nodes.find(n => n.id === pointer.draggingNode)!; node.x += dx / camera.zoom; node.y += dy / camera.zoom } else { camera.x += dx; camera.y += dy } pointer.x = e.clientX; pointer.y = e.clientY; draw() })
 canvas.addEventListener('pointerup', e => { if (connecting) { const snappedNode = connectionSnap ? nodes.find(node => node.id === connectionSnap!.nodeId) : undefined, target = snappedNode ? { node: snappedNode, side: connectionSnap!.side } : hitPort(e.clientX, e.clientY, 32, connecting.nodeId); if (target) { const duplicate = links.some(link => link.from === connecting!.nodeId && link.to === target.node.id && link.fromSide === connecting!.side && link.toSide === target.side); if (!duplicate) links.push({ from: connecting.nodeId, to: target.node.id, fromSide: connecting.side, toSide: target.side }) } connecting = null; connectionSnap = null } scheduleSave(); pointer.down = false; pointer.draggingNode = null; canvas.classList.remove('dragging'); draw() })
 canvas.addEventListener('wheel', e => { e.preventDefault(); closeQuickNodeMenu(); smoothZoom(zoomTarget * Math.exp(-e.deltaY * .001), { x: e.clientX, y: e.clientY }) }, { passive: false })
@@ -799,6 +823,27 @@ appearanceButton.addEventListener('click',()=>{
   window.setTimeout(()=>{colorTheme=colorTheme==='dark'?'light':'dark';document.body.dataset.theme=colorTheme;localStorage.setItem('flow-theme',colorTheme);repaintAllMedia();paint();document.body.classList.add('theme-click-return');document.body.classList.remove('theme-click-fade')},90)
   window.setTimeout(()=>{document.body.classList.remove('theme-click-return');themeTransitioning=false;refreshAppearanceButton()},260)
 })
+type PromptAgentResult = { model:string; kind:'image'|'video'; subject:string; scene:string; composition:string; lighting:string; style:string; motion:string; negativePrompt:string; finalPrompt:string }
+const promptAgentTrigger=document.querySelector<HTMLButtonElement>('#prompt-agent-trigger')!,promptAgentPanel=document.createElement('section')
+promptAgentPanel.className='prompt-agent-panel';promptAgentPanel.innerHTML=`<header><span><i>✦</i><b>灵感 Agent</b><small>kimi-k2.5</small></span><button type="button" data-agent-close aria-label="关闭">×</button></header><nav><button class="active" type="button" data-agent-kind="image">图像提示词</button><button type="button" data-agent-kind="video">视频提示词</button></nav><div class="agent-complexity" aria-label="提示词详细程度"><button class="active" type="button" data-agent-complexity="simple"><b>简洁</b><small>更快、更稳定</small></button><button type="button" data-agent-complexity="detailed"><b>详细</b><small>更多画面细节</small></button></div><textarea rows="5" placeholder="描述你的想法，例如：雨夜霓虹街道中的未来感人物海报…"></textarea><p class="agent-context-label">会参考当前选中的节点及其上游内容</p><button class="agent-submit" type="button"><span>✦</span><b>生成简洁提示词</b></button><output class="agent-status"></output><article hidden><div class="agent-result-meta"><span>生成结果</span><small></small></div><p></p><footer><button type="button" data-agent-copy>复制</button><button type="button" data-agent-create>创建图像节点</button></footer></article>`;document.body.append(promptAgentPanel)
+const promptAgentModelSelect=document.createElement('select');promptAgentModelSelect.dataset.agentModel='';promptAgentModelSelect.setAttribute('aria-label','Agent 模型');promptAgentModelSelect.innerHTML='<option value="kimi-k2.5">Kimi K2.5</option><option value="gpt-5.4-mini">GPT-5.4 Mini</option>';promptAgentPanel.querySelector('header small')!.replaceWith(promptAgentModelSelect)
+const promptAgentBurst=document.createElement('div');promptAgentBurst.className='agent-particle-burst';promptAgentBurst.innerHTML=Array.from({length:56},()=>'<i></i>').join('');document.body.append(promptAgentBurst)
+promptAgentBurst.querySelectorAll<HTMLElement>('i').forEach((particle,index)=>{const angle=index*2.399+(index%4)*.19,distance=34+(index*17)%86;particle.style.setProperty('--hx',`${Math.cos(angle)*distance}px`);particle.style.setProperty('--hy',`${Math.sin(angle)*distance*.72}px`);particle.style.setProperty('--delay',`${-(index%14)*61}ms`);particle.style.setProperty('--duration',`${720+(index%7)*34}ms`)})
+let promptAgentKind:'image'|'video'='image',promptAgentComplexity:'simple'|'detailed'='simple',promptAgentResult:PromptAgentResult|null=null
+function closePromptAgent(){promptAgentPanel.classList.remove('open','forming');promptAgentTrigger.classList.remove('active')}
+function positionPromptAgentParticles(){const source=promptAgentTrigger.getBoundingClientRect();promptAgentBurst.style.left=`${source.left+source.width/2}px`;promptAgentBurst.style.top=`${source.top+source.height/2}px`}
+function playPromptAgentHover(){if(matchMedia('(hover:none)').matches)return;positionPromptAgentParticles();promptAgentBurst.classList.remove('hover-active');void promptAgentBurst.offsetWidth;promptAgentBurst.classList.add('hover-active')}
+function formPromptAgent(){if(promptAgentPanel.classList.contains('forming'))return;const trigger=promptAgentTrigger.getBoundingClientRect(),panel=promptAgentPanel.getBoundingClientRect(),originX=Math.max(0,Math.min(panel.width,trigger.left+trigger.width/2-panel.left)),originY=Math.max(0,Math.min(panel.height,trigger.top+trigger.height/2-panel.top));promptAgentPanel.style.setProperty('--agent-origin-x',`${originX}px`);promptAgentPanel.style.setProperty('--agent-origin-y',`${originY}px`);positionPromptAgentParticles();promptAgentBurst.classList.add('hover-active');promptAgentPanel.classList.add('forming');promptAgentTrigger.classList.add('active');window.setTimeout(()=>{promptAgentPanel.classList.remove('forming');promptAgentPanel.classList.add('open');promptAgentPanel.querySelector('textarea')?.focus()},180)}
+promptAgentTrigger.addEventListener('pointerenter',playPromptAgentHover)
+promptAgentTrigger.addEventListener('pointerleave',()=>promptAgentBurst.classList.remove('hover-active'))
+promptAgentTrigger.addEventListener('click',event=>{event.stopPropagation();if(promptAgentPanel.classList.contains('open'))closePromptAgent();else formPromptAgent()})
+promptAgentPanel.querySelector('[data-agent-close]')!.addEventListener('click',closePromptAgent)
+promptAgentPanel.querySelectorAll<HTMLButtonElement>('[data-agent-kind]').forEach(button=>button.addEventListener('click',()=>{promptAgentKind=button.dataset.agentKind as 'image'|'video';promptAgentPanel.querySelectorAll('[data-agent-kind]').forEach(item=>item.classList.toggle('active',item===button));const create=promptAgentPanel.querySelector<HTMLButtonElement>('[data-agent-create]')!;create.textContent=promptAgentKind==='video'?'创建视频节点':'创建图像节点'}))
+promptAgentPanel.querySelectorAll<HTMLButtonElement>('[data-agent-complexity]').forEach(button=>button.addEventListener('click',()=>{promptAgentComplexity=button.dataset.agentComplexity as 'simple'|'detailed';promptAgentPanel.querySelectorAll('[data-agent-complexity]').forEach(item=>item.classList.toggle('active',item===button));promptAgentPanel.querySelector<HTMLElement>('.agent-submit b')!.textContent=promptAgentComplexity==='simple'?'生成简洁提示词':'生成详细提示词'}))
+promptAgentPanel.querySelector<HTMLButtonElement>('.agent-submit')!.addEventListener('click',async()=>{const textarea=promptAgentPanel.querySelector<HTMLTextAreaElement>('textarea')!,idea=textarea.value.trim(),submit=promptAgentPanel.querySelector<HTMLButtonElement>('.agent-submit')!,status=promptAgentPanel.querySelector<HTMLOutputElement>('.agent-status')!,article=promptAgentPanel.querySelector<HTMLElement>('article')!;if(!idea){status.textContent='先写下一点创作想法';return}const selected=nodes.find(node=>node.id===selectedId),upstream=selected?links.filter(link=>link.to===selected.id).map(link=>nodes.find(node=>node.id===link.from)).filter(Boolean) as FlowNode[]:[],context=[selected,...upstream].filter(Boolean).map(node=>`${node!.title}：${node!.generationPrompt||node!.body}`).filter(item=>!item.endsWith('：'));submit.disabled=true;submit.classList.add('is-running');status.textContent=promptAgentComplexity==='simple'?'正在提炼核心画面…':'正在完善画面细节…';article.hidden=true;try{const response=await fetch('/api/agents/prompt',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({idea,kind:promptAgentKind,complexity:promptAgentComplexity,context,model:promptAgentModelSelect.value})}),result=await response.json() as PromptAgentResult&{error?:string};if(!response.ok)throw new Error(result.error||'提示词生成失败');promptAgentResult=result;article.querySelector('p')!.textContent=result.finalPrompt;article.querySelector('small')!.textContent=`${result.model} · ${result.kind==='video'?'视频':'图像'} · ${promptAgentComplexity==='simple'?'简洁':'详细'}`;article.hidden=false;status.textContent='提示词已整理完成'}catch(error){status.textContent=error instanceof Error?error.message:'提示词生成失败'}finally{submit.disabled=false;submit.classList.remove('is-running')}})
+promptAgentPanel.querySelector('[data-agent-copy]')!.addEventListener('click',async()=>{if(!promptAgentResult)return;await navigator.clipboard.writeText(promptAgentResult.finalPrompt);showToast('提示词已复制','success')})
+promptAgentPanel.querySelector('[data-agent-create]')!.addEventListener('click',()=>{if(!promptAgentResult)return;const kind=promptAgentResult.kind;addNode(kind,world({x:innerWidth/2,y:innerHeight/2}));const node=nodes.find(item=>item.id===selectedId);if(node){node.body=promptAgentResult.finalPrompt;node.generationPrompt=promptAgentResult.finalPrompt;node.title=kind==='video'?'Agent · 视频任务':'Agent · 图像任务';scheduleSave();draw()}closePromptAgent();showToast(`已创建${kind==='video'?'视频':'图像'}节点`,'success')})
+document.addEventListener('pointerdown',event=>{if(!promptAgentPanel.classList.contains('open'))return;const target=event.target as Node;if(!promptAgentPanel.contains(target)&&!promptAgentTrigger.contains(target))closePromptAgent()})
 document.querySelector('#dock-clear')!.addEventListener('click', () => { if (!nodes.length || !window.confirm('确定清除当前画布中的全部节点和连线吗？')) return; nodes.splice(0); links.splice(0); selectedId = 0; updateEditor(); scheduleSave(); draw() })
 const panelBackdrop = document.querySelector<HTMLElement>('#panel-backdrop')!
 const workspacePanels = document.querySelectorAll<HTMLElement>('.workspace-panel')

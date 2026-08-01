@@ -36,6 +36,7 @@ export class AgnesVideoProvider implements GenerationProvider {
     const imageSources = input.inputUrls ?? []
     let images = await Promise.all(imageSources.map(source => this.resolveImage(source)))
     onUpdate({ status: 'running', progress: 0 })
+    console.info('[agnes-video] preparing ordered inputs', { internalJobId: input.internalJobId, imageCount: images.length, orderedInputIndexes: images.map((_, index) => index + 1) })
     let response = await this.request('/v1/videos', { method: 'POST', body: createBody(input, images, settings, this.defaultModel) }, this.timeoutForImages(images))
     let created = await readTask(response)
     if (!response.ok && imageSources.length && images.some(image => /^https?:\/\//i.test(image)) && /image URL|image.*download/i.test(taskError(created))) {
@@ -185,7 +186,12 @@ function createBody(input: GenerationInput, images: string[], settings: Record<s
   const media = images.length > 1
     ? { mode: 'keyframes', extra_body: { image: images, mode: 'keyframes' } }
     : images.length === 1 ? { image: images[0], mode: 'ti2vid' } : {}
-  return JSON.stringify({ model: input.model || defaultModel, prompt: input.prompt, ...media, ...settings })
+  const prompt = images.length > 1 ? withNumberedReferences(input.prompt, images.length) : input.prompt
+  return JSON.stringify({ model: input.model || defaultModel, prompt, ...media, ...settings })
+}
+function withNumberedReferences(prompt: string, count: number) {
+  const labels = Array.from({ length: count }, (_, index) => `Image ${index + 1}`).join(', ')
+  return `${prompt}\n\nNumbered visual references available: ${labels}. These numbers identify the corresponding people, objects, environments, or visual styles in the prompt; they do not define a chronological timeline. Preserve each numbered reference's identity and appearance, and do not swap numbered references.`
 }
 function sanitizeError(message: string) { return message.replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]').replace(/sk-[A-Za-z0-9_-]+/g, '[REDACTED]') }
 

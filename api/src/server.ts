@@ -29,6 +29,9 @@ database.run(`
 `)
 ensureColumn('jobs', 'project_id', 'TEXT')
 ensureColumn('jobs', 'user_id', 'TEXT')
+ensureColumn('jobs', 'input_urls', "TEXT NOT NULL DEFAULT '[]'")
+ensureColumn('jobs', 'parameters', "TEXT NOT NULL DEFAULT '{}'")
+ensureColumn('jobs', 'custom_model_id', 'TEXT')
 ensureColumn('assets', 'is_public', 'INTEGER NOT NULL DEFAULT 0')
 ensureColumn('users', 'email', 'TEXT')
 ensureColumn('users', 'password_hash', 'TEXT')
@@ -43,14 +46,11 @@ const generationProvider = createGenerationProvider()
 const generationInputSigningSecret = process.env.GENERATION_INPUT_SIGNING_SECRET || randomBytes(32).toString('hex')
 const generationPublicBaseUrl = String(process.env.GENERATION_PUBLIC_BASE_URL || '').replace(/\/$/, '')
 const bootTime = new Date().toISOString()
-database.run("UPDATE jobs SET status = 'failed', progress = 0, error = ?, updated_at = ? WHERE status IN ('queued', 'running')", ['生成服务曾重启，任务已中断，请重新生成', bootTime])
+database.run("UPDATE jobs SET status = 'failed', progress = 0, error = ?, updated_at = ? WHERE status = 'running'", ['生成服务曾重启，任务已中断，请重新生成', bootTime])
 database.run('INSERT OR IGNORE INTO users (id, name, created_at) VALUES (?, ?, ?)', [developmentUserId, '开发用户', bootTime])
 database.run("UPDATE users SET username = ? WHERE id = ? AND (username IS NULL OR username = '')", ['mochen', developmentUserId])
 for (const user of getAll("SELECT id, name FROM users WHERE username IS NULL OR username = ''", [])) database.run('UPDATE users SET username = ? WHERE id = ?', [availableUsername(String(user.name || 'user')), String(user.id)])
 for (const user of getAll('SELECT id FROM users WHERE invite_code IS NULL OR invite_code = ?', [''])) database.run('UPDATE users SET invite_code = ? WHERE id = ?', [newInviteCode(), String(user.id)])
-database.run('INSERT OR IGNORE INTO projects (id, user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', [defaultProjectId, developmentUserId, '未命名项目', bootTime, bootTime])
-const legacyCanvas = getOne('SELECT document, updated_at FROM canvases WHERE id = ?', [defaultProjectId])
-if (legacyCanvas) database.run('INSERT OR IGNORE INTO project_canvases (project_id, document, updated_at) VALUES (?, ?, ?)', [defaultProjectId, legacyCanvas.document, legacyCanvas.updated_at])
 persist()
 
 const app = Fastify({ logger: true, bodyLimit: 150 * 1024 * 1024 })
@@ -58,6 +58,28 @@ app.get('/health', async () => ({ ok: true, service: 'flow-studio-api', generati
 app.get('/generation/capabilities', async () => generationProvider.capabilities ?? {
   image: { provider: generationProvider.name, defaultModel: process.env.OPENAI_IMAGE_DEFAULT_MODEL || 'gpt-image-2' },
   video: { provider: generationProvider.name, defaultModel: process.env.AGNES_VIDEO_DEFAULT_MODEL || 'agnes-video-v2.0', seconds: { min: 1, max: 18, default: 5 }, resolutions: ['480p', '720p', '1080p'], aspectRatios: ['1:1', '4:3', '16:9'] },
+})
+app.post('/agents/prompt', async (request, reply) => {
+  const user = requireUser(request, reply); if (!user) return
+  const input = request.body as { idea?:string; kind?:string; complexity?:string; context?:string[]; model?:string }, idea = String(input.idea ?? '').trim(), kind = input.kind === 'video' ? 'video' : 'image', complexity = input.complexity === 'detailed' ? 'detailed' : 'simple', context = (input.context ?? []).map(item => String(item).trim()).filter(Boolean).slice(0, 8)
+  if (!idea || idea.length > 4000) return reply.code(400).send({ error:'请输入 1–4000 字的创作想法' })
+  const baseUrl = String(process.env.PROMPT_AGENT_BASE_URL || process.env.OPENAI_IMAGE_BASE_URL || '').replace(/\/$/, ''), apiKey = String(process.env.PROMPT_AGENT_API_KEY || process.env.OPENAI_IMAGE_API_KEY || ''), allowedModels = ['kimi-k2.5','gpt-5.4-mini'], requestedModel = String(input.model || process.env.PROMPT_AGENT_MODEL || 'kimi-k2.5'), model = allowedModels.includes(requestedModel) ? requestedModel : 'kimi-k2.5'
+  if (!baseUrl || !apiKey) return reply.code(503).send({ error:'提示词 Agent 接口尚未配置' })
+  const detailRule = complexity === 'simple' ? `使用简洁模式：只返回 {"finalPrompt":"..."} 这一个字段。finalPrompt 控制在${kind === 'video' ? '180' : '120'}个中文字符以内，只保留主体、场景、关键动作或构图与一种主要风格；使用短句，不堆砌形容词、镜头术语、艺术家名称或负面提示。` : `使用详细模式：字段必须为 subject、scene、composition、lighting、style、motion、negativePrompt、finalPrompt，所有字段均为字符串。${kind === 'video' ? 'motion 必须包含主体动作和基本镜头运动。' : 'motion 可为空字符串。'} 可以补充构图、光线、材质、风格与动作细节，但保持自然清晰，避免同义词堆砌。`
+  const system = `你是 Viora 无限画布中的专业提示词 Agent。将用户的中文创意整理为可直接用于${kind === 'video' ? '视频生成' : '图像生成'}模型的高质量中文提示词。只返回合法且完整的 JSON，不要 Markdown，不要解释。${detailRule} finalPrompt 必须自然完整。`
+  const content = [`用户想法：${idea}`, context.length ? `画布上下文：\n${context.map((item,index)=>`${index+1}. ${item}`).join('\n')}` : '画布上下文：无'].join('\n\n')
+  try {
+    const url = `${baseUrl}/v1/chat/completions`, options = { method:'POST', headers:{ authorization:`Bearer ${apiKey}`, 'content-type':'application/json' }, body:JSON.stringify({ model, stream:false, temperature:complexity === 'simple' ? .35 : .65, max_tokens:complexity === 'simple' ? 1200 : 1800, response_format:{ type:'json_object' }, messages:[{role:'system',content:system},{role:'user',content}] }), signal:AbortSignal.timeout(Number(process.env.PROMPT_AGENT_TIMEOUT_MS || 90000)) }
+    const proxyUrl = String(process.env.PROMPT_AGENT_HTTPS_PROXY || process.env.OPENAI_IMAGE_HTTPS_PROXY || '')
+    const response = proxyUrl ? await undiciFetch(url, { ...options, dispatcher:new ProxyAgent(proxyUrl) }) : await fetch(url, options)
+    const payload = await response.json() as { choices?:Array<{finish_reason?:string;message?:{content?:string}}>; error?:{message?:string} }
+    if (!response.ok) return reply.code(response.status).send({ error:payload.error?.message || `Agent 接口返回 ${response.status}` })
+    const raw = String(payload.choices?.[0]?.message?.content || '').replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim(), result = parsePromptAgentResult(raw)
+    request.log.info({ model, complexity, finishReason:payload.choices?.[0]?.finish_reason, responseLength:raw.length }, 'prompt agent response received')
+    const field = (name:string) => String(result[name] ?? '').trim()
+    const finalPrompt = field('finalPrompt'); if (!finalPrompt) throw new Error('Agent 未返回 finalPrompt')
+    return { model, kind, subject:field('subject'), scene:field('scene'), composition:field('composition'), lighting:field('lighting'), style:field('style'), motion:field('motion'), negativePrompt:field('negativePrompt'), finalPrompt }
+  } catch (error) { request.log.error({ message:error instanceof Error ? error.message : String(error) }, 'prompt agent failed'); return reply.code(502).send({ error:error instanceof SyntaxError ? 'Agent 返回内容不完整，请重新生成一次' : error instanceof Error ? error.message : '提示词生成失败' }) }
 })
 app.get('/user-api-models', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; return getAll('SELECT id, kind, name, model, base_url AS baseUrl, CASE WHEN proxy_url IS NULL OR proxy_url = ? THEN 0 ELSE 1 END AS hasProxy, created_at AS createdAt, updated_at AS updatedAt FROM user_api_models WHERE user_id = ? ORDER BY created_at ASC', ['', String(user.id)]).map(item => ({ ...item, hasProxy: Boolean(item.hasProxy), hasKey: true })) })
 app.post('/user-api-models', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const body = request.body as { kind?: string; name?: string; model?: string; baseUrl?: string; apiKey?: string; proxyUrl?: string }, kind = String(body.kind ?? ''), name = String(body.name ?? '').trim(), model = String(body.model ?? '').trim(), baseUrl = normalizeHttpUrl(body.baseUrl), apiKey = String(body.apiKey ?? '').trim(), proxyUrl = String(body.proxyUrl ?? '').trim(); if (!['image', 'video'].includes(kind)) return reply.code(400).send({ error: '请选择图像或视频类型' }); if (!name || name.length > 60 || !model || model.length > 120 || !baseUrl || !apiKey) return reply.code(400).send({ error: '请完整填写名称、模型、接口地址和密钥' }); if (proxyUrl && !normalizeHttpUrl(proxyUrl)) return reply.code(400).send({ error: '代理地址无效' }); const id = randomUUID(), now = new Date().toISOString(); database.run('INSERT INTO user_api_models (id,user_id,kind,name,model,base_url,api_key,proxy_url,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [id,String(user.id),kind,name,model,baseUrl,apiKey,proxyUrl,now,now]); persist(); return reply.code(201).send({ id,kind,name,model,baseUrl,hasKey:true,hasProxy:Boolean(proxyUrl),createdAt:now,updatedAt:now }) })
@@ -168,14 +190,13 @@ app.post('/jobs', async (request, reply) => {
   const customId = model.startsWith('custom:') ? model.slice(7) : '', custom = customId ? getOne('SELECT * FROM user_api_models WHERE id = ? AND user_id = ?', [customId,userId]) : undefined
   if (customId && (!custom || String(custom.kind) !== input.kind)) return reply.code(400).send({ error:'自定义模型不存在或类型不匹配' })
   if (custom) model = String(custom.model)
-  let inputUrls: string[]
-  try { inputUrls = resolveOwnedInputUrls(input.inputUrls ?? [], userId, input.kind, model) }
+  const inputUrls = input.inputUrls ?? []
+  try { validateOwnedInputUrls(inputUrls, userId, input.kind) }
   catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : '无法读取输入素材' }) }
   const id = randomUUID(), now = new Date().toISOString()
-  database.run('INSERT INTO jobs (id, project_id, user_id, node_id, kind, prompt, model, status, progress, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [id, projectId, userId, input.nodeId, input.kind, input.prompt, model, 'queued', 0, now, now])
+  database.run('INSERT INTO jobs (id, project_id, user_id, node_id, kind, prompt, model, status, progress, input_urls, parameters, custom_model_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [id, projectId, userId, input.nodeId, input.kind, input.prompt, model, 'queued', 0, JSON.stringify(inputUrls), JSON.stringify(input.parameters ?? {}), customId || null, now, now])
   persist()
-  const provider = custom ? (input.kind === 'image' ? new OpenAiImageProvider({ baseUrl:String(custom.base_url), apiKey:String(custom.api_key) }) : new OpenAiVideoProvider({ baseUrl:String(custom.base_url), apiKey:String(custom.api_key) })) : generationProvider
-  void provider.run({ internalJobId: id, projectId, nodeId: input.nodeId, kind: input.kind, prompt: input.prompt, model, inputUrls, parameters: input.parameters ?? {} }, update => { void updateJob(id, update) }).catch(error => { void updateJob(id, { status: 'failed', progress: 0, error: error instanceof Error ? error.message : 'Generation failed' }) })
+  queueMicrotask(pumpGenerationQueue)
   return reply.code(202).send({ id, status: 'queued', progress: 0, model, provider: generationProvider.name })
 })
 
@@ -185,6 +206,16 @@ app.get('/jobs/:id', async (request, reply) => {
   const row = getOne('SELECT * FROM jobs WHERE id = ? AND user_id = ?', [id, String(user.id)])
   return row ?? reply.code(404).send({ error: 'Job not found' })
 })
+
+function parsePromptAgentResult(raw: string): Record<string, unknown> {
+  if (!raw) throw new SyntaxError('Agent returned an empty response')
+  try { return JSON.parse(raw) as Record<string, unknown> }
+  catch {
+    const start = raw.indexOf('{'), end = raw.lastIndexOf('}')
+    if (start >= 0 && end > start) return JSON.parse(raw.slice(start, end + 1)) as Record<string, unknown>
+    throw new SyntaxError('Agent returned truncated JSON')
+  }
+}
 
 function getOne(sql: string, values: Array<string | number>) {
   const statement = database.prepare(sql); statement.bind(values)
@@ -201,6 +232,7 @@ function normalizeHttpUrl(value: unknown) { try { const url = new URL(String(val
 function validEmail(email: string) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 254 }
 function assetDisposition(name: string) { const safe = name.replace(/[\r\n]/g, '').slice(0, 240) || 'asset'; return `inline; filename="asset"; filename*=UTF-8''${encodeURIComponent(safe)}` }
 function namedAssetUrl(id: string, name: string, isPublic = false) { const safe = name.replace(/[\r\n/\\]/g, '').slice(0, 240) || 'asset'; return `/api/${isPublic ? 'public/' : ''}assets/${id}/content/${encodeURIComponent(safe)}` }
+function validateOwnedInputUrls(urls: string[], userId: string, kind: JobInput['kind']) { for (const source of urls) { const match = source.match(/^\/api\/assets\/([^/]+)\/content(?:\/|$)/); if (!match) continue; const asset = getOne('SELECT size FROM assets WHERE id = ? AND user_id = ?', [decodeURIComponent(match[1]), userId]); if (!asset) throw new Error('输入素材不存在或不属于当前用户'); if (kind === 'video' && Number(asset.size ?? 0) > 15 * 1024 * 1024) throw new Error('参考图片超过 15MB') } }
 function resolveOwnedInputUrls(urls: string[], userId: string, kind: JobInput['kind'], model: string) { return urls.map(source => { const match = source.match(/^\/api\/assets\/([^/]+)\/content(?:\/|$)/); if (!match) return source; const assetId = decodeURIComponent(match[1]), asset = getOne('SELECT mime_type, size, storage_name FROM assets WHERE id = ? AND user_id = ?', [assetId, userId]); if (!asset) throw new Error('输入素材不存在或不属于当前用户'); const size = Number(asset.size ?? 0); if (kind === 'video' && size > 15 * 1024 * 1024) throw new Error('参考图片超过 15MB'); const bytes = readFileSync(`${uploadDirectory}/${asset.storage_name}`); if (!bytes.length) throw new Error('输入素材为空'); if (kind === 'video' && !model.startsWith('agnes-')) { if (!generationPublicBaseUrl) throw new Error('Grok 图生视频需要配置公网访问地址'); return signedGenerationInputUrl(assetId) } return `data:${String(asset.mime_type || 'application/octet-stream')};base64,${bytes.toString('base64')}` }) }
 function signedGenerationInputUrl(assetId: string) { const expires = Math.floor(Date.now() / 1000) + 1800, signature = createHmac('sha256', generationInputSigningSecret).update(`${assetId}:${expires}`).digest('base64url'); return `${generationPublicBaseUrl}/api/generation-inputs/${encodeURIComponent(assetId)}?expires=${expires}&signature=${signature}` }
 function validGenerationInputSignature(assetId: string, expires: number, signature: string) { const expected = createHmac('sha256', generationInputSigningSecret).update(`${assetId}:${expires}`).digest('base64url'); return secureTextEqual(signature, expected) }
@@ -220,6 +252,47 @@ function emptyCanvas() { return JSON.stringify({ nodes: [], links: [], camera: {
 function createDefaultProject(userId: string, now = new Date().toISOString()) { const id = randomUUID(); database.run('INSERT INTO projects (id, user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', [id, userId, '未命名项目', now, now]); database.run('INSERT INTO project_canvases (project_id, document, updated_at) VALUES (?, ?, ?)', [id, emptyCanvas(), now]); return id }
 
 function persist() { writeFileSync(databasePath, Buffer.from(database.export())) }
+
+const configuredGenerationConcurrency = Number(process.env.GENERATION_CONCURRENCY || 2)
+const generationConcurrency = Number.isFinite(configuredGenerationConcurrency) ? Math.max(1, Math.floor(configuredGenerationConcurrency)) : 2
+const activeGenerationJobs = new Set<string>()
+let queuePumpRunning = false
+
+function pumpGenerationQueue() {
+  if (queuePumpRunning) return
+  queuePumpRunning = true
+  try {
+    while (activeGenerationJobs.size < generationConcurrency) {
+      const job = getOne("SELECT * FROM jobs WHERE status = 'queued' ORDER BY created_at ASC, rowid ASC LIMIT 1", [])
+      if (!job) break
+      const id = String(job.id)
+      activeGenerationJobs.add(id)
+      database.run("UPDATE jobs SET status = 'running', progress = 0, updated_at = ? WHERE id = ? AND status = 'queued'", [new Date().toISOString(), id])
+      persist()
+      app.log.info({ jobId:id, active:activeGenerationJobs.size, concurrency:generationConcurrency }, 'generation queue started job')
+      void executeQueuedJob(job).finally(() => { activeGenerationJobs.delete(id); queueMicrotask(pumpGenerationQueue) })
+    }
+  } finally { queuePumpRunning = false }
+}
+
+async function executeQueuedJob(job: Record<string, unknown>) {
+  const id = String(job.id), kind = String(job.kind) as JobInput['kind'], userId = String(job.user_id), model = String(job.model)
+  try {
+    const customId = String(job.custom_model_id || ''), custom = customId ? getOne('SELECT * FROM user_api_models WHERE id = ? AND user_id = ?', [customId, userId]) : undefined
+    if (customId && (!custom || String(custom.kind) !== kind)) throw new Error('自定义模型已被删除或类型不匹配')
+    const provider = custom ? (kind === 'image' ? new OpenAiImageProvider({ baseUrl:String(custom.base_url), apiKey:String(custom.api_key) }) : new OpenAiVideoProvider({ baseUrl:String(custom.base_url), apiKey:String(custom.api_key) })) : generationProvider
+    const rawInputUrls = parseJsonArray(job.input_urls), inputUrls = resolveOwnedInputUrls(rawInputUrls, userId, kind, model)
+    const parameters = parseJsonObject(job.parameters)
+    let updates = Promise.resolve()
+    await provider.run({ internalJobId:id, projectId:String(job.project_id), nodeId:Number(job.node_id), kind, prompt:String(job.prompt), model, inputUrls, parameters }, update => { updates = updates.then(() => updateJob(id, update.status === 'queued' ? { ...update, status:'running' } : update)) })
+    await updates
+  } catch (error) {
+    await updateJob(id, { status:'failed', progress:0, error:error instanceof Error ? error.message : 'Generation failed' })
+  }
+}
+
+function parseJsonArray(value: unknown) { try { const parsed = JSON.parse(String(value || '[]')); return Array.isArray(parsed) ? parsed.map(String) : [] } catch { return [] } }
+function parseJsonObject(value: unknown) { try { const parsed = JSON.parse(String(value || '{}')); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {} } catch { return {} } }
 
 async function updateJob(id: string, update: GenerationUpdate) {
   let resultUrl = update.resultUrl
@@ -259,3 +332,4 @@ async function archiveJobResult(jobId: string, source: string) {
 
 app.addHook('onClose', async () => { persist(); database.close() })
 await app.listen({ port: Number(process.env.PORT ?? 3000), host: '0.0.0.0' })
+pumpGenerationQueue()

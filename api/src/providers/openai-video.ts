@@ -25,8 +25,8 @@ export class OpenAiVideoProvider implements GenerationProvider {
     const aspectRatio = String(parameters.aspect_ratio || '16:9')
     const requestedResolution = String(parameters.resolution || '720p')
     const resolution = requestedResolution === '480p' ? '480p' : '720p'
-    const prompt = imageUrls.length > 1 ? `${input.prompt}\n\nReference image order: ${imageUrls.map((_, index) => `<IMAGE_${index + 1}>`).join(', ')}. Use the numbered reference images as visual guidance and preserve their defining subjects, appearance, and style.` : input.prompt
-    console.info('[openai-video] creating task', { internalJobId: input.internalJobId, model: input.model, imageCount: imageUrls.length, mode: imageUrls.length > 1 ? 'reference-to-video' : imageUrls.length ? 'image-to-video' : 'text-to-video' })
+    const prompt = imageUrls.length > 1 ? withNumberedReferences(input.prompt, imageUrls.length) : input.prompt
+    console.info('[openai-video] creating task', { internalJobId: input.internalJobId, model: input.model, imageCount: imageUrls.length, orderedInputIndexes: imageUrls.map((_, index) => index + 1), mode: imageUrls.length > 1 ? 'reference-to-video' : imageUrls.length ? 'image-to-video' : 'text-to-video' })
     const created = await this.request('/v1/videos/generations', {
       method: 'POST',
       body: JSON.stringify({
@@ -93,3 +93,7 @@ function nested(value: Payload, first: string, second: string) { const child = v
 function text(value: unknown) { return typeof value === 'string' && value ? value : undefined }
 function required(name: string, fallback?: string) { const value = process.env[name] || fallback; if (!value) throw new Error(`${name} is required when using openai-video`); return value }
 const wait = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds))
+function withNumberedReferences(prompt: string, count: number) {
+  const labels = Array.from({ length: count }, (_, index) => `<IMAGE_${index + 1}>`).join(', ')
+  return `${prompt}\n\nNumbered visual references available: ${labels}. The numbers identify the corresponding people, objects, environments, or visual styles mentioned in the prompt; they are not a chronological timeline. Match every IMAGE_n reference to the same numbered image, preserve its defining identity and appearance, and do not swap the numbered references.`
+}
