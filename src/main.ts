@@ -823,7 +823,7 @@ document.addEventListener('pointerdown', event => {
   const target = event.target as Node
   if (!quickNodeMenu.contains(target)) closeQuickNodeMenu()
   if (!assetContextMenu.contains(target)) assetContextMenu.classList.remove('open')
-  document.querySelectorAll<HTMLDetailsElement>('.image-config-panel details[open]').forEach(details => { if (!details.contains(target)) details.open = false })
+  document.querySelectorAll<HTMLDetailsElement>('.image-config-panel details[open],.video-config-panel details[open]').forEach(details => { if (!details.contains(target)) details.open = false })
 })
 window.addEventListener('keydown', event => {
   if (event.key === 'Escape' && quickNodeMenu.classList.contains('open')) { closeQuickNodeMenu(); return }
