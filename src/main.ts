@@ -62,6 +62,58 @@ const activeJobPolls = new Map<string, number>()
 const toastStack = document.querySelector<HTMLElement>('#toast-stack')!
 function showToast(message: string, type: 'error' | 'success' | 'warning' = 'error', detail = '') { const toast = document.createElement('div'); toast.className = `app-toast ${type}`; toast.innerHTML = `<i>${type === 'error' ? '!' : type === 'success' ? '✓' : 'i'}</i><span><b>${type === 'error' ? '生成失败' : type === 'success' ? '生成完成' : '提示'}</b><small>${escapeHtml(message)}</small>${detail ? `<em>${escapeHtml(detail)}</em>` : ''}</span><button type="button" aria-label="关闭">×</button>`; toast.querySelector('button')!.addEventListener('click', () => toast.remove()); toastStack.append(toast); while (toastStack.children.length > 3) toastStack.firstElementChild?.remove(); window.setTimeout(() => toast.remove(), type === 'error' ? 12000 : 6000) }
 
+const homePage = document.querySelector<HTMLElement>('#home-page')!
+const homeGallery = document.querySelector<HTMLElement>('#home-gallery')!
+const homeLoginModal = document.querySelector<HTMLElement>('#home-login-modal')!
+const homePreview = document.querySelector<HTMLElement>('#home-preview')!
+let showcaseLoaded = false
+function applyAppRoute() {
+  const home = location.hash !== '#/canvas'
+  document.body.classList.toggle('home-mode', home)
+  if (home && !showcaseLoaded) void loadShowcase()
+  if (!home) requestAnimationFrame(resize)
+}
+function requestWorkspace() {
+  if (localStorage.getItem('flow-authenticated') === 'true') location.hash = '#/canvas'
+  else homeLoginModal.classList.add('open')
+}
+async function loadShowcase() {
+  showcaseLoaded = true
+  try {
+    const response = await fetch('/api/showcase')
+    if (!response.ok) throw new Error(String(response.status))
+    const assets = await response.json() as Array<{ id: string; name: string; mimeType: string; createdAt: string; author: string; url: string }>
+    if (!assets.length) return
+    homeGallery.innerHTML = ''
+    for (const asset of assets) {
+      const video = asset.mimeType.startsWith('video/'), card = document.createElement('article')
+      card.className = 'home-gallery-card'; card.tabIndex = 0
+      card.innerHTML = `${video ? `<video src="${asset.url}" muted playsinline preload="metadata"></video>` : `<img src="${asset.url}" alt="${escapeHtml(asset.name)}" loading="lazy" decoding="async">`}<i>${video ? '▶' : '⌕'}</i><footer><strong>${escapeHtml(asset.name)}</strong><small>${escapeHtml(asset.author || 'Flow 创作者')}</small></footer>`
+      const open = () => openHomePreview(asset)
+      card.addEventListener('dblclick', open)
+      card.addEventListener('keydown', event => { if (event.key === 'Enter') open() })
+      homeGallery.append(card)
+    }
+  } catch { homeGallery.innerHTML = '<div class="home-gallery-empty"><i>◇</i><b>作品暂时无法加载</b><span>稍后刷新页面再试</span></div>' }
+}
+function openHomePreview(asset: { name: string; mimeType: string; author: string; url: string }) {
+  const image = homePreview.querySelector<HTMLImageElement>('img')!, video = homePreview.querySelector<HTMLVideoElement>('video')!, isVideo = asset.mimeType.startsWith('video/')
+  image.hidden = isVideo; video.hidden = !isVideo
+  if (isVideo) { video.src = asset.url; void video.play().catch(() => {}) } else { image.src = asset.url; image.alt = asset.name }
+  homePreview.querySelector<HTMLElement>('strong')!.textContent = asset.name; homePreview.querySelector<HTMLElement>('footer span')!.textContent = asset.author || 'Flow 创作者'; homePreview.classList.add('open')
+}
+function closeHomePreview() { const video = homePreview.querySelector<HTMLVideoElement>('video')!; video.pause(); video.removeAttribute('src'); homePreview.querySelector<HTMLImageElement>('img')!.removeAttribute('src'); homePreview.classList.remove('open') }
+document.querySelector('#home-login')!.addEventListener('click', () => homeLoginModal.classList.add('open'))
+document.querySelector('#home-enter')!.addEventListener('click', requestWorkspace)
+document.querySelector('#home-start')!.addEventListener('click', requestWorkspace)
+homeLoginModal.querySelector('.home-login-close')!.addEventListener('click', () => homeLoginModal.classList.remove('open'))
+homeLoginModal.addEventListener('click', event => { if (event.target === homeLoginModal) homeLoginModal.classList.remove('open') })
+homeLoginModal.querySelector('form')!.addEventListener('submit', event => { event.preventDefault(); localStorage.setItem('flow-authenticated', 'true'); homeLoginModal.classList.remove('open'); location.hash = '#/canvas' })
+homePreview.querySelector(':scope > button')!.addEventListener('click', closeHomePreview)
+homePreview.addEventListener('click', event => { if (event.target === homePreview) closeHomePreview() })
+window.addEventListener('hashchange', applyAppRoute)
+applyAppRoute()
+
 const screen = (p: Point): Point => ({ x: innerWidth / 2 + camera.x + p.x * camera.zoom, y: innerHeight / 2 + camera.y + p.y * camera.zoom })
 const world = (p: Point): Point => ({ x: (p.x - innerWidth / 2 - camera.x) / camera.zoom, y: (p.y - innerHeight / 2 - camera.y) / camera.zoom })
 
@@ -671,7 +723,7 @@ const assetUpload = document.querySelector<HTMLInputElement>('#asset-upload')!, 
 const assetPreview = document.querySelector<HTMLElement>('#asset-preview')!, previewImage = document.querySelector<HTMLImageElement>('#preview-image')!, previewVideo = document.querySelector<HTMLVideoElement>('#preview-video')!, previewName = document.querySelector<HTMLElement>('#preview-name')!
 let contextUploadPosition: Point | null = null
 let draggingAsset: { url: string; name: string; kind: 'image' | 'video' } | null = null
-let selectedAsset: { id: string; url: string; name: string; kind: 'image' | 'video' } | null = null
+let selectedAsset: { id: string; url: string; name: string; kind: 'image' | 'video'; isPublic: boolean } | null = null
 const assetContextMenu = document.querySelector<HTMLElement>('#asset-context-menu')!
 document.querySelector('#upload-assets')!.addEventListener('click', () => assetUpload.click())
 document.querySelector('#dock-upload')!.addEventListener('click', () => assetUpload.click())
@@ -709,13 +761,14 @@ window.addEventListener('paste', event => {
 })
 async function loadProjects() { const response = await fetch('/api/projects'); if (!response.ok) return; const projects = await response.json() as Array<{ id: string; name: string; updatedAt: string }>; const list = document.querySelector<HTMLElement>('#project-list')!; list.innerHTML = ''; for (const project of projects) { const button = document.createElement('button'); button.className = `project-card${project.id === currentProjectId ? ' active' : ''}`; button.type = 'button'; button.innerHTML = `<i>∞</i><span><strong>${escapeHtml(project.name)}</strong><small>${project.id === currentProjectId ? '当前画布' : '已自动保存'}</small></span><b>进入</b>`; button.addEventListener('click', () => void switchProject(project.id)); list.append(button) } }
 async function switchProject(projectId: string) { if (projectId === currentProjectId) { closeWorkspacePanels(); return } await saveCanvas(); currentProjectId = projectId; localStorage.setItem('flow-project-id', projectId); await loadCanvas(); await loadAssets(); closeWorkspacePanels() }
-async function loadAssets() { const response = await fetch(`/api/projects/${currentProjectId}/assets`); if (!response.ok) return; const assets = await response.json() as Array<{ id: string; name: string; mimeType: string; url: string }>; assetCount.textContent = `${assets.length} 项`; assetGrid.innerHTML = assets.length ? '' : '<div class="asset-empty"><b>◇</b><span>还没有素材</span><small>上传后可用于图生图与视频生成</small></div>'; for (const asset of assets) { const item = document.createElement('div'), kind = asset.mimeType.startsWith('video/') ? 'video' as const : 'image' as const; item.className = 'asset-item'; item.innerHTML = kind === 'video' ? `<video src="${asset.url}" muted draggable="false"></video><span>${escapeHtml(asset.name)}</span>` : `<img src="${asset.url}" alt="" draggable="false"><span>${escapeHtml(asset.name)}</span>`; item.draggable = false; item.title = '单击放到画布 · 右击查看更多'; item.addEventListener('click', () => { addMediaNode(asset.url, asset.name, world({ x: innerWidth / 2, y: innerHeight / 2 }), kind); closeWorkspacePanels() }); item.addEventListener('contextmenu', event => { event.preventDefault(); event.stopPropagation(); selectedAsset = { id: asset.id, url: asset.url, name: asset.name, kind }; assetContextMenu.style.left = `${Math.min(event.clientX, innerWidth - 190)}px`; assetContextMenu.style.top = `${Math.min(event.clientY, innerHeight - 155)}px`; assetContextMenu.classList.add('open') }); assetGrid.append(item) } }
+async function loadAssets() { const response = await fetch(`/api/projects/${currentProjectId}/assets`); if (!response.ok) return; const assets = await response.json() as Array<{ id: string; name: string; mimeType: string; url: string; isPublic: boolean }>; assetCount.textContent = `${assets.length} 项`; assetGrid.innerHTML = assets.length ? '' : '<div class="asset-empty"><b>◇</b><span>还没有素材</span><small>上传后可用于图生图与视频生成</small></div>'; for (const asset of assets) { const item = document.createElement('div'), kind = asset.mimeType.startsWith('video/') ? 'video' as const : 'image' as const; item.className = `asset-item${asset.isPublic ? ' is-public' : ''}`; item.innerHTML = kind === 'video' ? `<video src="${asset.url}" muted draggable="false"></video><span>${escapeHtml(asset.name)}</span>` : `<img src="${asset.url}" alt="" draggable="false"><span>${escapeHtml(asset.name)}</span>`; item.draggable = false; item.title = '单击放到画布 · 右击查看更多'; item.addEventListener('click', () => { addMediaNode(asset.url, asset.name, world({ x: innerWidth / 2, y: innerHeight / 2 }), kind); closeWorkspacePanels() }); item.addEventListener('contextmenu', event => { event.preventDefault(); event.stopPropagation(); selectedAsset = { id: asset.id, url: asset.url, name: asset.name, kind, isPublic: asset.isPublic }; document.querySelector<HTMLElement>('#asset-context-publish span')!.textContent = asset.isPublic ? '从主页撤下' : '展示到主页'; assetContextMenu.style.left = `${Math.min(event.clientX, innerWidth - 190)}px`; assetContextMenu.style.top = `${Math.min(event.clientY, innerHeight - 190)}px`; assetContextMenu.classList.add('open') }); assetGrid.append(item) } }
 function openAssetPreview(url: string, name: string, kind: 'image' | 'video' = 'image') { previewName.textContent = name; previewImage.hidden = kind === 'video'; previewVideo.hidden = kind !== 'video'; if (kind === 'video') previewVideo.src = url; else { previewImage.src = url; previewImage.alt = name } assetPreview.classList.add('open') }
 function closeAssetPreview() { assetPreview.classList.remove('open'); previewImage.removeAttribute('src'); previewVideo.pause(); previewVideo.removeAttribute('src') }
 document.querySelector('#close-preview')!.addEventListener('click', closeAssetPreview)
 assetPreview.addEventListener('click', event => { if (event.target === assetPreview) closeAssetPreview() })
 document.querySelector('#asset-context-place')!.addEventListener('click', () => { if (selectedAsset) addMediaNode(selectedAsset.url, selectedAsset.name, world({ x: innerWidth / 2, y: innerHeight / 2 }), selectedAsset.kind); assetContextMenu.classList.remove('open'); closeWorkspacePanels() })
 document.querySelector('#asset-context-preview')!.addEventListener('click', () => { if (selectedAsset) openAssetPreview(selectedAsset.url, selectedAsset.name, selectedAsset.kind); assetContextMenu.classList.remove('open') })
+document.querySelector('#asset-context-publish')!.addEventListener('click', async () => { if (!selectedAsset) return; const next = !selectedAsset.isPublic; const response = await fetch(`/api/assets/${selectedAsset.id}/visibility`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ isPublic: next }) }); assetContextMenu.classList.remove('open'); if (!response.ok) { showToast('主页展示状态更新失败', 'error'); return } selectedAsset.isPublic = next; showcaseLoaded = false; showToast(next ? '作品已展示到主页' : '作品已从主页撤下', 'success'); await loadAssets() })
 document.querySelector('#asset-context-delete')!.addEventListener('click', async () => { if (!selectedAsset || !window.confirm(`确定删除“${selectedAsset.name}”吗？`)) return; const response = await fetch(`/api/assets/${selectedAsset.id}`, { method: 'DELETE' }); if (!response.ok) { window.alert('删除失败，请重试'); return } imageCache.delete(selectedAsset.url); selectedAsset = null; assetContextMenu.classList.remove('open'); await loadAssets() })
 document.addEventListener('dragover', event => { event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = draggingAsset ? 'copy' : 'none' })
 document.addEventListener('drop', event => { event.preventDefault(); event.stopPropagation(); if (!draggingAsset) return; const asset = draggingAsset; draggingAsset = null; closeWorkspacePanels(); addMediaNode(asset.url, asset.name, world({ x: event.clientX, y: event.clientY }), asset.kind) })
