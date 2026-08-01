@@ -107,6 +107,7 @@ export class AgnesVideoProvider implements GenerationProvider {
   }
 
   private async resolveImage(source: string, forceEmbedded = false) {
+    if (source.startsWith('data:')) return source
     if (/^https?:\/\//i.test(source)) return source
     if (source.startsWith('/api/')) {
       const publicUrl = `${this.publicBaseUrl}${source}`

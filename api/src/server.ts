@@ -134,10 +134,13 @@ app.post('/jobs', async (request, reply) => {
   if (!input.prompt?.trim()) return reply.code(400).send({ error: 'Prompt is required' })
   const projectId = input.projectId ?? defaultProjectId
   if (!ownsProject(projectId, userId)) return reply.code(404).send({ error: 'Project not found' })
+  let inputUrls: string[]
+  try { inputUrls = resolveOwnedInputUrls(input.inputUrls ?? [], userId, input.kind) }
+  catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : '无法读取输入素材' }) }
   const id = randomUUID(), now = new Date().toISOString(), model = input.model ?? (input.kind === 'video' ? process.env.AGNES_VIDEO_DEFAULT_MODEL || 'agnes-video-v2.0' : process.env.OPENAI_IMAGE_DEFAULT_MODEL || 'gpt-image-2')
   database.run('INSERT INTO jobs (id, project_id, user_id, node_id, kind, prompt, model, status, progress, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [id, projectId, userId, input.nodeId, input.kind, input.prompt, model, 'queued', 0, now, now])
   persist()
-  void generationProvider.run({ internalJobId: id, projectId, nodeId: input.nodeId, kind: input.kind, prompt: input.prompt, model, inputUrls: input.inputUrls ?? [], parameters: input.parameters ?? {} }, update => { void updateJob(id, update) }).catch(error => { void updateJob(id, { status: 'failed', progress: 0, error: error instanceof Error ? error.message : 'Generation failed' }) })
+  void generationProvider.run({ internalJobId: id, projectId, nodeId: input.nodeId, kind: input.kind, prompt: input.prompt, model, inputUrls, parameters: input.parameters ?? {} }, update => { void updateJob(id, update) }).catch(error => { void updateJob(id, { status: 'failed', progress: 0, error: error instanceof Error ? error.message : 'Generation failed' }) })
   return reply.code(202).send({ id, status: 'queued', progress: 0, model, provider: generationProvider.name })
 })
 
@@ -160,6 +163,7 @@ function normalizeEmail(value: unknown) { return String(value ?? '').trim().toLo
 function validEmail(email: string) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 254 }
 function assetDisposition(name: string) { const safe = name.replace(/[\r\n]/g, '').slice(0, 240) || 'asset'; return `inline; filename="asset"; filename*=UTF-8''${encodeURIComponent(safe)}` }
 function namedAssetUrl(id: string, name: string, isPublic = false) { const safe = name.replace(/[\r\n/\\]/g, '').slice(0, 240) || 'asset'; return `/api/${isPublic ? 'public/' : ''}assets/${id}/content/${encodeURIComponent(safe)}` }
+function resolveOwnedInputUrls(urls: string[], userId: string, kind: JobInput['kind']) { return urls.map(source => { const match = source.match(/^\/api\/assets\/([^/]+)\/content(?:\/|$)/); if (!match) return source; const asset = getOne('SELECT mime_type, size, storage_name FROM assets WHERE id = ? AND user_id = ?', [decodeURIComponent(match[1]), userId]); if (!asset) throw new Error('输入素材不存在或不属于当前用户'); const size = Number(asset.size ?? 0); if (kind === 'video' && size > 15 * 1024 * 1024) throw new Error('首帧图片超过 15MB'); const bytes = readFileSync(`${uploadDirectory}/${asset.storage_name}`); if (!bytes.length) throw new Error('输入素材为空'); return `data:${String(asset.mime_type || 'application/octet-stream')};base64,${bytes.toString('base64')}` }) }
 function hashPassword(password: string) { const salt = randomBytes(16).toString('hex'), digest = scryptSync(password, salt, 64).toString('hex'); return `scrypt:${salt}:${digest}` }
 function verifyPassword(password: string, stored: string) { const [, salt, expected] = stored.split(':'); if (!salt || !expected) return false; try { const actual = scryptSync(password, salt, 64), expectedBytes = Buffer.from(expected, 'hex'); return actual.length === expectedBytes.length && timingSafeEqual(actual, expectedBytes) } catch { return false } }
 function secureTextEqual(actual: string, expected: string) { const left = createHash('sha256').update(actual).digest(), right = createHash('sha256').update(expected).digest(); return timingSafeEqual(left, right) }
