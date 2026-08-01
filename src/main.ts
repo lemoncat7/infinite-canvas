@@ -188,14 +188,6 @@ function drawLink(link: FlowLink, index: number) {
   else { ctx.strokeStyle = 'rgba(183,190,201,.5)'; ctx.lineWidth = 2 * camera.zoom }
   ctx.stroke(); ctx.restore()
   for (const p of [a, b]) { ctx.beginPath(); ctx.arc(p.x, p.y, 5 * camera.zoom, 0, Math.PI * 2); ctx.fillStyle = '#aab1ba'; ctx.fill() }
-  const inputOrder = imageInputOrder(link)
-  if (inputOrder !== undefined) {
-    const badge = { x: a.x + (ca.x - a.x) * .24, y: a.y + (ca.y - a.y) * .24 }
-    ctx.save(); ctx.beginPath(); ctx.arc(badge.x, badge.y, 10 * camera.zoom, 0, Math.PI * 2)
-    ctx.fillStyle = colorTheme === 'dark' ? 'rgba(238,241,245,.96)' : 'rgba(35,39,43,.94)'; ctx.fill()
-    ctx.strokeStyle = colorTheme === 'dark' ? 'rgba(20,22,24,.5)' : 'rgba(255,255,255,.78)'; ctx.lineWidth = 1.5 * camera.zoom; ctx.stroke()
-    ctx.fillStyle = colorTheme === 'dark' ? '#202327' : '#fff'; ctx.font = `700 ${10 * camera.zoom}px system-ui`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(inputOrder), badge.x, badge.y + .5 * camera.zoom); ctx.restore()
-  }
 }
 
 function drawNode(node: FlowNode) {
@@ -289,7 +281,19 @@ function syncDomNodes() {
     element.style.transform = `translate(${node.x}px, ${node.y}px)`; element.style.width = `${node.width}px`; element.style.height = `${node.height}px`; element.style.setProperty('--accent', node.accent); element.style.setProperty('--font-scale', String(node.fontScale ?? 1))
     const copy = element.querySelector<HTMLElement>('.node-copy')!; if (editingTextNodeId !== node.id) copy.textContent = node.body || defaultNodeCopy(node.kind)
     element.querySelector<HTMLElement>('.node-kind')!.textContent = node.kind === 'prompt' ? 'LABEL' : node.kind === 'note' ? 'NOTE' : node.kind === 'video' ? 'VIDEO' : 'IMAGE'
-    if (node.kind === 'video') element.querySelector<HTMLElement>('.image-empty-state')!.innerHTML = node.role === 'result' ? '<span>▶</span><b>正在生成视频</b><small>完成后可在这里双击播放</small>' : '<span>▶</span><b>视频生成节点</b><small>连接首帧图片，并在下方描述画面运动</small>'
+    if (node.kind === 'video') {
+      const emptyState = element.querySelector<HTMLElement>('.image-empty-state')!
+      if (node.role === 'result') emptyState.innerHTML = '<span>▶</span><b>正在生成视频</b><small>完成后可在这里双击播放</small>'
+      else {
+        const references = links.filter(link => link.to === node.id).map(link => nodes.find(item => item.id === link.from)).filter((item): item is FlowNode => item?.kind === 'image' && Boolean(item.mediaUrl)).sort((left, right) => left.y - right.y || left.x - right.x || left.id - right.id)
+        const referenceCount = references.length
+        const mode = referenceCount > 1 ? '多图生视频' : referenceCount === 1 ? '图生视频' : '文生视频'
+        const settings = node.videoSettings ?? {}
+        const frames = references.map((reference, index) => `<i class="has-image"><img src="${escapeHtml(reference.mediaUrl!)}" alt="参考图 ${index + 1}" draggable="false"><b>${index + 1}</b></i>`).join('')
+        const placeholders = referenceCount ? '' : '<i><span>1</span></i><i><span>2</span></i><i><span>3</span></i>'
+        emptyState.innerHTML = `<header class="video-node-heading"><div><b>视频生成</b><small>${mode}${referenceCount ? ` · ${referenceCount} 张参考图` : ''}</small></div></header><div class="video-storyboard" style="--frame-count:${referenceCount || 3}">${frames}${placeholders}<em>→</em></div><div class="video-node-summary"><em>${settings.seconds ?? '5'} 秒</em><em>${settings.resolution ?? '720p'}</em><em>${settings.aspectRatio ?? '16:9'}</em></div><p>${node.body.trim() ? escapeHtml(node.body.trim()) : referenceCount ? '参考图已就绪，在下方描述画面运动' : '连接图片，或直接输入视频描述'}</p>`
+      }
+    }
     element.querySelectorAll<HTMLElement>('[data-action]').forEach(button => button.hidden = false)
     for (const action of ['zoom-in', 'zoom-out']) element.querySelector<HTMLElement>(`[data-action="${action}"]`)!.hidden = node.kind !== 'prompt'
     element.querySelector<HTMLElement>('[data-action="preview"]')!.hidden = !node.mediaUrl
@@ -361,7 +365,7 @@ function createDomNode(node: FlowNode) {
   const videoPanel = document.createElement('section'); videoPanel.className = 'video-config-panel'; videoPanel.innerHTML = `<header><span>VIDEO</span><small>描述画面内容、动作与镜头变化</small></header><textarea data-video-description rows="5" placeholder="例如：人物缓慢转身，镜头向前推进，柔和电影光影…"></textarea><footer><details class="video-model-picker"><summary><span>◈</span><b>视频模型</b></summary><div class="video-model-popover"><small>模型名称</small><input data-video-model value="Kling 2.1" aria-label="视频模型"></div></details><details class="video-settings-picker"><summary><span>⚙</span><b>视频属性</b></summary><div class="video-settings-popover"><header><b>视频设置</b><small>调整输出规格</small></header><div class="video-setting-row"><b>时长</b><div class="video-seconds-stepper"><button data-seconds-step="-1" type="button" aria-label="减少一秒">−</button><output data-video-seconds>5 秒</output><button data-seconds-step="1" type="button" aria-label="增加一秒">＋</button></div></div><div class="video-setting-row"><b>分辨率</b><div class="video-pill-grid"><button data-video-setting="resolution" data-value="480p" type="button">480p</button><button data-video-setting="resolution" data-value="720p" type="button">720p</button><button data-video-setting="resolution" data-value="1080p" type="button">1080p</button></div></div><div class="video-setting-row"><b>比例</b><div class="video-ratio-grid"><button class="video-ratio-card" data-video-setting="aspectRatio" data-value="1:1" type="button"><i style="--ratio:1"></i><span>方形</span><small>1:1</small></button><button class="video-ratio-card" data-video-setting="aspectRatio" data-value="4:3" type="button"><i style="--ratio:1.333"></i><span>横向</span><small>4:3</small></button><button class="video-ratio-card" data-video-setting="aspectRatio" data-value="16:9" type="button"><i style="--ratio:1.778"></i><span>宽屏</span><small>16:9</small></button></div></div></div></details><button data-video-generate type="button"><span>▶</span><b>生成</b></button></footer>`; element.append(videoPanel)
   const videoResultPrompt = document.createElement('section'); videoResultPrompt.className = 'video-result-prompt'; videoResultPrompt.innerHTML = '<header><span>原提示词</span><small>生成视频时使用的描述</small></header><p></p>'; element.append(videoResultPrompt)
   videoResultPrompt.addEventListener('mousedown', event => event.stopPropagation()); videoResultPrompt.addEventListener('click', event => event.stopPropagation())
-  const videoModelPopover = videoPanel.querySelector<HTMLElement>('.video-model-popover')!; videoModelPopover.innerHTML = '<small>选择视频模型</small><button type="button" data-video-model-option="agnes-video-v2.0"><span><b>Agnes Video 2.0</b><small>Agnes 专用视频接口</small></span><i>✓</i></button><button type="button" data-video-model-option="grok-imagine-video-1.5-preview"><span><b>Grok Imagine Video 1.5 Preview</b><small>CPA 通用视频接口</small></span><i>✓</i></button><input type="hidden" data-video-model value="agnes-video-v2.0">'
+  const videoModelPopover = videoPanel.querySelector<HTMLElement>('.video-model-popover')!; videoModelPopover.innerHTML = '<small>选择视频模型</small><button type="button" data-video-model-option="agnes-video-v2.0"><span><b>Agnes Video 2.0</b><small>Agnes 专用视频接口</small></span><em class="model-price free">免费</em><i>✓</i></button><button type="button" data-video-model-option="grok-imagine-video-1.5-preview"><span><b>Grok Imagine Video 1.5 Preview</b><small>CPA 通用视频接口</small></span><em class="model-price paid">×1 付费</em><i>✓</i></button><input type="hidden" data-video-model value="agnes-video-v2.0">'
   const videoCount = document.createElement('span'); videoCount.className = 'video-generation-count'; element.append(videoCount)
   const videoResultModel = document.createElement('span'); videoResultModel.className = 'video-result-model'; element.append(videoResultModel)
   element.querySelector('.image-config-panel')!.classList.add('image-composer-v2')
