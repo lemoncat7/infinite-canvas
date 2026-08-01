@@ -36,18 +36,25 @@
     </aside>
     <div class="zoom-slider-wrap"><button id="zoom-out" type="button" aria-label="缩小">−</button><input id="zoom-slider" type="range" min="30" max="250" value="100" aria-label="画布缩放" /><output id="zoom-percent">100%</output><button id="zoom-in" type="button" aria-label="放大">＋</button></div>
     <nav class="canvas-dock" aria-label="画布工具">
-      <button data-add="prompt" type="button"><b>T</b><span>标签</span></button>
-      <button data-add="image" type="button"><b>▧</b><span>图片</span></button>
-      <button data-add="video" type="button"><b>▶</b><span>视频</span></button>
+      <div class="dock-create-hint"><b><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"></path><path d="M12 8v8M8 12h8"></path></svg></b><span><strong>双击创建卡片</strong><small>在画布空白处双击</small></span></div>
       <i></i>
-      <button id="dock-upload" type="button"><b>↑</b><span>上传资产</span></button>
-      <button id="dock-appearance" type="button"><b>◫</b><span>画布外观</span></button>
-      <button id="dock-clear" class="dock-danger" type="button"><b>⌫</b><span>清除画布</span></button>
+      <button id="dock-upload" type="button"><b><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7.5 8.5 12 4l4.5 4.5"></path><path d="M5 14v5h14v-5"></path></svg></b><span>上传资产</span></button>
+      <button id="dock-appearance" type="button"><b><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"></circle><path d="M12 4a8 8 0 0 1 0 16z"></path></svg></b><span>画布外观</span></button>
+      <button id="dock-clear" class="dock-danger" type="button"><b><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"></path></svg></b><span>清除画布</span></button>
     </nav>
     <div class="hint">拖拽空白处平移 · 滚轮缩放 · 拖动节点编排</div>
+    <div id="quick-node-menu" class="quick-node-menu" role="menu" aria-label="创建节点">
+      <header><span>创建节点</span><small>选择一种内容开始创作</small></header>
+      <div>
+        <button type="button" data-quick-upload role="menuitem"><b class="quick-node-icon"><svg viewBox="0 0 24 24"><path d="M12 16V4M7.5 8.5 12 4l4.5 4.5"></path><path d="M5 14v5h14v-5"></path></svg></b><span><strong>上传图片</strong><small>选择图片并放到此处</small></span><i>↵</i></button>
+        <button type="button" data-quick-add="prompt" role="menuitem"><b class="quick-node-icon"><svg viewBox="0 0 24 24"><path d="M4 6V4h16v2M9 20h6M12 4v16"></path></svg></b><span><strong>标签</strong><small>记录说明与画布标记</small></span><i>↵</i></button>
+        <button type="button" data-quick-add="image" role="menuitem"><b class="quick-node-icon"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"></rect><circle cx="9" cy="10" r="1.5"></circle><path d="m4 17 4.5-4.5 3.5 3 2.5-2.5 5.5 5"></path></svg></b><span><strong>图片</strong><small>生成或编辑图像内容</small></span><i>↵</i></button>
+        <button type="button" data-quick-add="video" role="menuitem"><b class="quick-node-icon"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="14" height="14" rx="3"></rect><path d="m17 10 4-2v8l-4-2z"></path></svg></b><span><strong>视频</strong><small>创建动态影像内容</small></span><i>↵</i></button>
+      </div>
+    </div>
     <div id="panel-backdrop" class="panel-backdrop"></div>
     <aside id="projects-panel" class="workspace-panel glass"><header><div><span>WORKSPACE</span><h2>项目管理</h2></div><button class="panel-close" type="button">×</button></header><button id="new-project" class="panel-primary" type="button">＋ 新建项目</button><div class="panel-section-title">最近项目</div><div id="project-list" class="project-list"><button class="project-card active" type="button"><i>∞</i><span><strong>未命名项目</strong><small>刚刚更新 · 当前画布</small></span><b>进入</b></button></div></aside>
-    <aside id="assets-panel" class="workspace-panel glass"><header><div><span>LIBRARY</span><h2>资产库</h2></div><button class="panel-close" type="button">×</button></header><input id="asset-upload" type="file" accept="image/*,video/*" multiple hidden><button id="upload-assets" class="panel-primary" type="button">↑ 上传图片或视频</button><div class="panel-section-title"><span>全部资产</span><small id="asset-count">0 项</small></div><div id="asset-grid" class="asset-grid"><div class="asset-empty"><b>◇</b><span>还没有素材</span><small>上传后可用于图生图与视频生成</small></div></div></aside>
+    <aside id="assets-panel" class="workspace-panel glass"><header><div><span>LIBRARY</span><h2>资产库</h2></div><button class="panel-close" type="button">×</button></header><input id="asset-upload" type="file" accept="image/*" multiple hidden><button id="upload-assets" class="panel-primary" type="button">↑ 上传图片</button><div class="panel-section-title"><span>全部资产</span><small id="asset-count">0 项</small></div><div id="asset-grid" class="asset-grid"><div class="asset-empty"><b>◇</b><span>还没有素材</span><small>上传后可用于图生图与视频生成</small></div></div></aside>
     <div id="asset-preview" class="asset-preview" role="dialog" aria-modal="true"><button id="close-preview" type="button" aria-label="关闭">×</button><div class="preview-stage"><img id="preview-image" alt="素材预览"><video id="preview-video" controls playsinline preload="metadata" hidden></video><div><strong id="preview-name"></strong><span>单击素材可放到画布，右击查看更多操作</span></div></div></div>
     <div id="node-info-modal" class="node-info-modal" role="dialog" aria-modal="true" aria-labelledby="node-info-title"><section><header><h2 id="node-info-title">节点信息</h2><button id="close-node-info" type="button" aria-label="关闭">×</button></header><nav><button class="active" data-info-tab="details" type="button">信息</button><button data-info-tab="json" type="button">JSON</button></nav><div id="node-info-details" class="node-info-details"></div><pre id="node-info-json" hidden></pre></section></div>
     <div id="asset-context-menu" class="context-menu glass" role="menu"><div class="context-title">素材操作</div><button id="asset-context-place">＋ <span>放到画布</span></button><button id="asset-context-preview">⌕ <span>放大查看</span></button><i></i><button id="asset-context-delete" class="context-danger">⌫ <span>删除素材</span></button></div>

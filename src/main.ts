@@ -268,7 +268,7 @@ function createDomNode(node: FlowNode) {
   const element = document.createElement('article'); element.dataset.id = String(node.id); element.className = 'flow-node'
   element.innerHTML = `<div class="node-floating-tools"><button data-action="info" title="信息">ⓘ</button><button data-action="edit" title="编辑">✎</button><button data-action="zoom-in" title="放大文字">＋</button><button data-action="zoom-out" title="缩小文字">−</button><button data-action="generate" title="生成">✦</button><button data-action="preview" title="预览">⌕</button><button data-action="delete" title="删除">⌫</button></div><div class="node-info-popover"></div><div class="node-port input" data-side="left"></div><div class="node-port output" data-side="right"></div><span class="node-kind"></span><div class="node-media"><canvas class="node-media-canvas" width="560" height="440"></canvas></div><div class="image-empty-state"><span>▧</span><b>空图节点</b><small>连接参考图，或在下方描述要生成的图片</small></div><div class="node-copy"></div><div class="node-progress"><i></i></div><section class="image-config-panel"><div class="image-composer-title"><span>IMAGE</span><small>描述你想创造的画面</small></div><textarea data-image-field="description" rows="4" aria-label="图片描述" placeholder="例如：清晨薄雾中的未来城市，电影感光影…"></textarea><footer><details class="image-model-picker"><summary><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"></path></svg><b data-image-model-label>gpt-image-2</b><i>⌄</i></summary><div class="image-model-menu"><small>选择图像模型</small><button type="button" data-image-model="gpt-image-2"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect></svg><span><b>gpt-image-2</b><small>OpenAI 图像生成</small></span><i>✓</i></button></div><select data-image-field="model" aria-label="模型" hidden><option value="gpt-image-2">gpt-image-2</option></select></details><details><summary><span>⚙</span><b data-image-settings-label>自动质量 · 自动尺寸</b><i>⌃</i></summary><div class="image-settings-popover"><header><span>图像设置</span><small>调整输出规格</small></header><label><span><b>质量</b><small>细节与生成速度</small></span><select data-image-field="quality"><option value="auto">自动质量</option><option value="high">高质量</option><option value="medium">标准质量</option><option value="low">低质量</option></select></label><label><span><b>画面尺寸</b><small>输出宽高比例</small></span><select data-image-field="size"><option value="auto">自动尺寸</option><option value="1024x1024">1:1 · 1024 × 1024</option><option value="1536x1024">3:2 · 1536 × 1024</option><option value="1024x1536">2:3 · 1024 × 1536</option></select></label><label><span><b>背景</b><small>画面底色模式</small></span><select data-image-field="background"><option value="auto">自动背景</option><option value="transparent">透明背景</option><option value="opaque">不透明背景</option></select></label></div></details><button data-image-generate type="button" title="开始生成" aria-label="生成"><span>↑</span></button></footer></section>`
   const mediaVideo = document.createElement('video'); mediaVideo.className = 'node-media-video'; mediaVideo.muted = true; mediaVideo.playsInline = true; mediaVideo.preload = 'metadata'; mediaVideo.draggable = false; mediaVideo.hidden = true; element.querySelector('.node-media')!.append(mediaVideo)
-  const zoomHint = document.createElement('span'); zoomHint.className = 'image-zoom-hint'; zoomHint.textContent = '双击放大'; element.querySelector('.node-media')!.append(zoomHint)
+  const zoomHint = document.createElement('span'); zoomHint.className = 'image-zoom-hint'; zoomHint.textContent = node.kind === 'video' ? '双击播放' : '双击放大'; element.querySelector('.node-media')!.append(zoomHint)
   const videoPanel = document.createElement('section'); videoPanel.className = 'video-config-panel'; videoPanel.innerHTML = `<header><span>VIDEO</span><small>描述画面内容、动作与镜头变化</small></header><textarea data-video-description rows="5" placeholder="例如：人物缓慢转身，镜头向前推进，柔和电影光影…"></textarea><footer><details class="video-model-picker"><summary><span>◈</span><b>视频模型</b></summary><div class="video-model-popover"><small>模型名称</small><input data-video-model value="Kling 2.1" aria-label="视频模型"></div></details><details class="video-settings-picker"><summary><span>⚙</span><b>视频属性</b></summary><div class="video-settings-popover"><header><b>视频设置</b><small>调整输出规格</small></header><div class="video-setting-row"><b>时长</b><div class="video-seconds-stepper"><button data-seconds-step="-1" type="button" aria-label="减少一秒">−</button><output data-video-seconds>5 秒</output><button data-seconds-step="1" type="button" aria-label="增加一秒">＋</button></div></div><div class="video-setting-row"><b>分辨率</b><div class="video-pill-grid"><button data-video-setting="resolution" data-value="480p" type="button">480p</button><button data-video-setting="resolution" data-value="720p" type="button">720p</button><button data-video-setting="resolution" data-value="1080p" type="button">1080p</button></div></div><div class="video-setting-row"><b>比例</b><div class="video-ratio-grid"><button class="video-ratio-card" data-video-setting="aspectRatio" data-value="1:1" type="button"><i style="--ratio:1"></i><span>方形</span><small>1:1</small></button><button class="video-ratio-card" data-video-setting="aspectRatio" data-value="4:3" type="button"><i style="--ratio:1.333"></i><span>横向</span><small>4:3</small></button><button class="video-ratio-card" data-video-setting="aspectRatio" data-value="16:9" type="button"><i style="--ratio:1.778"></i><span>宽屏</span><small>16:9</small></button></div></div></div></details><button data-video-generate type="button"><span>▶</span><b>生成</b></button></footer>`; element.append(videoPanel)
   const videoResultPrompt = document.createElement('section'); videoResultPrompt.className = 'video-result-prompt'; videoResultPrompt.innerHTML = '<header><span>原提示词</span><small>生成视频时使用的描述</small></header><p></p>'; element.append(videoResultPrompt)
   videoResultPrompt.addEventListener('mousedown', event => event.stopPropagation()); videoResultPrompt.addEventListener('click', event => event.stopPropagation())
@@ -371,7 +371,7 @@ function paintNodeMedia(target: HTMLCanvasElement, url: string) {
 }
 function drawMediaImage(target: HTMLCanvasElement, image: HTMLImageElement) {
   const context = target.getContext('2d')!
-  const fill = colorTheme === 'dark' ? '#292524' : '#e7e5df'
+  const fill = colorTheme === 'dark' ? '#292524' : '#eef0f2'
   context.fillStyle = fill; context.fillRect(0, 0, target.width, target.height)
   if (image.complete && image.naturalWidth) { const scale = Math.min(target.width / image.naturalWidth, target.height / image.naturalHeight), width = image.naturalWidth * scale, height = image.naturalHeight * scale; context.drawImage(image, (target.width - width) / 2, (target.height - height) / 2, width, height) }
   else if (image.complete) { context.fillStyle = '#777'; context.font = '24px system-ui'; context.textAlign = 'center'; context.fillText('图片加载失败', target.width / 2, target.height / 2) }
@@ -430,7 +430,7 @@ function deleteSelectedNode() {
   for (let linkIndex = links.length - 1; linkIndex >= 0; linkIndex--) {
     if (links[linkIndex].from === deletedId || links[linkIndex].to === deletedId) links.splice(linkIndex, 1)
   }
-  selectedId = nodes[Math.min(index, nodes.length - 1)]?.id ?? 0
+  selectedId = 0
   updateEditor(); scheduleSave(); draw()
 }
 
@@ -559,7 +559,7 @@ function pollJob(node: FlowNode) {
 canvas.addEventListener('pointerdown', e => { if (e.button !== 0) return; if (cameraFrame !== null) { cancelAnimationFrame(cameraFrame); cameraFrame = null; zoomTarget = camera.zoom } pointer.down = true; pointer.x = e.clientX; pointer.y = e.clientY; const port = hitPort(e.clientX, e.clientY); if (port) { connectionSnap = null; connecting = { nodeId: port.node.id, side: port.side, pointer: { x: e.clientX, y: e.clientY } }; selectedId = port.node.id; pointer.draggingNode = null; updateEditor() } else { const node = hitNode(e.clientX, e.clientY); pointer.draggingNode = node && node.status !== 'queued' && node.status !== 'running' ? node.id : null; if (node) selectedId = node.id; else selectedId = 0; updateEditor() } canvas.setPointerCapture(e.pointerId); canvas.classList.add('dragging'); draw() })
 canvas.addEventListener('pointermove', e => { if (!pointer.down) return; setSaveState('editing', '编辑中…'); if (connecting) { updateConnectionPointer(e.clientX, e.clientY); draw(); return } const dx = e.clientX - pointer.x, dy = e.clientY - pointer.y; if (pointer.draggingNode) { const node = nodes.find(n => n.id === pointer.draggingNode)!; node.x += dx / camera.zoom; node.y += dy / camera.zoom } else { camera.x += dx; camera.y += dy } pointer.x = e.clientX; pointer.y = e.clientY; draw() })
 canvas.addEventListener('pointerup', e => { if (connecting) { const snappedNode = connectionSnap ? nodes.find(node => node.id === connectionSnap!.nodeId) : undefined, target = snappedNode ? { node: snappedNode, side: connectionSnap!.side } : hitPort(e.clientX, e.clientY, 32, connecting.nodeId); if (target) { const duplicate = links.some(link => link.from === connecting!.nodeId && link.to === target.node.id && link.fromSide === connecting!.side && link.toSide === target.side); if (!duplicate) links.push({ from: connecting.nodeId, to: target.node.id, fromSide: connecting.side, toSide: target.side }) } connecting = null; connectionSnap = null } scheduleSave(); pointer.down = false; pointer.draggingNode = null; canvas.classList.remove('dragging'); draw() })
-canvas.addEventListener('wheel', e => { e.preventDefault(); smoothZoom(zoomTarget * Math.exp(-e.deltaY * .001), { x: e.clientX, y: e.clientY }) }, { passive: false })
+canvas.addEventListener('wheel', e => { e.preventDefault(); closeQuickNodeMenu(); smoothZoom(zoomTarget * Math.exp(-e.deltaY * .001), { x: e.clientX, y: e.clientY }) }, { passive: false })
 const linkHoverHint = document.querySelector<HTMLElement>('#link-hover-hint')!
 canvas.addEventListener('pointermove', event => { if (pointer.down || connecting) return; const index = hitLink(event.clientX, event.clientY); if (index !== hoveredLinkIndex) { hoveredLinkIndex = index; draw() } linkHoverHint.classList.toggle('open', index >= 0); if (index >= 0) { const generating = linkIsGenerating(links[index]); linkHoverHint.classList.toggle('locked', generating); linkHoverHint.textContent = generating ? '生成中 · 连线已锁定' : '右键 · 删除连线'; linkHoverHint.style.left = `${event.clientX + 14}px`; linkHoverHint.style.top = `${event.clientY + 14}px`; canvas.style.cursor = 'pointer' } else canvas.style.removeProperty('cursor') })
 canvas.addEventListener('pointerleave', () => { if (hoveredLinkIndex >= 0) { hoveredLinkIndex = -1; draw() } linkHoverHint.classList.remove('open'); canvas.style.removeProperty('cursor') })
@@ -575,6 +575,29 @@ titleInput.addEventListener('input', () => { const node = selectedNode(); if (!n
 promptInput.addEventListener('input', () => { const node = selectedNode(); if (!node) return; node.body = promptInput.value; scheduleSave(); draw() })
 modelInput.addEventListener('change', () => { const node = selectedNode(); if (!node) return; node.model = modelInput.value; scheduleSave(); draw() })
 document.querySelectorAll<HTMLElement>('[data-add]').forEach(button => button.addEventListener('click', () => addNode(button.dataset.add as NodeKind)))
+const quickNodeMenu = document.querySelector<HTMLElement>('#quick-node-menu')!
+let quickNodePosition: Point | null = null
+function closeQuickNodeMenu() { quickNodeMenu.classList.remove('open'); quickNodePosition = null }
+canvas.addEventListener('dblclick', event => {
+  if (event.button !== 0 || connecting || hitNode(event.clientX, event.clientY)) return
+  event.preventDefault()
+  quickNodePosition = world({ x: event.clientX, y: event.clientY })
+  quickNodeMenu.style.left = `${Math.max(12, Math.min(event.clientX + 12, innerWidth - 310))}px`
+  quickNodeMenu.style.top = `${Math.max(12, Math.min(event.clientY + 12, innerHeight - 350))}px`
+  quickNodeMenu.classList.remove('open')
+  requestAnimationFrame(() => { quickNodeMenu.classList.add('open'); quickNodeMenu.querySelector<HTMLButtonElement>('[data-quick-add]')?.focus() })
+})
+quickNodeMenu.querySelectorAll<HTMLButtonElement>('[data-quick-add]').forEach(button => button.addEventListener('click', event => {
+  event.stopPropagation()
+  if (quickNodePosition) addNode(button.dataset.quickAdd as NodeKind, quickNodePosition)
+  closeQuickNodeMenu()
+}))
+quickNodeMenu.querySelector<HTMLButtonElement>('[data-quick-upload]')!.addEventListener('click', event => {
+  event.stopPropagation()
+  contextUploadPosition = quickNodePosition
+  closeQuickNodeMenu()
+  assetUpload.click()
+})
 const appearanceButton = document.querySelector<HTMLButtonElement>('#dock-appearance')!
 let themeTransitioning = false
 function refreshAppearanceButton() { appearanceButton.disabled = themeTransitioning || pendingMediaLoads.size > 0; appearanceButton.title = pendingMediaLoads.size ? `等待 ${pendingMediaLoads.size} 个图片资源加载完成` : '切换画布外观' }
@@ -653,7 +676,37 @@ const assetContextMenu = document.querySelector<HTMLElement>('#asset-context-men
 document.querySelector('#upload-assets')!.addEventListener('click', () => assetUpload.click())
 document.querySelector('#dock-upload')!.addEventListener('click', () => assetUpload.click())
 document.querySelector('#new-project')!.addEventListener('click', async () => { const response = await fetch('/api/projects', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: `未命名项目 ${document.querySelectorAll('.project-card').length + 1}` }) }); if (response.ok) { const project = await response.json() as { id: string }; await switchProject(project.id); await loadProjects() } })
-assetUpload.addEventListener('change', async () => { const files = [...(assetUpload.files ?? [])]; if (!files.length) return; const button = document.querySelector<HTMLButtonElement>('#upload-assets')!, placement = contextUploadPosition; contextUploadPosition = null; button.disabled = true; button.textContent = '正在上传…'; try { const payload = await Promise.all(files.map(async file => ({ name: file.name, mimeType: file.type || 'application/octet-stream', data: await fileBase64(file) }))); const response = await fetch(`/api/projects/${currentProjectId}/assets`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ files: payload }) }); if (!response.ok) throw new Error(response.status === 413 ? '素材过大，单个文件不能超过 100MB' : `上传失败（${response.status}）`); const uploaded = await response.json() as Array<{ name: string; mimeType: string; url: string }>; if (placement && uploaded[0]) addMediaNode(uploaded[0].url, uploaded[0].name, placement, uploaded[0].mimeType.startsWith('video/') ? 'video' : 'image'); await loadAssets() } catch (error) { window.alert(error instanceof Error ? error.message : '上传失败，请重试') } finally { button.disabled = false; button.textContent = '↑ 上传图片或视频'; assetUpload.value = ''; assetUpload.accept = 'image/*,video/*'; assetUpload.multiple = true } })
+async function uploadImageFiles(files: File[], placement: Point | null, pasted = false) {
+  const images = files.filter(file => file.type.startsWith('image/'))
+  if (!images.length) { showToast('仅支持上传图片', 'warning'); return }
+  const button = document.querySelector<HTMLButtonElement>('#upload-assets')!
+  button.disabled = true; button.textContent = '正在上传…'
+  try {
+    const payload = await Promise.all(images.map(async file => ({ name: file.name || `粘贴图片-${Date.now()}.png`, mimeType: file.type, data: await fileBase64(file) })))
+    const response = await fetch(`/api/projects/${currentProjectId}/assets`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ files: payload }) })
+    if (!response.ok) throw new Error(response.status === 413 ? '图片过大，单张图片不能超过 100MB' : `上传失败（${response.status}）`)
+    const uploaded = await response.json() as Array<{ name: string; mimeType: string; url: string }>
+    if (placement && uploaded[0]) addMediaNode(uploaded[0].url, uploaded[0].name, placement, 'image')
+    await loadAssets()
+    if (pasted) showToast('图片已粘贴到画布中心', 'success')
+  } catch (error) {
+    showToast('图片上传失败', 'error', error instanceof Error ? error.message : '请重试')
+  } finally {
+    button.disabled = false; button.textContent = '↑ 上传图片'; assetUpload.value = ''; assetUpload.accept = 'image/*'; assetUpload.multiple = true
+  }
+}
+assetUpload.addEventListener('change', () => {
+  const files = [...(assetUpload.files ?? [])], placement = contextUploadPosition
+  contextUploadPosition = null
+  if (files.length) void uploadImageFiles(files, placement)
+})
+window.addEventListener('paste', event => {
+  const image = [...(event.clipboardData?.items ?? [])].find(item => item.kind === 'file' && item.type.startsWith('image/'))?.getAsFile()
+  if (!image) return
+  event.preventDefault()
+  const namedImage = image.name ? image : new File([image], `粘贴图片-${Date.now()}.${image.type.split('/')[1] || 'png'}`, { type: image.type })
+  void uploadImageFiles([namedImage], world({ x: innerWidth / 2, y: innerHeight / 2 }), true)
+})
 async function loadProjects() { const response = await fetch('/api/projects'); if (!response.ok) return; const projects = await response.json() as Array<{ id: string; name: string; updatedAt: string }>; const list = document.querySelector<HTMLElement>('#project-list')!; list.innerHTML = ''; for (const project of projects) { const button = document.createElement('button'); button.className = `project-card${project.id === currentProjectId ? ' active' : ''}`; button.type = 'button'; button.innerHTML = `<i>∞</i><span><strong>${escapeHtml(project.name)}</strong><small>${project.id === currentProjectId ? '当前画布' : '已自动保存'}</small></span><b>进入</b>`; button.addEventListener('click', () => void switchProject(project.id)); list.append(button) } }
 async function switchProject(projectId: string) { if (projectId === currentProjectId) { closeWorkspacePanels(); return } await saveCanvas(); currentProjectId = projectId; localStorage.setItem('flow-project-id', projectId); await loadCanvas(); await loadAssets(); closeWorkspacePanels() }
 async function loadAssets() { const response = await fetch(`/api/projects/${currentProjectId}/assets`); if (!response.ok) return; const assets = await response.json() as Array<{ id: string; name: string; mimeType: string; url: string }>; assetCount.textContent = `${assets.length} 项`; assetGrid.innerHTML = assets.length ? '' : '<div class="asset-empty"><b>◇</b><span>还没有素材</span><small>上传后可用于图生图与视频生成</small></div>'; for (const asset of assets) { const item = document.createElement('div'), kind = asset.mimeType.startsWith('video/') ? 'video' as const : 'image' as const; item.className = 'asset-item'; item.innerHTML = kind === 'video' ? `<video src="${asset.url}" muted draggable="false"></video><span>${escapeHtml(asset.name)}</span>` : `<img src="${asset.url}" alt="" draggable="false"><span>${escapeHtml(asset.name)}</span>`; item.draggable = false; item.title = '单击放到画布 · 右击查看更多'; item.addEventListener('click', () => { addMediaNode(asset.url, asset.name, world({ x: innerWidth / 2, y: innerHeight / 2 }), kind); closeWorkspacePanels() }); item.addEventListener('contextmenu', event => { event.preventDefault(); event.stopPropagation(); selectedAsset = { id: asset.id, url: asset.url, name: asset.name, kind }; assetContextMenu.style.left = `${Math.min(event.clientX, innerWidth - 190)}px`; assetContextMenu.style.top = `${Math.min(event.clientY, innerHeight - 155)}px`; assetContextMenu.classList.add('open') }); assetGrid.append(item) } }
@@ -670,10 +723,12 @@ function escapeHtml(value: string) { const element = document.createElement('spa
 function fileBase64(file: File) { return new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1] ?? ''); reader.onerror = () => reject(reader.error); reader.readAsDataURL(file) }) }
 document.addEventListener('pointerdown', event => {
   const target = event.target as Node
+  if (!quickNodeMenu.contains(target)) closeQuickNodeMenu()
   if (!assetContextMenu.contains(target)) assetContextMenu.classList.remove('open')
   document.querySelectorAll<HTMLDetailsElement>('.image-config-panel details[open]').forEach(details => { if (!details.contains(target)) details.open = false })
 })
 window.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && quickNodeMenu.classList.contains('open')) { closeQuickNodeMenu(); return }
   if (event.key === 'Escape' && nodeInfoModal.classList.contains('open')) { closeNodeInfo(); return }
   if (event.key === 'Escape' && assetPreview.classList.contains('open')) { closeAssetPreview(); return }
   if (event.key !== 'Delete' && event.key !== 'Backspace') return
