@@ -58,7 +58,9 @@ let zoomTarget = camera.zoom
 let zoomAnchor: Point = { x: innerWidth / 2, y: innerHeight / 2 }
 const imageCache = new Map<string, HTMLImageElement>()
 const pendingMediaLoads = new Set<string>()
+function modelDisplayName(value?: string) { if (!value?.startsWith('custom:')) return value || ''; return customApiModels.find(item => `custom:${item.id}` === value)?.name || '自定义模型' }
 const activeJobPolls = new Map<string, number>()
+const retryNotifiedJobs = new Set<string>()
 const toastStack = document.querySelector<HTMLElement>('#toast-stack')!
 function showToast(message: string, type: 'error' | 'success' | 'warning' = 'error', detail = '') { const toast = document.createElement('div'); toast.className = `app-toast ${type}`; toast.innerHTML = `<i>${type === 'error' ? '!' : type === 'success' ? '✓' : 'i'}</i><span><b>${type === 'error' ? '生成失败' : type === 'success' ? '生成完成' : '提示'}</b><small>${escapeHtml(message)}</small>${detail ? `<em>${escapeHtml(detail)}</em>` : ''}</span><button type="button" aria-label="关闭">×</button>`; toast.querySelector('button')!.addEventListener('click', () => toast.remove()); toastStack.append(toast); while (toastStack.children.length > 3) toastStack.firstElementChild?.remove(); window.setTimeout(() => toast.remove(), type === 'error' ? 12000 : 6000) }
 
@@ -66,8 +68,10 @@ const homePage = document.querySelector<HTMLElement>('#home-page')!
 const homeGallery = document.querySelector<HTMLElement>('#home-gallery')!
 const homeLoginModal = document.querySelector<HTMLElement>('#home-login-modal')!
 const homePreview = document.querySelector<HTMLElement>('#home-preview')!
-type AuthUser = { id: string; name: string; email: string; createdAt: string }
+type AuthUser = { id: string; name: string; username?: string; email: string; inviteCode?: string; createdAt: string }
+type CustomApiModel = { id:string; kind:'image'|'video'; name:string; model:string; baseUrl:string; hasKey:boolean; hasProxy:boolean }
 let authUser: AuthUser | null = null
+let customApiModels: CustomApiModel[] = []
 let authReady = false
 let authMode: 'login' | 'register' = 'login'
 let showcaseLoaded = false
@@ -83,10 +87,10 @@ function requestWorkspace() {
   else openAuth('login')
 }
 function openAuth(mode: 'login' | 'register') { setAuthMode(mode); homeLoginModal.classList.add('open'); homeLoginModal.querySelector<HTMLInputElement>('input[name="email"]')!.focus() }
-function setAuthMode(mode: 'login' | 'register') { authMode = mode; homeLoginModal.querySelectorAll<HTMLElement>('[data-auth-mode]').forEach(button => button.classList.toggle('active', button.dataset.authMode === mode)); homeLoginModal.querySelectorAll<HTMLElement>('[data-register-field]').forEach(field => { field.hidden = mode !== 'register' }); const name = homeLoginModal.querySelector<HTMLInputElement>('input[name="name"]')!, inviteCode = homeLoginModal.querySelector<HTMLInputElement>('input[name="inviteCode"]')!; name.required = mode === 'register'; inviteCode.required = mode === 'register'; homeLoginModal.querySelector<HTMLElement>('.home-login-submit')!.textContent = mode === 'register' ? '使用邀请码创建账号' : '登录并进入工作台'; homeLoginModal.querySelector<HTMLElement>('.home-login-error')!.textContent = '' }
-function renderAuthenticatedUser() { const login = document.querySelector<HTMLButtonElement>('#home-login')!, userButton = document.querySelector<HTMLButtonElement>('#workspace-user')!, menu = document.querySelector<HTMLElement>('#workspace-user-menu')!; login.textContent = authUser?.name ?? '登录'; userButton.querySelector('span')!.textContent = authUser?.name?.slice(0, 1).toUpperCase() ?? 'V'; userButton.querySelector('b')!.textContent = authUser?.name ?? '用户'; menu.querySelector('strong')!.textContent = authUser?.name ?? ''; menu.querySelector('small')!.textContent = authUser?.email ?? '' }
+function setAuthMode(mode: 'login' | 'register') { authMode = mode; homeLoginModal.querySelectorAll<HTMLElement>('[data-auth-mode]').forEach(button => button.classList.toggle('active', button.dataset.authMode === mode)); homeLoginModal.querySelectorAll<HTMLElement>('[data-register-field]').forEach(field => { field.hidden = mode !== 'register' }); const name = homeLoginModal.querySelector<HTMLInputElement>('input[name="name"]')!, inviteCode = homeLoginModal.querySelector<HTMLInputElement>('input[name="inviteCode"]')!, account = homeLoginModal.querySelector<HTMLInputElement>('input[name="email"]')!; name.required = mode === 'register'; inviteCode.required = mode === 'register'; name.parentElement!.firstChild!.textContent = '用户名'; name.placeholder = '用于登录，例如 mochen'; account.type = mode === 'register' ? 'email' : 'text'; account.autocomplete = mode === 'register' ? 'email' : 'username'; account.placeholder = mode === 'register' ? 'name@example.com' : '输入用户名或邮箱'; account.parentElement!.firstChild!.textContent = mode === 'register' ? '邮箱' : '用户名 / 邮箱'; homeLoginModal.querySelector<HTMLElement>('.home-login-submit')!.textContent = mode === 'register' ? '使用邀请码创建账号' : '登录并进入工作台'; homeLoginModal.querySelector<HTMLElement>('.home-login-error')!.textContent = '' }
+function renderAuthenticatedUser() { const login = document.querySelector<HTMLButtonElement>('#home-login')!, userButton = document.querySelector<HTMLButtonElement>('#workspace-user')!, menu = document.querySelector<HTMLElement>('#workspace-user-menu')!, initial = authUser?.name?.slice(0, 1).toUpperCase() ?? 'V'; login.textContent = authUser?.name ?? '登录'; userButton.querySelector('span')!.textContent = initial; userButton.querySelector('b')!.textContent = authUser?.name ?? '用户'; menu.querySelector('header i')!.textContent = initial; menu.querySelector('strong')!.textContent = authUser?.name ?? ''; menu.querySelector('header small')!.textContent = [authUser?.username ? `@${authUser.username}` : '', authUser?.email ?? ''].filter(Boolean).join(' · '); menu.querySelector<HTMLElement>('#copy-invite-code b')!.textContent = authUser?.inviteCode ?? '—' }
 async function ensureCurrentUserProject() { const response = await fetch('/api/projects'); if (!response.ok) return false; const projects = await response.json() as Array<{ id: string }>; if (!projects.length) return false; if (!projects.some(project => project.id === currentProjectId)) { currentProjectId = projects[0].id; localStorage.setItem('flow-project-id', currentProjectId) } return true }
-async function enterWorkspace() { if (!authUser || !await ensureCurrentUserProject()) return; location.hash = '#/canvas'; await Promise.all([loadCanvas(), loadAssets()]); applyAppRoute() }
+async function enterWorkspace() { if (!authUser || !await ensureCurrentUserProject()) return; location.hash = '#/canvas'; await Promise.all([loadCanvas(), loadAssets(), loadCustomApiModels()]); applyAppRoute() }
 async function loadShowcase() {
   showcaseLoaded = true
   try {
@@ -126,9 +130,22 @@ homeLoginModal.querySelector('form')!.addEventListener('submit', async event => 
 homePreview.querySelector(':scope > button')!.addEventListener('click', closeHomePreview)
 homePreview.addEventListener('click', event => { if (event.target === homePreview) closeHomePreview() })
 const workspaceUserMenu = document.querySelector<HTMLElement>('#workspace-user-menu')!
+const renameUserButton = document.createElement('button'); renameUserButton.id = 'rename-user'; renameUserButton.type = 'button'; renameUserButton.title = '修改昵称'; renameUserButton.setAttribute('aria-label', '修改昵称'); renameUserButton.textContent = '✎'; workspaceUserMenu.querySelector('header')!.append(renameUserButton)
+async function editUserNickname() { if (!authUser) return; const header = workspaceUserMenu.querySelector('header')!, name = header.querySelector<HTMLElement>('strong')!, input = document.createElement('input'); input.className = 'user-name-input'; input.value = authUser.name; input.maxLength = 40; name.hidden = true; renameUserButton.hidden = true; name.after(input); input.focus(); input.select(); let finished = false; const finish = async (save: boolean) => { if (finished) return; finished = true; const nextName = input.value.trim(); input.remove(); name.hidden = false; renameUserButton.hidden = false; if (!save || nextName === authUser!.name) return; if (nextName.length < 2) { showToast('昵称至少需要 2 个字符', 'error'); return } const response = await fetch('/api/users/me', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: nextName }) }); const result = await response.json().catch(() => ({})) as AuthUser & { error?: string }; if (!response.ok) { showToast(result.error || '昵称修改失败', 'error'); return } authUser = { ...authUser!, name: result.name }; renderAuthenticatedUser(); showToast('昵称已更新', 'success') }; input.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); void finish(true) } else if (event.key === 'Escape') { event.preventDefault(); void finish(false) } }); input.addEventListener('blur', () => void finish(true)) }
+renameUserButton.addEventListener('click', event => { event.stopPropagation(); void editUserNickname() })
 document.querySelector('#workspace-user')!.addEventListener('click', event => { event.stopPropagation(); workspaceUserMenu.classList.toggle('open') })
 document.querySelector('#workspace-logout')!.addEventListener('click', async () => { await fetch('/api/auth/logout', { method: 'POST' }); authUser = null; nodes.splice(0); links.splice(0); selectedId = 0; workspaceUserMenu.classList.remove('open'); renderAuthenticatedUser(); location.hash = '#/'; applyAppRoute() })
+document.querySelector('#copy-invite-code')!.addEventListener('click', async () => { if (!authUser?.inviteCode) return; await navigator.clipboard.writeText(authUser.inviteCode); const label = document.querySelector<HTMLElement>('#copy-invite-code span')!; label.textContent = '已复制'; window.setTimeout(() => { label.textContent = '复制' }, 1400) })
 document.addEventListener('pointerdown', event => { if (!(event.target as HTMLElement | null)?.closest('#workspace-user,#workspace-user-menu')) workspaceUserMenu.classList.remove('open') })
+const customApiModal = document.querySelector<HTMLElement>('#custom-api-modal')!, customApiForm = document.querySelector<HTMLFormElement>('#custom-api-form')!, customApiList = document.querySelector<HTMLElement>('#custom-api-list')!
+function refreshNodeModelMenus() { nodeLayer.querySelectorAll('.flow-node').forEach(element => element.remove()); draw() }
+async function loadCustomApiModels() { const response = await fetch('/api/user-api-models'); if (response.ok) { customApiModels = await response.json() as CustomApiModel[]; renderCustomApiModels(); refreshNodeModelMenus() } }
+function renderCustomApiModels() { customApiList.innerHTML = customApiModels.length ? customApiModels.map(item => `<article class="custom-api-entry" data-custom-id="${item.id}"><b>${escapeHtml(item.name)}</b><small>${item.kind === 'image' ? '图像' : '视频'} · ${escapeHtml(item.model)} · ${escapeHtml(item.baseUrl)}</small><button type="button">删除</button></article>`).join('') : '<article class="custom-api-entry"><b>还没有自定义模型</b><small>添加后会出现在对应节点的模型列表中</small></article>'; customApiList.querySelectorAll<HTMLButtonElement>('[data-custom-id] button').forEach(button => button.addEventListener('click', async () => { const id = button.closest<HTMLElement>('[data-custom-id]')!.dataset.customId!; if ((await fetch(`/api/user-api-models/${id}`, { method:'DELETE' })).ok) { customApiModels = customApiModels.filter(item => item.id !== id); renderCustomApiModels(); refreshNodeModelMenus() } })) }
+document.querySelector<HTMLButtonElement>('#open-custom-api')!.addEventListener('click', event => { const button = event.currentTarget as HTMLButtonElement; if (button.disabled) return; workspaceUserMenu.classList.remove('open'); customApiModal.classList.add('open'); void loadCustomApiModels() })
+customApiModal.querySelector('[data-custom-close]')!.addEventListener('click', () => customApiModal.classList.remove('open'))
+customApiModal.addEventListener('pointerdown', event => { if (event.target === customApiModal) customApiModal.classList.remove('open') })
+document.querySelector('#custom-api-test')!.addEventListener('click', async () => { const data = new FormData(customApiForm), output = customApiForm.querySelector<HTMLOutputElement>('output')!; output.textContent = '正在测试连接…'; const response = await fetch('/api/user-api-models/test', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({ baseUrl:data.get('baseUrl'), apiKey:data.get('apiKey') }) }); const result = await response.json().catch(() => ({})) as { error?:string }; output.textContent = response.ok ? '连接成功' : `连接失败：${result.error || '未知错误'}` })
+customApiForm.addEventListener('submit', async event => { event.preventDefault(); const data = Object.fromEntries(new FormData(customApiForm)), output = customApiForm.querySelector<HTMLOutputElement>('output')!; const response = await fetch('/api/user-api-models', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(data) }); const result = await response.json().catch(() => ({})) as CustomApiModel & { error?:string }; if (!response.ok) { output.textContent = result.error || '添加失败'; return } customApiModels.push(result); customApiForm.reset(); output.textContent = '已添加，可在模型列表中选择'; renderCustomApiModels(); refreshNodeModelMenus() })
 window.addEventListener('hashchange', applyAppRoute)
 applyAppRoute()
 
@@ -317,7 +334,7 @@ function syncDomNodes() {
     const videoResultPrompt = element.querySelector<HTMLElement>('.video-result-prompt')!; videoResultPrompt.classList.toggle('open', node.kind === 'video' && node.role === 'result' && node.id === selectedId); videoResultPrompt.querySelector<HTMLElement>('p')!.textContent = node.generationPrompt || '暂无生成提示词'
     if (node.kind === 'image') {
       const model = imagePanel.querySelector<HTMLSelectElement>('[data-image-field="model"]')!, description = imagePanel.querySelector<HTMLTextAreaElement>('[data-image-field="description"]')!
-      if (document.activeElement !== model) model.value = node.model ?? 'gpt-image-2'; imagePanel.querySelector<HTMLElement>('[data-image-model-label]')!.textContent = node.model ?? 'gpt-image-2'; description.placeholder = node.mediaUrl ? '描述你想如何修改这张图片' : '描述要生成的图片内容'; if (document.activeElement !== description) description.value = node.body
+      if (document.activeElement !== model) model.value = node.model ?? 'gpt-image-2'; imagePanel.querySelector<HTMLElement>('[data-image-model-label]')!.textContent = modelDisplayName(node.model ?? 'gpt-image-2'); description.placeholder = node.mediaUrl ? '描述你想如何修改这张图片' : '描述要生成的图片内容'; if (document.activeElement !== description) description.value = node.body
       const originalPrompt = imagePanel.querySelector<HTMLElement>('.image-original-prompt')!; originalPrompt.classList.toggle('visible', Boolean(node.generationPrompt || node.mediaUrl)); originalPrompt.querySelector<HTMLElement>('p')!.textContent = node.generationPrompt || '导入图片，无生成提示词'
       for (const key of ['size', 'quality', 'background'] as const) { const input = imagePanel.querySelector<HTMLSelectElement>(`[data-image-field="${key}"]`)!; if (document.activeElement !== input) input.value = node.imageSettings?.[key] ?? 'auto' }
       imagePanel.querySelectorAll<HTMLElement>('[data-image-setting]').forEach(button => button.classList.toggle('active', node.imageSettings?.[button.dataset.imageSetting as 'size' | 'quality' | 'background'] === button.dataset.value || ((!node.imageSettings?.[button.dataset.imageSetting as 'size' | 'quality' | 'background'] || node.imageSettings?.[button.dataset.imageSetting as 'size' | 'quality' | 'background'] === 'auto') && button.dataset.value === 'auto')))
@@ -329,11 +346,11 @@ function syncDomNodes() {
     if (node.kind === 'video') {
       const count = (node.role !== 'result' && node.mediaUrl ? 1 : 0) + links.filter(link => link.from === node.id).map(link => nodes.find(item => item.id === link.to)).filter(item => item?.kind === 'video' && item.role === 'result' && item.status === 'succeeded').length
       element.querySelector<HTMLElement>('.video-generation-count')!.textContent = node.role === 'result' ? node.status === 'queued' ? '任务排队中' : node.status === 'running' ? `生成中 ${Math.round(node.progress ?? 0)}%` : node.status === 'failed' ? '生成失败' : '生成结果' : `已生成 ${count} 个视频`
-      element.querySelector<HTMLElement>('.video-result-model')!.textContent = node.model ?? '未知模型'
+      element.querySelector<HTMLElement>('.video-result-model')!.textContent = modelDisplayName(node.model) || '未知模型'
       const description = videoPanel.querySelector<HTMLTextAreaElement>('[data-video-description]')!; if (document.activeElement !== description) description.value = node.body
       videoPanel.querySelector<HTMLInputElement>('[data-video-model]')!.value = node.model ?? 'agnes-video-v2.0'
       videoPanel.querySelectorAll<HTMLButtonElement>('[data-video-model-option]').forEach(option => option.classList.toggle('active', option.dataset.videoModelOption === (node.model ?? 'agnes-video-v2.0')))
-      videoPanel.querySelector<HTMLElement>('.video-model-picker summary b')!.textContent = node.model ?? 'agnes-video-v2.0'
+      videoPanel.querySelector<HTMLElement>('.video-model-picker summary b')!.textContent = modelDisplayName(node.model ?? 'agnes-video-v2.0')
       videoPanel.querySelector<HTMLOutputElement>('[data-video-seconds]')!.value = `${node.videoSettings?.seconds ?? '5'} 秒`
       videoPanel.querySelector<HTMLElement>('.video-settings-picker summary b')!.textContent = `${node.videoSettings?.seconds ?? '5'}秒 · ${node.videoSettings?.resolution ?? '720p'} · ${node.videoSettings?.aspectRatio ?? '16:9'}`
       videoPanel.querySelectorAll<HTMLButtonElement>('[data-video-setting]').forEach(button => button.classList.toggle('active', node.videoSettings?.[button.dataset.videoSetting as 'seconds' | 'resolution' | 'aspectRatio'] === button.dataset.value))
@@ -366,9 +383,12 @@ function createDomNode(node: FlowNode) {
   const videoResultPrompt = document.createElement('section'); videoResultPrompt.className = 'video-result-prompt'; videoResultPrompt.innerHTML = '<header><span>原提示词</span><small>生成视频时使用的描述</small></header><p></p>'; element.append(videoResultPrompt)
   videoResultPrompt.addEventListener('mousedown', event => event.stopPropagation()); videoResultPrompt.addEventListener('click', event => event.stopPropagation())
   const videoModelPopover = videoPanel.querySelector<HTMLElement>('.video-model-popover')!; videoModelPopover.innerHTML = '<small>选择视频模型</small><button type="button" data-video-model-option="agnes-video-v2.0"><span><b>Agnes Video 2.0</b><small>Agnes 专用视频接口</small></span><em class="model-price free">免费</em><i>✓</i></button><button type="button" data-video-model-option="grok-imagine-video-1.5-preview"><span><b>Grok Imagine Video 1.5 Preview</b><small>CPA 通用视频接口</small></span><em class="model-price paid">×1 付费</em><i>✓</i></button><input type="hidden" data-video-model value="agnes-video-v2.0">'
+  for (const item of customApiModels.filter(item => item.kind === 'video')) videoModelPopover.querySelector('input')!.insertAdjacentHTML('beforebegin', `<button type="button" data-video-model-option="custom:${item.id}"><span><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.model)} · 自定义 API</small></span><em class="model-price paid">自定义</em><i>✓</i></button>`)
   const videoCount = document.createElement('span'); videoCount.className = 'video-generation-count'; element.append(videoCount)
   const videoResultModel = document.createElement('span'); videoResultModel.className = 'video-result-model'; element.append(videoResultModel)
   element.querySelector('.image-config-panel')!.classList.add('image-composer-v2')
+  const imageModelMenu = element.querySelector<HTMLElement>('.image-model-menu')!, imageModelSelect = element.querySelector<HTMLSelectElement>('[data-image-field="model"]')!
+  for (const item of customApiModels.filter(item => item.kind === 'image')) { imageModelMenu.insertAdjacentHTML('beforeend', `<button type="button" data-image-model="custom:${item.id}"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"></rect><path d="M8 12h8"></path></svg><span><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.model)} · 自定义 API</small></span><i>✓</i></button>`); imageModelSelect.insertAdjacentHTML('beforeend', `<option value="custom:${item.id}">${escapeHtml(item.name)}</option>`) }
   const originalPrompt = document.createElement('div'); originalPrompt.className = 'image-original-prompt'; originalPrompt.innerHTML = '<span>原提示词</span><p></p>'; element.querySelector('.image-config-panel textarea')!.before(originalPrompt)
   element.querySelectorAll('.image-model-picker > summary > i,.image-config-panel footer > details:not(.image-model-picker) > summary > i').forEach(icon => icon.remove())
   element.querySelector<HTMLElement>('.image-settings-popover')!.innerHTML = `<header><span>图像设置</span><small>调整输出质量与画面比例</small></header><section class="image-setting-section"><b>质量</b><div class="image-quality-options"><button type="button" data-image-setting="quality" data-value="auto">自动</button><button type="button" data-image-setting="quality" data-value="high">高</button><button type="button" data-image-setting="quality" data-value="medium">中</button><button type="button" data-image-setting="quality" data-value="low">低</button></div><select data-image-field="quality" hidden><option value="auto">自动</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select></section><section class="image-setting-section"><b>尺寸 <small>可直接输入自定义宽高</small></b><div class="image-dimension-inputs"><label><span>W</span><input type="number" min="1" max="3840" placeholder="自动" data-image-width></label><i>×</i><label><span>H</span><input type="number" min="1" max="3840" placeholder="自动" data-image-height></label></div></section><section class="image-setting-section"><b>长宽比</b><div class="image-aspect-options"><button type="button" data-image-setting="size" data-value="auto"><i class="aspect-auto">A</i><span>自动</span></button><button type="button" data-image-setting="size" data-value="1024x1024"><i class="aspect-square"></i><span>1:1</span></button><button type="button" data-image-setting="size" data-value="1344x1008"><i class="aspect-4-3"></i><span>4:3</span></button><button type="button" data-image-setting="size" data-value="1008x1344"><i class="aspect-3-4"></i><span>3:4</span></button><button type="button" data-image-setting="size" data-value="1536x1024"><i class="aspect-landscape"></i><span>3:2</span></button><button type="button" data-image-setting="size" data-value="1024x1536"><i class="aspect-portrait"></i><span>2:3</span></button><button type="button" data-image-setting="size" data-value="1536x864"><i class="aspect-16-9"></i><span>16:9</span></button><button type="button" data-image-setting="size" data-value="864x1536"><i class="aspect-9-16"></i><span>9:16</span></button><button type="button" data-custom-size><i class="aspect-auto">✎</i><span>自定义</span></button></div><select data-image-field="size" hidden><option value="auto">自动</option><option value="1024x1024">1:1</option><option value="1344x1008">4:3</option><option value="1008x1344">3:4</option><option value="1536x1024">3:2</option><option value="1024x1536">2:3</option><option value="1536x864">16:9</option><option value="864x1536">9:16</option></select><p class="image-size-notice">尺寸设置可能因接口兼容性不生效，可在提示词中同时指定画面比例。</p></section><section class="image-setting-section image-background-setting"><span><b>透明背景</b><small>仅部分模型支持</small></span><button type="button" data-image-setting="background" data-value="transparent" aria-label="透明背景"><i></i></button><select data-image-field="background" hidden><option value="auto">自动</option><option value="transparent">透明</option><option value="opaque">不透明</option></select></section>`
@@ -592,14 +612,30 @@ async function generate() {
       ? [...new Set(upstream.filter(item => item.kind === 'image').map(item => item.mediaUrl).filter((url): url is string => Boolean(url)))]
       : [...new Set([...(source.mediaUrl ? [source.mediaUrl] : []), ...upstream.map(item => item.mediaUrl).filter((url): url is string => Boolean(url))])]
     const resolvedPrompt = source.body.trim()
+    const requestPrompt = source.kind === 'image' ? appendImageSizeHint(resolvedPrompt, node.imageSettings?.size) : resolvedPrompt
     const parameters = node.kind === 'video'
       ? Object.fromEntries(Object.entries({ seconds: node.videoSettings?.seconds, resolution: node.videoSettings?.resolution, aspect_ratio: node.videoSettings?.aspectRatio }).filter(([, value]) => value && value !== 'auto'))
       : Object.fromEntries(Object.entries(node.imageSettings ?? {}).filter(([, value]) => value && value !== 'auto'))
-    const response = await fetch('/api/jobs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ projectId: currentProjectId, nodeId: node.id, kind: node.kind === 'video' ? 'video' : 'image', prompt: resolvedPrompt, model: node.model, inputUrls, parameters }) })
+    const response = await fetch('/api/jobs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ projectId: currentProjectId, nodeId: node.id, kind: node.kind === 'video' ? 'video' : 'image', prompt: requestPrompt, model: node.model, inputUrls, parameters }) })
     if (!response.ok) throw new Error('job failed')
     const job = await response.json() as { id: string; status: string; progress: number }
     node.jobId = job.id; node.status = job.status; node.progress = job.progress; node.generationPrompt = resolvedPrompt; if (node.role !== 'result') node.body = ''; updateEditor(); scheduleSave(); pollJob(node)
   } catch (error) { node.status = 'failed'; node.progress = 0; jobLabel.textContent = '提交失败，请检查 API'; showToast('任务提交失败，请检查接口配置', 'error', error instanceof Error ? error.message : '未知错误'); if (node.role === 'result') removeFailedResult(node, source.id); updateEditor(); scheduleSave(); draw() }
+}
+
+function appendImageSizeHint(prompt: string, size?: string) {
+  if (!size || size === 'auto') return prompt
+  const ratio = ({
+    '1024x1024': '1:1',
+    '1344x1008': '4:3',
+    '1008x1344': '3:4',
+    '1536x1024': '3:2',
+    '1024x1536': '2:3',
+    '1536x864': '16:9',
+    '864x1536': '9:16',
+  } as Record<string, string>)[size]
+  const dimensions = size.replace('x', '×')
+  return `${prompt}\n\n输出要求：画面宽高比为 ${ratio ?? dimensions}，尺寸为 ${dimensions}，请直接按此比例构图，不要裁切。`
 }
 
 function createRevisionNode(source: FlowNode) {
@@ -628,18 +664,22 @@ function pollJob(node: FlowNode) {
   if (!node.jobId) return
   const jobId = node.jobId
   const previousTimer = activeJobPolls.get(jobId); if (previousTimer) window.clearInterval(previousTimer)
-  let failures = 0
+  let failures = 0, failureNotified = false
   const timer = window.setInterval(async () => {
     if (!node.jobId || node.jobId !== jobId) { window.clearInterval(timer); activeJobPolls.delete(jobId); return }
     try {
       const response = await fetch(`/api/jobs/${jobId}`)
       if (!response.ok) throw new Error(`job status ${response.status}`)
       const job = await response.json() as { status: string; progress: number; result_url?: string; error?: string }
-      failures = 0; node.status = job.status
+      failures = 0; failureNotified = false; node.status = job.status
+      if (node.kind === 'image' && job.status === 'running' && job.progress === 20 && !retryNotifiedJobs.has(jobId)) {
+        retryNotifiedJobs.add(jobId)
+        showToast('首次生成请求超时，正在自动重试一次', 'warning')
+      }
       node.progress = job.progress
       updateEditor(); draw()
       if (job.status === 'succeeded' || job.status === 'failed') {
-        window.clearInterval(timer); activeJobPolls.delete(jobId)
+        window.clearInterval(timer); activeJobPolls.delete(jobId); retryNotifiedJobs.delete(jobId)
         if (job.status === 'succeeded' && job.result_url) {
           node.mediaUrl = job.result_url
           imageCache.delete(job.result_url)
@@ -649,10 +689,14 @@ function pollJob(node: FlowNode) {
         if (job.status === 'failed') { const message = job.error || '视频生成失败'; jobLabel.textContent = `生成失败：${message}`; showToast(message, 'error'); if (node.role === 'result') removeFailedResult(node) }
         updateEditor(); draw(); scheduleSave()
       }
-    } catch { failures++; jobLabel.textContent = failures < 5 ? '状态同步中断，正在重试…' : '状态查询失败'; if (failures >= 5) { window.clearInterval(timer); activeJobPolls.delete(jobId); showToast('任务状态查询失败，请检查网络后重试', 'error') } }
-  }, 650)
+    } catch { failures++; jobLabel.textContent = '状态同步中断，正在重试…'; if (failures >= 5 && !failureNotified) { failureNotified = true; showToast('任务状态暂时无法同步，服务恢复后将自动重试', 'error') } }
+  }, 1500)
   activeJobPolls.set(jobId, timer)
 }
+
+function resumeActiveJobPolls() { nodes.filter(node => node.jobId && (node.status === 'queued' || node.status === 'running')).forEach(pollJob) }
+window.addEventListener('online', resumeActiveJobPolls)
+window.addEventListener('focus', resumeActiveJobPolls)
 
 canvas.addEventListener('pointerdown', e => { if (e.button !== 0) return; if (cameraFrame !== null) { cancelAnimationFrame(cameraFrame); cameraFrame = null; zoomTarget = camera.zoom } pointer.down = true; pointer.x = e.clientX; pointer.y = e.clientY; const port = hitPort(e.clientX, e.clientY); if (port) { connectionSnap = null; connecting = { nodeId: port.node.id, side: port.side, pointer: { x: e.clientX, y: e.clientY } }; selectedId = port.node.id; pointer.draggingNode = null; updateEditor() } else { const node = hitNode(e.clientX, e.clientY); pointer.draggingNode = node && node.status !== 'queued' && node.status !== 'running' ? node.id : null; if (node) selectedId = node.id; else selectedId = 0; updateEditor() } canvas.setPointerCapture(e.pointerId); canvas.classList.add('dragging'); draw() })
 canvas.addEventListener('pointermove', e => { if (!pointer.down) return; setSaveState('editing', '编辑中…'); if (connecting) { updateConnectionPointer(e.clientX, e.clientY); draw(); return } const dx = e.clientX - pointer.x, dy = e.clientY - pointer.y; if (pointer.draggingNode) { const node = nodes.find(n => n.id === pointer.draggingNode)!; node.x += dx / camera.zoom; node.y += dy / camera.zoom } else { camera.x += dx; camera.y += dy } pointer.x = e.clientX; pointer.y = e.clientY; draw() })

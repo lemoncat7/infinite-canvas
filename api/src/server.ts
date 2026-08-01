@@ -3,6 +3,8 @@ import initSqlJs, { type Database } from 'sql.js'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createHash, createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto'
 import { createGenerationProvider, type GenerationUpdate } from './providers/index.js'
+import { OpenAiImageProvider } from './providers/openai-image.js'
+import { OpenAiVideoProvider } from './providers/openai-video.js'
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
 
 type CanvasPayload = { nodes: unknown[]; links: unknown[]; camera?: unknown }
@@ -23,13 +25,18 @@ database.run(`
   CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS project_canvases (project_id TEXT PRIMARY KEY, document TEXT NOT NULL, updated_at TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, user_id TEXT NOT NULL, name TEXT NOT NULL, mime_type TEXT NOT NULL, size INTEGER NOT NULL, storage_name TEXT NOT NULL, created_at TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS user_api_models (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, model TEXT NOT NULL, base_url TEXT NOT NULL, api_key TEXT NOT NULL, proxy_url TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 `)
 ensureColumn('jobs', 'project_id', 'TEXT')
 ensureColumn('jobs', 'user_id', 'TEXT')
 ensureColumn('assets', 'is_public', 'INTEGER NOT NULL DEFAULT 0')
 ensureColumn('users', 'email', 'TEXT')
 ensureColumn('users', 'password_hash', 'TEXT')
+ensureColumn('users', 'username', 'TEXT')
+ensureColumn('users', 'invite_code', 'TEXT')
+ensureColumn('users', 'invited_by', 'TEXT')
 ensureColumn('projects', 'last_opened_at', 'TEXT')
+for (const user of getAll('SELECT id FROM users WHERE invite_code IS NULL OR invite_code = ?', [''])) database.run('UPDATE users SET invite_code = ? WHERE id = ?', [newInviteCode(), String(user.id)])
 const developmentUserId = 'dev-user'
 const defaultProjectId = 'default'
 const generationProvider = createGenerationProvider()
@@ -38,6 +45,9 @@ const generationPublicBaseUrl = String(process.env.GENERATION_PUBLIC_BASE_URL ||
 const bootTime = new Date().toISOString()
 database.run("UPDATE jobs SET status = 'failed', progress = 0, error = ?, updated_at = ? WHERE status IN ('queued', 'running')", ['生成服务曾重启，任务已中断，请重新生成', bootTime])
 database.run('INSERT OR IGNORE INTO users (id, name, created_at) VALUES (?, ?, ?)', [developmentUserId, '开发用户', bootTime])
+database.run("UPDATE users SET username = ? WHERE id = ? AND (username IS NULL OR username = '')", ['mochen', developmentUserId])
+for (const user of getAll("SELECT id, name FROM users WHERE username IS NULL OR username = ''", [])) database.run('UPDATE users SET username = ? WHERE id = ?', [availableUsername(String(user.name || 'user')), String(user.id)])
+for (const user of getAll('SELECT id FROM users WHERE invite_code IS NULL OR invite_code = ?', [''])) database.run('UPDATE users SET invite_code = ? WHERE id = ?', [newInviteCode(), String(user.id)])
 database.run('INSERT OR IGNORE INTO projects (id, user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', [defaultProjectId, developmentUserId, '未命名项目', bootTime, bootTime])
 const legacyCanvas = getOne('SELECT document, updated_at FROM canvases WHERE id = ?', [defaultProjectId])
 if (legacyCanvas) database.run('INSERT OR IGNORE INTO project_canvases (project_id, document, updated_at) VALUES (?, ?, ?)', [defaultProjectId, legacyCanvas.document, legacyCanvas.updated_at])
@@ -49,6 +59,10 @@ app.get('/generation/capabilities', async () => generationProvider.capabilities 
   image: { provider: generationProvider.name, defaultModel: process.env.OPENAI_IMAGE_DEFAULT_MODEL || 'gpt-image-2' },
   video: { provider: generationProvider.name, defaultModel: process.env.AGNES_VIDEO_DEFAULT_MODEL || 'agnes-video-v2.0', seconds: { min: 1, max: 18, default: 5 }, resolutions: ['480p', '720p', '1080p'], aspectRatios: ['1:1', '4:3', '16:9'] },
 })
+app.get('/user-api-models', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; return getAll('SELECT id, kind, name, model, base_url AS baseUrl, CASE WHEN proxy_url IS NULL OR proxy_url = ? THEN 0 ELSE 1 END AS hasProxy, created_at AS createdAt, updated_at AS updatedAt FROM user_api_models WHERE user_id = ? ORDER BY created_at ASC', ['', String(user.id)]).map(item => ({ ...item, hasProxy: Boolean(item.hasProxy), hasKey: true })) })
+app.post('/user-api-models', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const body = request.body as { kind?: string; name?: string; model?: string; baseUrl?: string; apiKey?: string; proxyUrl?: string }, kind = String(body.kind ?? ''), name = String(body.name ?? '').trim(), model = String(body.model ?? '').trim(), baseUrl = normalizeHttpUrl(body.baseUrl), apiKey = String(body.apiKey ?? '').trim(), proxyUrl = String(body.proxyUrl ?? '').trim(); if (!['image', 'video'].includes(kind)) return reply.code(400).send({ error: '请选择图像或视频类型' }); if (!name || name.length > 60 || !model || model.length > 120 || !baseUrl || !apiKey) return reply.code(400).send({ error: '请完整填写名称、模型、接口地址和密钥' }); if (proxyUrl && !normalizeHttpUrl(proxyUrl)) return reply.code(400).send({ error: '代理地址无效' }); const id = randomUUID(), now = new Date().toISOString(); database.run('INSERT INTO user_api_models (id,user_id,kind,name,model,base_url,api_key,proxy_url,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [id,String(user.id),kind,name,model,baseUrl,apiKey,proxyUrl,now,now]); persist(); return reply.code(201).send({ id,kind,name,model,baseUrl,hasKey:true,hasProxy:Boolean(proxyUrl),createdAt:now,updatedAt:now }) })
+app.delete('/user-api-models/:id', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const { id } = request.params as { id:string }; database.run('DELETE FROM user_api_models WHERE id = ? AND user_id = ?', [id,String(user.id)]); persist(); return reply.code(204).send() })
+app.post('/user-api-models/test', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const body = request.body as { baseUrl?:string; apiKey?:string }; const baseUrl = normalizeHttpUrl(body.baseUrl), apiKey = String(body.apiKey ?? '').trim(); if (!baseUrl || !apiKey) return reply.code(400).send({ error:'请填写接口地址和密钥' }); try { const response = await fetch(`${baseUrl}/v1/models`, { headers:{ authorization:`Bearer ${apiKey}` }, signal:AbortSignal.timeout(12000) }); if (!response.ok) return reply.code(400).send({ error:`接口返回 ${response.status}` }); return { ok:true } } catch (error) { return reply.code(400).send({ error:error instanceof Error ? error.message : '连接失败' }) } })
 app.get('/generation-inputs/:assetId', async (request, reply) => {
   const { assetId } = request.params as { assetId: string }
   const { expires, signature } = request.query as { expires?: string; signature?: string }
@@ -71,27 +85,31 @@ app.get('/mock/:file', async (request, reply) => {
 })
 app.post('/auth/register', async (request, reply) => {
   const body = request.body as { name?: string; email?: string; password?: string; inviteCode?: string }, name = String(body.name ?? '').trim(), email = normalizeEmail(body.email), password = String(body.password ?? ''), inviteCode = String(body.inviteCode ?? '').trim(), configuredInviteCode = String(process.env.REGISTRATION_INVITE_CODE ?? '').trim()
-  if (!configuredInviteCode) return reply.code(503).send({ error: '注册暂未开放' })
-  if (!secureTextEqual(inviteCode, configuredInviteCode)) return reply.code(403).send({ error: '邀请码无效' })
+  const inviter = inviteCode ? getOne('SELECT id FROM users WHERE upper(invite_code) = ?', [inviteCode.toUpperCase()]) : undefined
+  if (!configuredInviteCode && !inviter) return reply.code(503).send({ error: '注册暂未开放' })
+  if (!inviter && (!configuredInviteCode || !secureTextEqual(inviteCode, configuredInviteCode))) return reply.code(403).send({ error: '邀请码无效' })
   if (name.length < 2 || name.length > 40) return reply.code(400).send({ error: '昵称长度需要在 2 到 40 个字符之间' })
   if (!validEmail(email)) return reply.code(400).send({ error: '请输入有效邮箱' })
   if (password.length < 8 || password.length > 128) return reply.code(400).send({ error: '密码至少需要 8 个字符' })
   if (getOne('SELECT id FROM users WHERE lower(email) = ?', [email])) return reply.code(409).send({ error: '该邮箱已注册' })
+  if (getOne('SELECT id FROM users WHERE lower(username) = ?', [name.toLowerCase()])) return reply.code(409).send({ error: '该用户名已被使用' })
   const now = new Date().toISOString(), legacy = getOne('SELECT id FROM users WHERE id = ? AND (email IS NULL OR email = ?)', [developmentUserId, ''])
   let userId: string
-  if (legacy) { userId = developmentUserId; database.run('UPDATE users SET name = ?, email = ?, password_hash = ? WHERE id = ?', [name, email, hashPassword(password), userId]) }
-  else { userId = randomUUID(); database.run('INSERT INTO users (id, name, email, password_hash, created_at) VALUES (?, ?, ?, ?, ?)', [userId, name, email, hashPassword(password), now]); createDefaultProject(userId, now) }
+  if (legacy) { userId = developmentUserId; database.run('UPDATE users SET name = ?, email = ?, password_hash = ?, username = COALESCE(NULLIF(username, ?), ?), invited_by = COALESCE(invited_by, ?) WHERE id = ?', [name, email, hashPassword(password), '', name, inviter?.id ?? null, userId]) }
+  else { userId = randomUUID(); database.run('INSERT INTO users (id, name, email, password_hash, username, invite_code, invited_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [userId, name, email, hashPassword(password), name, newInviteCode(), inviter?.id ?? null, now]); createDefaultProject(userId, now) }
   const token = createSession(userId, now); persist(); setSessionCookie(request, reply, token)
-  return reply.code(201).send({ id: userId, name, email, createdAt: now })
+  const createdUser = getOne('SELECT username, invite_code AS inviteCode FROM users WHERE id = ?', [userId])
+  return reply.code(201).send({ id: userId, name, username: createdUser?.username, email, inviteCode: createdUser?.inviteCode, createdAt: now })
 })
 app.post('/auth/login', async (request, reply) => {
-  const body = request.body as { email?: string; password?: string }, email = normalizeEmail(body.email), password = String(body.password ?? ''), user = getOne('SELECT id, name, email, password_hash, created_at AS createdAt FROM users WHERE lower(email) = ?', [email])
-  if (!user || !verifyPassword(password, String(user.password_hash ?? ''))) return reply.code(401).send({ error: '邮箱或密码错误' })
+  const body = request.body as { email?: string; account?: string; password?: string }, account = String(body.account ?? body.email ?? '').trim().toLowerCase(), password = String(body.password ?? ''), user = getOne('SELECT id, name, username, email, password_hash, invite_code AS inviteCode, created_at AS createdAt FROM users WHERE lower(email) = ? OR lower(username) = ? ORDER BY CASE WHEN lower(email) = ? THEN 0 ELSE 1 END LIMIT 1', [account, account, account])
+  if (!user || !verifyPassword(password, String(user.password_hash ?? ''))) return reply.code(401).send({ error: '用户名、邮箱或密码错误' })
   const token = createSession(String(user.id)); persist(); setSessionCookie(request, reply, token)
-  return { id: user.id, name: user.name, email: user.email, createdAt: user.createdAt }
+  return { id: user.id, name: user.name, username: user.username, email: user.email, inviteCode: user.inviteCode, createdAt: user.createdAt }
 })
 app.post('/auth/logout', async (request, reply) => { const token = sessionToken(request); if (token) database.run('DELETE FROM sessions WHERE id = ?', [sessionId(token)]); persist(); clearSessionCookie(request, reply); return { ok: true } })
-app.get('/users/me', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; return { id: user.id, name: user.name, email: user.email, createdAt: user.createdAt } })
+app.get('/users/me', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; return { id: user.id, name: user.name, username: user.username, email: user.email, inviteCode: user.inviteCode, createdAt: user.createdAt } })
+app.patch('/users/me', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const name = String((request.body as { name?: string }).name ?? '').trim(); if (name.length < 2 || name.length > 40) return reply.code(400).send({ error: '昵称长度需要在 2 到 40 个字符之间' }); database.run('UPDATE users SET name = ? WHERE id = ?', [name, String(user.id)]); persist(); return { ...user, name } })
 app.get('/showcase', async () => getAll(`SELECT assets.id, assets.name, assets.mime_type AS mimeType, assets.created_at AS createdAt, users.name AS author
   FROM assets JOIN users ON users.id = assets.user_id WHERE assets.is_public = 1 ORDER BY assets.created_at DESC LIMIT 30`, []).map(asset => ({ ...asset, url: namedAssetUrl(String(asset.id), String(asset.name), true) })))
 
@@ -146,14 +164,18 @@ app.post('/jobs', async (request, reply) => {
   if (!input.prompt?.trim()) return reply.code(400).send({ error: 'Prompt is required' })
   const projectId = input.projectId ?? defaultProjectId
   if (!ownsProject(projectId, userId)) return reply.code(404).send({ error: 'Project not found' })
-  const model = input.model ?? (input.kind === 'video' ? process.env.AGNES_VIDEO_DEFAULT_MODEL || 'agnes-video-v2.0' : process.env.OPENAI_IMAGE_DEFAULT_MODEL || 'gpt-image-2')
+  let model = input.model ?? (input.kind === 'video' ? process.env.AGNES_VIDEO_DEFAULT_MODEL || 'agnes-video-v2.0' : process.env.OPENAI_IMAGE_DEFAULT_MODEL || 'gpt-image-2')
+  const customId = model.startsWith('custom:') ? model.slice(7) : '', custom = customId ? getOne('SELECT * FROM user_api_models WHERE id = ? AND user_id = ?', [customId,userId]) : undefined
+  if (customId && (!custom || String(custom.kind) !== input.kind)) return reply.code(400).send({ error:'自定义模型不存在或类型不匹配' })
+  if (custom) model = String(custom.model)
   let inputUrls: string[]
   try { inputUrls = resolveOwnedInputUrls(input.inputUrls ?? [], userId, input.kind, model) }
   catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : '无法读取输入素材' }) }
   const id = randomUUID(), now = new Date().toISOString()
   database.run('INSERT INTO jobs (id, project_id, user_id, node_id, kind, prompt, model, status, progress, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [id, projectId, userId, input.nodeId, input.kind, input.prompt, model, 'queued', 0, now, now])
   persist()
-  void generationProvider.run({ internalJobId: id, projectId, nodeId: input.nodeId, kind: input.kind, prompt: input.prompt, model, inputUrls, parameters: input.parameters ?? {} }, update => { void updateJob(id, update) }).catch(error => { void updateJob(id, { status: 'failed', progress: 0, error: error instanceof Error ? error.message : 'Generation failed' }) })
+  const provider = custom ? (input.kind === 'image' ? new OpenAiImageProvider({ baseUrl:String(custom.base_url), apiKey:String(custom.api_key) }) : new OpenAiVideoProvider({ baseUrl:String(custom.base_url), apiKey:String(custom.api_key) })) : generationProvider
+  void provider.run({ internalJobId: id, projectId, nodeId: input.nodeId, kind: input.kind, prompt: input.prompt, model, inputUrls, parameters: input.parameters ?? {} }, update => { void updateJob(id, update) }).catch(error => { void updateJob(id, { status: 'failed', progress: 0, error: error instanceof Error ? error.message : 'Generation failed' }) })
   return reply.code(202).send({ id, status: 'queued', progress: 0, model, provider: generationProvider.name })
 })
 
@@ -173,6 +195,9 @@ function getAll(sql: string, values: Array<string | number>) { const statement =
 function ownsProject(projectId: string, userId: string) { return Boolean(getOne('SELECT id FROM projects WHERE id = ? AND user_id = ?', [projectId, userId])) }
 function ensureColumn(table: string, column: string, definition: string) { const columns = getAll(`PRAGMA table_info(${table})`, []); if (!columns.some(item => item.name === column)) database.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`) }
 function normalizeEmail(value: unknown) { return String(value ?? '').trim().toLowerCase() }
+function newInviteCode() { let code = ''; do code = `VIO-${randomBytes(4).toString('hex').toUpperCase()}`; while (getOne('SELECT id FROM users WHERE invite_code = ?', [code])); return code }
+function availableUsername(preferred: string) { const base = preferred.trim() || 'user'; let username = base, suffix = 1; while (getOne('SELECT id FROM users WHERE lower(username) = ?', [username.toLowerCase()])) username = `${base}${suffix++}`; return username }
+function normalizeHttpUrl(value: unknown) { try { const url = new URL(String(value ?? '').trim()); return ['http:','https:'].includes(url.protocol) ? url.toString().replace(/\/$/,'') : '' } catch { return '' } }
 function validEmail(email: string) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 254 }
 function assetDisposition(name: string) { const safe = name.replace(/[\r\n]/g, '').slice(0, 240) || 'asset'; return `inline; filename="asset"; filename*=UTF-8''${encodeURIComponent(safe)}` }
 function namedAssetUrl(id: string, name: string, isPublic = false) { const safe = name.replace(/[\r\n/\\]/g, '').slice(0, 240) || 'asset'; return `/api/${isPublic ? 'public/' : ''}assets/${id}/content/${encodeURIComponent(safe)}` }
@@ -185,7 +210,7 @@ function secureTextEqual(actual: string, expected: string) { const left = create
 function sessionId(token: string) { return createHash('sha256').update(token).digest('hex') }
 function sessionToken(request: FastifyRequest) { const cookie = String(request.headers.cookie ?? '').split(';').map(part => part.trim()).find(part => part.startsWith('flow_session=')); return cookie ? decodeURIComponent(cookie.slice('flow_session='.length)) : '' }
 function createSession(userId: string, createdAt = new Date().toISOString()) { const token = randomBytes(32).toString('base64url'), expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); database.run('DELETE FROM sessions WHERE expires_at <= ?', [createdAt]); database.run('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)', [sessionId(token), userId, createdAt, expiresAt]); return token }
-function currentUser(request: FastifyRequest) { const token = sessionToken(request); if (!token) return undefined; return getOne(`SELECT users.id, users.name, users.email, users.created_at AS createdAt FROM sessions JOIN users ON users.id = sessions.user_id
+function currentUser(request: FastifyRequest) { const token = sessionToken(request); if (!token) return undefined; return getOne(`SELECT users.id, users.name, users.username, users.email, users.invite_code AS inviteCode, users.created_at AS createdAt FROM sessions JOIN users ON users.id = sessions.user_id
   WHERE sessions.id = ? AND sessions.expires_at > ?`, [sessionId(token), new Date().toISOString()]) }
 function requireUser(request: FastifyRequest, reply: FastifyReply) { const user = currentUser(request); if (!user) { void reply.code(401).send({ error: 'Unauthorized' }); return undefined } return user }
 function secureRequest(request: FastifyRequest) { const proto = request.headers['x-forwarded-proto']; return (Array.isArray(proto) ? proto[0] : proto) === 'https' }

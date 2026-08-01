@@ -4,10 +4,15 @@ type Payload = Record<string, unknown>
 
 export class OpenAiVideoProvider implements GenerationProvider {
   readonly name = 'openai-video'
-  private readonly baseUrl = required('OPENAI_VIDEO_BASE_URL', process.env.OPENAI_IMAGE_BASE_URL).replace(/\/$/, '')
-  private readonly apiKey = required('OPENAI_VIDEO_API_KEY', process.env.OPENAI_IMAGE_API_KEY)
+  private readonly baseUrl: string
+  private readonly apiKey: string
   private readonly pollInterval = Number(process.env.OPENAI_VIDEO_POLL_INTERVAL_MS || 5000)
   private readonly timeout = Number(process.env.OPENAI_VIDEO_TIMEOUT_MS || 900000)
+
+  constructor(config?: { baseUrl: string; apiKey: string }) {
+    this.baseUrl = (config?.baseUrl || required('OPENAI_VIDEO_BASE_URL', process.env.OPENAI_IMAGE_BASE_URL)).replace(/\/$/, '')
+    this.apiKey = config?.apiKey || required('OPENAI_VIDEO_API_KEY', process.env.OPENAI_IMAGE_API_KEY)
+  }
   private readonly publicBaseUrl = (process.env.GENERATION_PUBLIC_BASE_URL || '').replace(/\/$/, '')
 
   async run(input: GenerationInput, onUpdate: (update: GenerationUpdate) => void) {
