@@ -3,6 +3,7 @@ import initSqlJs, { type Database } from 'sql.js'
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { createGenerationProvider, type GenerationUpdate } from './providers/index.js'
+import { ProxyAgent, fetch as undiciFetch } from 'undici'
 
 type CanvasPayload = { nodes: unknown[]; links: unknown[]; camera?: unknown }
 type JobInput = { projectId?: string; nodeId: number; kind: 'image' | 'video'; prompt: string; model?: string; inputUrls?: string[]; parameters?: Record<string, unknown> }
@@ -36,6 +37,10 @@ persist()
 
 const app = Fastify({ logger: true, bodyLimit: 150 * 1024 * 1024 })
 app.get('/health', async () => ({ ok: true, service: 'flow-studio-api', generationProvider: generationProvider.name }))
+app.get('/generation/capabilities', async () => generationProvider.capabilities ?? {
+  image: { provider: generationProvider.name, defaultModel: process.env.OPENAI_IMAGE_DEFAULT_MODEL || 'gpt-image-2' },
+  video: { provider: generationProvider.name, defaultModel: process.env.AGNES_VIDEO_DEFAULT_MODEL || 'agnes-video-v2.0', seconds: { min: 1, max: 18, default: 5 }, resolutions: ['480p', '720p', '1080p'], aspectRatios: ['1:1', '4:3', '16:9'] },
+})
 app.post('/client-logs', async request => {
   const input = request.body as { event?: string; details?: unknown; userAgent?: string; path?: string; timestamp?: string }
   app.log.warn({ clientDiagnostic: { event: String(input.event ?? 'unknown').slice(0, 100), details: input.details, userAgent: String(input.userAgent ?? '').slice(0, 500), path: String(input.path ?? '').slice(0, 300), timestamp: input.timestamp } }, 'client diagnostic')
@@ -84,7 +89,7 @@ app.post('/jobs', async (request, reply) => {
   if (!input.prompt?.trim()) return reply.code(400).send({ error: 'Prompt is required' })
   const projectId = input.projectId ?? defaultProjectId
   if (!ownsProject(projectId)) return reply.code(404).send({ error: 'Project not found' })
-  const id = randomUUID(), now = new Date().toISOString(), model = input.model ?? (input.kind === 'video' ? 'Kling 2.1' : 'Flux 1.1 Pro')
+  const id = randomUUID(), now = new Date().toISOString(), model = input.model ?? (input.kind === 'video' ? process.env.AGNES_VIDEO_DEFAULT_MODEL || 'agnes-video-v2.0' : process.env.OPENAI_IMAGE_DEFAULT_MODEL || 'gpt-image-2')
   database.run('INSERT INTO jobs (id, project_id, user_id, node_id, kind, prompt, model, status, progress, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [id, projectId, developmentUserId, input.nodeId, input.kind, input.prompt, model, 'queued', 0, now, now])
   persist()
   void generationProvider.run({ internalJobId: id, projectId, nodeId: input.nodeId, kind: input.kind, prompt: input.prompt, model, inputUrls: input.inputUrls ?? [], parameters: input.parameters ?? {} }, update => { void updateJob(id, update) }).catch(error => { void updateJob(id, { status: 'failed', progress: 0, error: error instanceof Error ? error.message : 'Generation failed' }) })
@@ -129,7 +134,8 @@ async function archiveJobResult(jobId: string, source: string) {
     mimeType = match[1]; bytes = Buffer.from(match[2], 'base64')
   } else {
     const url = source.startsWith('/api/') ? `http://127.0.0.1:${process.env.PORT ?? 3000}/${source.slice(5)}` : source
-    const response = await fetch(url, { signal: AbortSignal.timeout(120000) })
+    const proxyUrl = String(job.kind) === 'video' ? process.env.AGNES_VIDEO_HTTPS_PROXY : process.env.OPENAI_IMAGE_HTTPS_PROXY
+    const response = proxyUrl ? await undiciFetch(url, { signal: AbortSignal.timeout(120000), dispatcher: new ProxyAgent(proxyUrl) }) : await fetch(url, { signal: AbortSignal.timeout(120000) })
     if (!response.ok) throw new Error(`下载生成结果失败（${response.status}）`)
     mimeType = response.headers.get('content-type')?.split(';')[0] || (String(job.kind) === 'video' ? 'video/mp4' : 'image/png')
     bytes = Buffer.from(await response.arrayBuffer())

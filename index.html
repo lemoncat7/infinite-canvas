@@ -36,7 +36,7 @@
     </aside>
     <div class="zoom-slider-wrap"><button id="zoom-out" type="button" aria-label="缩小">−</button><input id="zoom-slider" type="range" min="30" max="250" value="100" aria-label="画布缩放" /><output id="zoom-percent">100%</output><button id="zoom-in" type="button" aria-label="放大">＋</button></div>
     <nav class="canvas-dock" aria-label="画布工具">
-      <button data-add="prompt" type="button"><b>T</b><span>文字</span></button>
+      <button data-add="prompt" type="button"><b>T</b><span>标签</span></button>
       <button data-add="image" type="button"><b>▧</b><span>图片</span></button>
       <button data-add="video" type="button"><b>▶</b><span>视频</span></button>
       <i></i>
@@ -48,9 +48,11 @@
     <div id="panel-backdrop" class="panel-backdrop"></div>
     <aside id="projects-panel" class="workspace-panel glass"><header><div><span>WORKSPACE</span><h2>项目管理</h2></div><button class="panel-close" type="button">×</button></header><button id="new-project" class="panel-primary" type="button">＋ 新建项目</button><div class="panel-section-title">最近项目</div><div id="project-list" class="project-list"><button class="project-card active" type="button"><i>∞</i><span><strong>未命名项目</strong><small>刚刚更新 · 当前画布</small></span><b>进入</b></button></div></aside>
     <aside id="assets-panel" class="workspace-panel glass"><header><div><span>LIBRARY</span><h2>资产库</h2></div><button class="panel-close" type="button">×</button></header><input id="asset-upload" type="file" accept="image/*,video/*" multiple hidden><button id="upload-assets" class="panel-primary" type="button">↑ 上传图片或视频</button><div class="panel-section-title"><span>全部资产</span><small id="asset-count">0 项</small></div><div id="asset-grid" class="asset-grid"><div class="asset-empty"><b>◇</b><span>还没有素材</span><small>上传后可用于图生图与视频生成</small></div></div></aside>
-    <div id="asset-preview" class="asset-preview" role="dialog" aria-modal="true"><button id="close-preview" type="button" aria-label="关闭">×</button><div class="preview-stage"><img id="preview-image" alt="素材预览"><div><strong id="preview-name"></strong><span>单击素材可放到画布，右击查看更多操作</span></div></div></div>
+    <div id="asset-preview" class="asset-preview" role="dialog" aria-modal="true"><button id="close-preview" type="button" aria-label="关闭">×</button><div class="preview-stage"><img id="preview-image" alt="素材预览"><video id="preview-video" controls playsinline preload="metadata" hidden></video><div><strong id="preview-name"></strong><span>单击素材可放到画布，右击查看更多操作</span></div></div></div>
     <div id="node-info-modal" class="node-info-modal" role="dialog" aria-modal="true" aria-labelledby="node-info-title"><section><header><h2 id="node-info-title">节点信息</h2><button id="close-node-info" type="button" aria-label="关闭">×</button></header><nav><button class="active" data-info-tab="details" type="button">信息</button><button data-info-tab="json" type="button">JSON</button></nav><div id="node-info-details" class="node-info-details"></div><pre id="node-info-json" hidden></pre></section></div>
     <div id="asset-context-menu" class="context-menu glass" role="menu"><div class="context-title">素材操作</div><button id="asset-context-place">＋ <span>放到画布</span></button><button id="asset-context-preview">⌕ <span>放大查看</span></button><i></i><button id="asset-context-delete" class="context-danger">⌫ <span>删除素材</span></button></div>
+    <div id="link-context-menu" class="context-menu glass" role="menu"><div class="context-title">连线操作</div><button id="link-context-delete" class="context-danger">⌫ <span>删除连线</span></button></div>
+    <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

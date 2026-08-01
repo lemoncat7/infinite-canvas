@@ -8,7 +8,7 @@ export class OpenAiImageProvider implements GenerationProvider {
   private readonly apiKey = required('OPENAI_IMAGE_API_KEY')
 
   async run(input: GenerationInput, onUpdate: (update: GenerationUpdate) => void) {
-    if (input.kind !== 'image') throw new Error('当前 CPA Provider 暂时只启用了生图')
+    if (input.kind !== 'image') throw new Error('OpenAI Image Adapter 仅支持图片任务')
     onUpdate({ status: 'running', progress: 15 })
     const response = input.inputUrls?.length ? await this.edit(input) : await this.create(input)
     const payload = await response.json() as ImageResponse
@@ -22,16 +22,20 @@ export class OpenAiImageProvider implements GenerationProvider {
   }
 
   private create(input: GenerationInput) {
+    const parameters = input.parameters ?? {}
+    console.info('[image-generation]', { mode: 'create', model: input.model || 'gpt-image-2', size: parameters.size ?? 'auto', quality: parameters.quality ?? 'auto' })
     return fetch(`${this.baseUrl}/v1/images/generations`, {
       method: 'POST', headers: { authorization: `Bearer ${this.apiKey}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: input.model || 'gpt-image-2', prompt: input.prompt, ...(input.parameters ?? {}) }), signal: this.timeoutSignal(),
+      body: JSON.stringify({ model: input.model || 'gpt-image-2', prompt: input.prompt, n: 1, response_format: 'b64_json', output_format: 'png', ...parameters }), signal: this.timeoutSignal(),
     })
   }
 
   private async edit(input: GenerationInput) {
     const form = new FormData()
-    form.set('model', input.model || 'gpt-image-2'); form.set('prompt', input.prompt)
-    for (const [key, value] of Object.entries(input.parameters ?? {})) form.set(key, String(value))
+    const parameters = input.parameters ?? {}
+    console.info('[image-generation]', { mode: 'edit', model: input.model || 'gpt-image-2', size: parameters.size ?? 'auto', quality: parameters.quality ?? 'auto' })
+    form.set('model', input.model || 'gpt-image-2'); form.set('prompt', input.prompt); form.set('n', '1'); form.set('response_format', 'b64_json'); form.set('output_format', 'png')
+    for (const [key, value] of Object.entries(parameters)) form.set(key, String(value))
     for (const [index, source] of (input.inputUrls ?? []).entries()) {
       const url = source.startsWith('/api/') ? `http://127.0.0.1:${process.env.PORT ?? 3000}/${source.slice(5)}` : source
       const image = await fetch(url, { signal: AbortSignal.timeout(120000) })
