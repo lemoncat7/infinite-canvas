@@ -57,7 +57,9 @@ app.get('/mock/:file', async (request, reply) => {
   return reply.type('image/svg+xml').header('cache-control', 'no-store').send(svg)
 })
 app.post('/auth/register', async (request, reply) => {
-  const body = request.body as { name?: string; email?: string; password?: string }, name = String(body.name ?? '').trim(), email = normalizeEmail(body.email), password = String(body.password ?? '')
+  const body = request.body as { name?: string; email?: string; password?: string; inviteCode?: string }, name = String(body.name ?? '').trim(), email = normalizeEmail(body.email), password = String(body.password ?? ''), inviteCode = String(body.inviteCode ?? '').trim(), configuredInviteCode = String(process.env.REGISTRATION_INVITE_CODE ?? '').trim()
+  if (!configuredInviteCode) return reply.code(503).send({ error: '注册暂未开放' })
+  if (!secureTextEqual(inviteCode, configuredInviteCode)) return reply.code(403).send({ error: '邀请码无效' })
   if (name.length < 2 || name.length > 40) return reply.code(400).send({ error: '昵称长度需要在 2 到 40 个字符之间' })
   if (!validEmail(email)) return reply.code(400).send({ error: '请输入有效邮箱' })
   if (password.length < 8 || password.length > 128) return reply.code(400).send({ error: '密码至少需要 8 个字符' })
@@ -149,6 +151,7 @@ function normalizeEmail(value: unknown) { return String(value ?? '').trim().toLo
 function validEmail(email: string) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 254 }
 function hashPassword(password: string) { const salt = randomBytes(16).toString('hex'), digest = scryptSync(password, salt, 64).toString('hex'); return `scrypt:${salt}:${digest}` }
 function verifyPassword(password: string, stored: string) { const [, salt, expected] = stored.split(':'); if (!salt || !expected) return false; try { const actual = scryptSync(password, salt, 64), expectedBytes = Buffer.from(expected, 'hex'); return actual.length === expectedBytes.length && timingSafeEqual(actual, expectedBytes) } catch { return false } }
+function secureTextEqual(actual: string, expected: string) { const left = createHash('sha256').update(actual).digest(), right = createHash('sha256').update(expected).digest(); return timingSafeEqual(left, right) }
 function sessionId(token: string) { return createHash('sha256').update(token).digest('hex') }
 function sessionToken(request: FastifyRequest) { const cookie = String(request.headers.cookie ?? '').split(';').map(part => part.trim()).find(part => part.startsWith('flow_session=')); return cookie ? decodeURIComponent(cookie.slice('flow_session='.length)) : '' }
 function createSession(userId: string, createdAt = new Date().toISOString()) { const token = randomBytes(32).toString('base64url'), expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); database.run('DELETE FROM sessions WHERE expires_at <= ?', [createdAt]); database.run('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)', [sessionId(token), userId, createdAt, expiresAt]); return token }
