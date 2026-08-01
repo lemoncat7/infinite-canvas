@@ -305,7 +305,7 @@ function syncDomNodes() {
     }
     if (node.kind === 'video') {
       const count = (node.role !== 'result' && node.mediaUrl ? 1 : 0) + links.filter(link => link.from === node.id).map(link => nodes.find(item => item.id === link.to)).filter(item => item?.kind === 'video' && item.role === 'result' && item.status === 'succeeded').length
-      element.querySelector<HTMLElement>('.video-generation-count')!.textContent = node.role === 'result' ? '生成结果' : `已生成 ${count} 个视频`
+      element.querySelector<HTMLElement>('.video-generation-count')!.textContent = node.role === 'result' ? node.status === 'queued' ? '任务排队中' : node.status === 'running' ? `生成中 ${Math.round(node.progress ?? 0)}%` : node.status === 'failed' ? '生成失败' : '生成结果' : `已生成 ${count} 个视频`
       element.querySelector<HTMLElement>('.video-result-model')!.textContent = node.model ?? '未知模型'
       const description = videoPanel.querySelector<HTMLTextAreaElement>('[data-video-description]')!; if (document.activeElement !== description) description.value = node.body
       videoPanel.querySelector<HTMLInputElement>('[data-video-model]')!.value = node.model ?? 'agnes-video-v2.0'
@@ -329,8 +329,8 @@ function syncDomNodes() {
       delete media.dataset.hasMedia; delete media.dataset.sourceKey; media.style.removeProperty('background-image'); const video = element.querySelector<HTMLVideoElement>('.node-media-video')!; video.hidden = true; video.removeAttribute('src')
       const mediaCanvas = element.querySelector<HTMLCanvasElement>('.node-media-canvas')!; mediaCanvas.getContext('2d')!.clearRect(0, 0, mediaCanvas.width, mediaCanvas.height)
     }
-    const progress = element.querySelector<HTMLElement>('.node-progress i')!; progress.style.width = `${node.progress ?? 0}%`
-    element.querySelector<HTMLElement>('.node-progress')!.classList.toggle('visible', locked)
+    const progress = element.querySelector<HTMLElement>('.node-progress i')!, progressTrack = element.querySelector<HTMLElement>('.node-progress')!, waitingWithoutProgress = locked && (node.status === 'queued' || Number(node.progress ?? 0) <= 0); progress.style.width = waitingWithoutProgress ? '100%' : `${node.progress ?? 0}%`
+    progressTrack.classList.toggle('visible', locked); progressTrack.classList.toggle('indeterminate', waitingWithoutProgress)
   }
 }
 
