@@ -44,7 +44,7 @@ window.addEventListener('error', event => clientLog('window-error', { message: e
 window.addEventListener('unhandledrejection', event => clientLog('unhandled-rejection', { reason: event.reason instanceof Error ? { message: event.reason.message, stack: event.reason.stack } : String(event.reason) }))
 const interruptedThemeTransition = sessionStorage.getItem('flow-theme-transition-inflight')
 if (interruptedThemeTransition) { sessionStorage.removeItem('flow-theme-transition-inflight'); try { clientLog('theme-transition-interrupted', JSON.parse(interruptedThemeTransition)) } catch { clientLog('theme-transition-interrupted', { raw: interruptedThemeTransition }) } }
-let domDrag: { id: number; startX: number; startY: number; initialX: number; initialY: number; element: HTMLElement; moved: boolean } | null = null
+let domDrag: { id: number; pointerId: number; startX: number; startY: number; initialX: number; initialY: number; element: HTMLElement; moved: boolean } | null = null
 let domDragFrame: number | null = null
 let suppressNodeReleaseUntil = 0
 let domResize: { id: number; startX: number; startY: number; width: number; height: number } | null = null
@@ -56,6 +56,8 @@ let drawFrame: number | null = null
 let cameraFrame: number | null = null
 let zoomTarget = camera.zoom
 let zoomAnchor: Point = { x: innerWidth / 2, y: innerHeight / 2 }
+const canvasTouches = new Map<number, Point>()
+let pinchGesture: { distance:number; center:Point } | null = null
 const imageCache = new Map<string, HTMLImageElement>()
 const pendingMediaLoads = new Set<string>()
 function modelDisplayName(value?: string) { if (!value?.startsWith('custom:')) return value || ''; return customApiModels.find(item => `custom:${item.id}` === value)?.name || '自定义模型' }
@@ -279,8 +281,15 @@ function hitLink(sx: number, sy: number) {
 function drawPendingLink() { if (!connecting) return; const node = nodes.find(item => item.id === connecting!.nodeId); if (!node) return; const a = screen(portWorld(node, connecting.side)), b = connecting.pointer; ctx.beginPath(); ctx.moveTo(a.x, a.y); const distance = Math.max(55, Math.hypot(b.x - a.x, b.y - a.y) * .3), control = controlPoint(a, connecting.side, distance); ctx.quadraticCurveTo(control.x, control.y, b.x, b.y); ctx.strokeStyle = node.accent; ctx.lineWidth = 2; ctx.setLineDash([6, 5]); ctx.stroke(); ctx.setLineDash([]); if (connectionSnap) { ctx.beginPath(); ctx.arc(b.x, b.y, 10, 0, Math.PI * 2); ctx.fillStyle = 'rgba(47,128,255,.16)'; ctx.fill(); ctx.beginPath(); ctx.arc(b.x, b.y, 5, 0, Math.PI * 2); ctx.fillStyle = '#2f80ff'; ctx.fill() } }
 function paint() { drawFrame = null; ctx.fillStyle = colorTheme === 'dark' ? '#0b1113' : '#eef3ef'; ctx.fillRect(0, 0, innerWidth, innerHeight); drawGrid(); links.forEach(drawLink); drawPendingLink(); syncDomNodes(); zoomSlider.value = String(Math.round(camera.zoom * 100)); zoomSlider.title = `${Math.round(camera.zoom * 100)}%`; zoomPercent.value = `${Math.round(camera.zoom * 100)}%`; nodeCount.textContent = String(nodes.length); if (links.some(linkIsGenerating)) draw() }
 function draw() { if (drawFrame === null) drawFrame = requestAnimationFrame(paint) }
-function resize() { const ratio = devicePixelRatio || 1; canvas.width = innerWidth * ratio; canvas.height = innerHeight * ratio; canvas.style.width = `${innerWidth}px`; canvas.style.height = `${innerHeight}px`; ctx.setTransform(ratio, 0, 0, ratio, 0, 0); draw() }
+function resize() { const ratio = Math.min(devicePixelRatio || 1, innerWidth <= 780 ? 1.5 : 2); canvas.width = innerWidth * ratio; canvas.height = innerHeight * ratio; canvas.style.width = `${innerWidth}px`; canvas.style.height = `${innerHeight}px`; ctx.setTransform(ratio, 0, 0, ratio, 0, 0); draw() }
 function setZoom(next: number, anchor = { x: innerWidth / 2, y: innerHeight / 2 }) { const old = camera.zoom; next = Math.min(2.5, Math.max(.3, next)); const cx = innerWidth / 2 + camera.x, cy = innerHeight / 2 + camera.y; camera.x += (anchor.x - cx) * (1 - next / old); camera.y += (anchor.y - cy) * (1 - next / old); camera.zoom = next; draw() }
+function currentPinch() { const points=[...canvasTouches.values()].slice(0,2);if(points.length<2)return null;const [a,b]=points;return{distance:Math.max(1,Math.hypot(b.x-a.x,b.y-a.y)),center:{x:(a.x+b.x)/2,y:(a.y+b.y)/2}} }
+function cancelSingleTouchActions() { pointer.down=false;pointer.draggingNode=null;canvas.classList.remove('dragging');connecting=null;connectionSnap=null;if(domDrag){domDrag.element.classList.remove('dragging');domDrag=null}if(domDragFrame!==null)cancelAnimationFrame(domDragFrame);domDragFrame=null }
+document.addEventListener('pointerdown',event=>{if(event.pointerType!=='touch'||!(event.target as HTMLElement|null)?.closest('#canvas,.flow-node'))return;canvasTouches.set(event.pointerId,{x:event.clientX,y:event.clientY});if(canvasTouches.size<2)return;event.preventDefault();event.stopImmediatePropagation();cancelSingleTouchActions();pinchGesture=currentPinch();zoomTarget=camera.zoom},{capture:true,passive:false})
+document.addEventListener('pointermove',event=>{if(!canvasTouches.has(event.pointerId))return;canvasTouches.set(event.pointerId,{x:event.clientX,y:event.clientY});if(!pinchGesture||canvasTouches.size<2)return;event.preventDefault();event.stopImmediatePropagation();const next=currentPinch();if(!next)return;const previous=pinchGesture,scale=next.distance/previous.distance;setZoom(camera.zoom*scale,next.center);camera.x+=next.center.x-previous.center.x;camera.y+=next.center.y-previous.center.y;zoomTarget=camera.zoom;pinchGesture=next;draw()},{capture:true,passive:false})
+function endCanvasTouch(event:PointerEvent){if(!canvasTouches.has(event.pointerId))return;const wasPinching=Boolean(pinchGesture);canvasTouches.delete(event.pointerId);if(!wasPinching)return;event.preventDefault();event.stopImmediatePropagation();pinchGesture=canvasTouches.size>=2?currentPinch():null;cancelSingleTouchActions();draw()}
+document.addEventListener('pointerup',endCanvasTouch,{capture:true,passive:false})
+document.addEventListener('pointercancel',endCanvasTouch,{capture:true,passive:false})
 function smoothZoom(next: number, anchor: Point) {
   zoomTarget = Math.min(2.5, Math.max(.3, next)); zoomAnchor = anchor
   if (cameraFrame !== null) return
@@ -433,13 +442,13 @@ function createDomNode(node: FlowNode) {
   element.querySelectorAll('.image-model-picker > summary > i,.image-config-panel footer > details:not(.image-model-picker) > summary > i').forEach(icon => icon.remove())
   element.querySelector<HTMLElement>('.image-settings-popover')!.innerHTML = `<header><span>图像设置</span><small>调整输出质量与画面比例</small></header><section class="image-setting-section"><b>质量</b><div class="image-quality-options"><button type="button" data-image-setting="quality" data-value="auto">自动</button><button type="button" data-image-setting="quality" data-value="high">高</button><button type="button" data-image-setting="quality" data-value="medium">中</button><button type="button" data-image-setting="quality" data-value="low">低</button></div><select data-image-field="quality" hidden><option value="auto">自动</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select></section><section class="image-setting-section"><b>尺寸 <small>可直接输入自定义宽高</small></b><div class="image-dimension-inputs"><label><span>W</span><input type="number" min="1" max="3840" placeholder="自动" data-image-width></label><i>×</i><label><span>H</span><input type="number" min="1" max="3840" placeholder="自动" data-image-height></label></div></section><section class="image-setting-section"><b>长宽比</b><div class="image-aspect-options"><button type="button" data-image-setting="size" data-value="auto"><i class="aspect-auto">A</i><span>自动</span></button><button type="button" data-image-setting="size" data-value="1024x1024"><i class="aspect-square"></i><span>1:1</span></button><button type="button" data-image-setting="size" data-value="1344x1008"><i class="aspect-4-3"></i><span>4:3</span></button><button type="button" data-image-setting="size" data-value="1008x1344"><i class="aspect-3-4"></i><span>3:4</span></button><button type="button" data-image-setting="size" data-value="1536x1024"><i class="aspect-landscape"></i><span>3:2</span></button><button type="button" data-image-setting="size" data-value="1024x1536"><i class="aspect-portrait"></i><span>2:3</span></button><button type="button" data-image-setting="size" data-value="1536x864"><i class="aspect-16-9"></i><span>16:9</span></button><button type="button" data-image-setting="size" data-value="864x1536"><i class="aspect-9-16"></i><span>9:16</span></button><button type="button" data-custom-size><i class="aspect-auto">✎</i><span>自定义</span></button></div><select data-image-field="size" hidden><option value="auto">自动</option><option value="1024x1024">1:1</option><option value="1344x1008">4:3</option><option value="1008x1344">3:4</option><option value="1536x1024">3:2</option><option value="1024x1536">2:3</option><option value="1536x864">16:9</option><option value="864x1536">9:16</option></select><p class="image-size-notice">尺寸设置可能因接口兼容性不生效，可在提示词中同时指定画面比例。</p></section><section class="image-setting-section image-background-setting"><span><b>透明背景</b><small>仅部分模型支持</small></span><button type="button" data-image-setting="background" data-value="transparent" aria-label="透明背景"><i></i></button><select data-image-field="background" hidden><option value="auto">自动</option><option value="transparent">透明</option><option value="opaque">不透明</option></select></section>`
   const settingsPopover = element.querySelector<HTMLElement>('.image-settings-popover')!; settingsPopover.querySelector('[data-image-width]')?.closest('.image-setting-section')?.remove(); settingsPopover.querySelector('[data-custom-size]')?.remove(); settingsPopover.querySelector('header small')!.textContent = '常用画面比例与输出规格'
-  element.addEventListener('mousedown', event => {
-    if (event.button !== 0) return
+  element.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || domDrag) return
     const target = event.target as HTMLElement
     if (target.closest('button,.node-port,.image-config-panel') || target.closest('.node-copy[contenteditable="true"]')) return
     event.preventDefault(); event.stopPropagation(); selectedId = node.id; updateEditor()
     if (node.status === 'queued' || node.status === 'running') { draw(); return }
-    domDrag = { id: node.id, startX: event.clientX, startY: event.clientY, initialX: node.x, initialY: node.y, element, moved: false }; element.classList.add('dragging'); draw()
+    element.setPointerCapture(event.pointerId); domDrag = { id: node.id, pointerId:event.pointerId, startX: event.clientX, startY: event.clientY, initialX: node.x, initialY: node.y, element, moved: false }; element.classList.add('dragging'); draw()
   })
   element.addEventListener('dblclick', event => {
     if (performance.now() < suppressNodeReleaseUntil) { event.preventDefault(); event.stopPropagation(); return }
@@ -543,8 +552,8 @@ window.addEventListener('pointerup', event => {
   if (target) { const next = connecting.side === 'left' ? { from: target.node.id, to: connecting.nodeId, fromSide: target.side, toSide: connecting.side } : { from: connecting.nodeId, to: target.node.id, fromSide: connecting.side, toSide: target.side }; if (!links.some(link => link.from === next.from && link.to === next.to)) links.push(next); scheduleSave() }
   connecting = null; connectionSnap = null; draw()
 })
-window.addEventListener('mousemove', event => {
-  if (!domDrag) return
+window.addEventListener('pointermove', event => {
+  if (!domDrag || event.pointerId !== domDrag.pointerId) return
   // Edge can report a final mousemove with buttons=0 before mouseup. Keep the
   // release guarded here too, otherwise its synthetic drop/click may navigate
   // to the image URL after a node drag.
@@ -559,14 +568,15 @@ window.addEventListener('mousemove', event => {
   if (domDragFrame !== null) cancelAnimationFrame(domDragFrame)
   domDragFrame = requestAnimationFrame(() => { const node = nodes.find(item => item.id === drag.id); if (node) { node.x = drag.initialX + dx; node.y = drag.initialY + dy; setSaveState('editing', '编辑中…'); draw() } domDragFrame = null })
 })
-window.addEventListener('mouseup', event => {
-  if (!domDrag || event.button !== 0) return
+window.addEventListener('pointerup', event => {
+  if (!domDrag || event.pointerId !== domDrag.pointerId || event.button !== 0) return
   if (domDragFrame !== null) { cancelAnimationFrame(domDragFrame); domDragFrame = null }
   const drag = domDrag, node = nodes.find(item => item.id === drag.id)
   if (node && drag.moved) { node.x = drag.initialX + (event.clientX - drag.startX) / camera.zoom; node.y = drag.initialY + (event.clientY - drag.startY) / camera.zoom }
   if (drag.moved) suppressNodeReleaseUntil = performance.now() + 700
   drag.element.classList.remove('dragging'); domDrag = null; scheduleSave(); draw()
 })
+window.addEventListener('pointercancel', event => { if (!domDrag || event.pointerId !== domDrag.pointerId) return; domDrag.element.classList.remove('dragging'); domDrag = null; if (domDragFrame !== null) cancelAnimationFrame(domDragFrame); domDragFrame = null; draw() })
 window.addEventListener('blur', () => { if (domDrag) domDrag.element.classList.remove('dragging'); domDrag = null; if (domDragFrame !== null) cancelAnimationFrame(domDragFrame); domDragFrame = null })
 window.addEventListener('dragstart', event => { if ((event.target as HTMLElement | null)?.closest('.flow-node,.asset-item')) { event.preventDefault(); event.stopImmediatePropagation(); if (event.dataTransfer) event.dataTransfer.clearData() } }, true)
 window.addEventListener('dragend', event => { if ((event.target as HTMLElement | null)?.closest('.flow-node,.asset-item')) { event.preventDefault(); event.stopImmediatePropagation() } }, true)
@@ -783,62 +793,11 @@ quickNodeMenu.querySelector<HTMLButtonElement>('[data-quick-upload]')!.addEventL
 const appearanceButton = document.querySelector<HTMLButtonElement>('#dock-appearance')!
 let themeTransitioning = false
 function refreshAppearanceButton() { appearanceButton.disabled = themeTransitioning || pendingMediaLoads.size > 0; appearanceButton.title = pendingMediaLoads.size ? `等待 ${pendingMediaLoads.size} 个图片资源加载完成` : '切换画布外观' }
-const themeLockDuration = 1400
-function releaseThemeLock(startedAt: number) {
-  const remaining = Math.max(0, themeLockDuration - (performance.now() - startedAt))
-  window.setTimeout(() => { sessionStorage.removeItem('flow-theme-transition-inflight'); themeTransitioning = false; refreshAppearanceButton(); clientLog('theme-transition-complete', { duration: Math.round(performance.now() - startedAt), theme: colorTheme }) }, remaining)
-}
-appearanceButton.addEventListener('click', () => {
-  if (themeTransitioning) return
-  const transitionStartedAt = performance.now()
-  themeTransitioning = true
-  appearanceButton.disabled = true
-  sessionStorage.setItem('flow-theme-transition-inflight', JSON.stringify({ startedAt: Date.now(), from: colorTheme, projectId: currentProjectId }))
-  clientLog('theme-transition-start', { from: colorTheme, projectId: currentProjectId, mediaCount: nodes.filter(node => node.mediaUrl).length })
-  const rect = appearanceButton.getBoundingClientRect()
-  const x = rect.left + rect.width / 2
-  const y = rect.top + rect.height / 2
-  const radius = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y))
-  document.documentElement.style.setProperty('--theme-x', `${x}px`)
-  document.documentElement.style.setProperty('--theme-y', `${y}px`)
-  document.documentElement.style.setProperty('--theme-radius', `${radius}px`)
-  const applyTheme = () => {
-    colorTheme = colorTheme === 'dark' ? 'light' : 'dark'
-    document.body.dataset.theme = colorTheme
-    localStorage.setItem('flow-theme', colorTheme)
-    repaintAllMedia()
-    paint()
-  }
-  if (/Edg\//.test(navigator.userAgent)) {
-    clientLog('theme-transition-edge-native-disabled', { reason: 'renderer-crash-code-5', from: colorTheme })
-    document.body.classList.add('edge-theme-fade')
-    window.setTimeout(() => {
-      applyTheme(); document.documentElement.style.background = colorTheme === 'dark' ? '#181715' : '#f4f2ed'
-      document.body.classList.add('edge-theme-return'); document.body.classList.remove('edge-theme-fade')
-      window.setTimeout(() => { document.body.classList.remove('edge-theme-return'); releaseThemeLock(transitionStartedAt) }, 160)
-    }, 130)
-    return
-  }
-  const transitionDocument = document as Document & { startViewTransition?: (callback: () => void) => { ready: Promise<void>; finished: Promise<void> } }
-  if (!transitionDocument.startViewTransition || matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    applyTheme()
-    releaseThemeLock(transitionStartedAt)
-    return
-  }
-  try {
-    const transition = transitionDocument.startViewTransition(applyTheme)
-    transition.ready.then(() => {
-      document.documentElement.animate([
-        { clipPath: `circle(0px at ${x}px ${y}px)` },
-        { clipPath: `circle(${radius}px at ${x}px ${y}px)` },
-      ], { duration: 560, easing: 'cubic-bezier(.2,.72,.2,1)', fill: 'both', pseudoElement: '::view-transition-new(root)' } as KeyframeAnimationOptions)
-    }).catch(error => clientLog('theme-transition-ready-failed', { message: error instanceof Error ? error.message : String(error) }))
-    transition.finished.catch(error => clientLog('theme-transition-finished-failed', { message: error instanceof Error ? error.message : String(error) })).finally(() => releaseThemeLock(transitionStartedAt))
-  } catch (error) {
-    clientLog('theme-transition-start-failed', { message: error instanceof Error ? error.message : String(error) })
-    applyTheme()
-    releaseThemeLock(transitionStartedAt)
-  }
+appearanceButton.addEventListener('click',()=>{
+  if(themeTransitioning||appearanceButton.disabled)return
+  themeTransitioning=true;refreshAppearanceButton();document.body.classList.add('theme-click-fade')
+  window.setTimeout(()=>{colorTheme=colorTheme==='dark'?'light':'dark';document.body.dataset.theme=colorTheme;localStorage.setItem('flow-theme',colorTheme);repaintAllMedia();paint();document.body.classList.add('theme-click-return');document.body.classList.remove('theme-click-fade')},90)
+  window.setTimeout(()=>{document.body.classList.remove('theme-click-return');themeTransitioning=false;refreshAppearanceButton()},260)
 })
 document.querySelector('#dock-clear')!.addEventListener('click', () => { if (!nodes.length || !window.confirm('确定清除当前画布中的全部节点和连线吗？')) return; nodes.splice(0); links.splice(0); selectedId = 0; updateEditor(); scheduleSave(); draw() })
 const panelBackdrop = document.querySelector<HTMLElement>('#panel-backdrop')!
