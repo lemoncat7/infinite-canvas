@@ -75,8 +75,11 @@ let customApiModels: CustomApiModel[] = []
 let authReady = false
 let authMode: 'login' | 'register' = 'login'
 let showcaseLoaded = false
+function randomizeHomeTheme() { const theme = crypto.getRandomValues(new Uint8Array(1))[0] % 2 ? 'dark' : 'light'; homePage.dataset.homeTheme = theme; document.body.dataset.homeTheme = theme }
 function applyAppRoute() {
   const home = location.hash !== '#/canvas' || !authUser
+  const wasHome = document.body.classList.contains('home-mode')
+  if (home && !wasHome) randomizeHomeTheme()
   document.body.classList.toggle('home-mode', home)
   if (home && !showcaseLoaded) void loadShowcase()
   if (!home) requestAnimationFrame(resize)
@@ -84,11 +87,11 @@ function applyAppRoute() {
 }
 function requestWorkspace() {
   if (authUser) void enterWorkspace()
-  else openAuth('login')
+  else openAuth('register')
 }
 function openAuth(mode: 'login' | 'register') { setAuthMode(mode); homeLoginModal.classList.add('open'); homeLoginModal.querySelector<HTMLInputElement>('input[name="email"]')!.focus() }
-function setAuthMode(mode: 'login' | 'register') { authMode = mode; homeLoginModal.querySelectorAll<HTMLElement>('[data-auth-mode]').forEach(button => button.classList.toggle('active', button.dataset.authMode === mode)); homeLoginModal.querySelectorAll<HTMLElement>('[data-register-field]').forEach(field => { field.hidden = mode !== 'register' }); const name = homeLoginModal.querySelector<HTMLInputElement>('input[name="name"]')!, inviteCode = homeLoginModal.querySelector<HTMLInputElement>('input[name="inviteCode"]')!, account = homeLoginModal.querySelector<HTMLInputElement>('input[name="email"]')!; name.required = mode === 'register'; inviteCode.required = mode === 'register'; name.parentElement!.firstChild!.textContent = '用户名'; name.placeholder = '用于登录，例如 mochen'; account.type = mode === 'register' ? 'email' : 'text'; account.autocomplete = mode === 'register' ? 'email' : 'username'; account.placeholder = mode === 'register' ? 'name@example.com' : '输入用户名或邮箱'; account.parentElement!.firstChild!.textContent = mode === 'register' ? '邮箱' : '用户名 / 邮箱'; homeLoginModal.querySelector<HTMLElement>('.home-login-submit')!.textContent = mode === 'register' ? '使用邀请码创建账号' : '登录并进入工作台'; homeLoginModal.querySelector<HTMLElement>('.home-login-error')!.textContent = '' }
-function renderAuthenticatedUser() { const login = document.querySelector<HTMLButtonElement>('#home-login')!, userButton = document.querySelector<HTMLButtonElement>('#workspace-user')!, menu = document.querySelector<HTMLElement>('#workspace-user-menu')!, initial = authUser?.name?.slice(0, 1).toUpperCase() ?? 'V'; login.textContent = authUser?.name ?? '登录'; userButton.querySelector('span')!.textContent = initial; userButton.querySelector('b')!.textContent = authUser?.name ?? '用户'; menu.querySelector('header i')!.textContent = initial; menu.querySelector('strong')!.textContent = authUser?.name ?? ''; menu.querySelector('header small')!.textContent = [authUser?.username ? `@${authUser.username}` : '', authUser?.email ?? ''].filter(Boolean).join(' · '); menu.querySelector<HTMLElement>('#copy-invite-code b')!.textContent = authUser?.inviteCode ?? '—' }
+function setAuthMode(mode: 'login' | 'register') { authMode = mode; homeLoginModal.querySelectorAll<HTMLElement>('[data-auth-mode]').forEach(button => button.classList.toggle('active', button.dataset.authMode === mode)); homeLoginModal.querySelectorAll<HTMLElement>('[data-register-field]').forEach(field => { field.hidden = mode !== 'register' }); const name = homeLoginModal.querySelector<HTMLInputElement>('input[name="name"]')!, inviteCode = homeLoginModal.querySelector<HTMLInputElement>('input[name="inviteCode"]')!, account = homeLoginModal.querySelector<HTMLInputElement>('input[name="email"]')!; name.required = mode === 'register'; inviteCode.required = mode === 'register'; name.parentElement!.firstChild!.textContent = '用户名'; name.placeholder = '用于登录，例如 mochen'; account.type = mode === 'register' ? 'email' : 'text'; account.autocomplete = mode === 'register' ? 'email' : 'username'; account.placeholder = mode === 'register' ? 'name@example.com' : '输入用户名或邮箱'; account.parentElement!.firstChild!.textContent = mode === 'register' ? '邮箱' : '用户名 / 邮箱'; homeLoginModal.querySelector<HTMLElement>('.home-login-submit')!.textContent = mode === 'register' ? '使用邀请码创建账号' : '登录'; homeLoginModal.querySelector<HTMLElement>('.home-login-error')!.textContent = '' }
+function renderAuthenticatedUser() { const login = document.querySelector<HTMLButtonElement>('#home-login')!, enter = document.querySelector<HTMLButtonElement>('#home-enter')!, userButton = document.querySelector<HTMLButtonElement>('#workspace-user')!, menu = document.querySelector<HTMLElement>('#workspace-user-menu')!, initial = authUser?.name?.slice(0, 1).toUpperCase() ?? 'V'; login.disabled = Boolean(authUser); login.textContent = authUser ? `${authUser.name} · 已登录` : '登录'; enter.textContent = authUser ? '返回工作台' : '进入工作台'; userButton.querySelector('span')!.textContent = initial; userButton.querySelector('b')!.textContent = authUser?.name ?? '用户'; menu.querySelector('header i')!.textContent = initial; menu.querySelector('strong')!.textContent = authUser?.name ?? ''; menu.querySelector('header small')!.textContent = [authUser?.username ? `@${authUser.username}` : '', authUser?.email ?? ''].filter(Boolean).join(' · '); menu.querySelector<HTMLElement>('#copy-invite-code b')!.textContent = authUser?.inviteCode ?? '—' }
 async function ensureCurrentUserProject() { const response = await fetch('/api/projects'); if (!response.ok) return false; const projects = await response.json() as Array<{ id: string }>; if (!projects.length) return false; if (!projects.some(project => project.id === currentProjectId)) { currentProjectId = projects[0].id; localStorage.setItem('flow-project-id', currentProjectId) } return true }
 async function enterWorkspace() { if (!authUser || !await ensureCurrentUserProject()) return; location.hash = '#/canvas'; await Promise.all([loadCanvas(), loadAssets(), loadCustomApiModels()]); applyAppRoute() }
 async function loadShowcase() {
@@ -117,16 +120,53 @@ function openHomePreview(asset: { name: string; mimeType: string; author: string
   homePreview.querySelector<HTMLElement>('strong')!.textContent = asset.name; homePreview.querySelector<HTMLElement>('footer span')!.textContent = asset.author || 'Flow 创作者'; homePreview.classList.add('open')
 }
 function closeHomePreview() { const video = homePreview.querySelector<HTMLVideoElement>('video')!; video.pause(); video.removeAttribute('src'); homePreview.querySelector<HTMLImageElement>('img')!.removeAttribute('src'); homePreview.classList.remove('open') }
-document.querySelector('#home-login')!.addEventListener('click', () => authUser ? void enterWorkspace() : openAuth('login'))
+document.querySelector('#home-login')!.addEventListener('click', () => { if (!authUser) openAuth('login') })
 document.querySelector('#home-enter')!.addEventListener('click', requestWorkspace)
 document.querySelector('#home-start')!.addEventListener('click', requestWorkspace)
 const showcaseSection = document.querySelector<HTMLElement>('.home-showcase')!
 const showcaseObserver = new IntersectionObserver(entries => { if (entries.some(entry => entry.isIntersecting)) { showcaseSection.classList.add('revealed'); showcaseObserver.disconnect() } }, { threshold: .12 })
 showcaseObserver.observe(showcaseSection)
+let homeSceneProgress = 0, homeSceneTarget = 0, homeSceneFrame = 0, homeTouchY = 0, homeWheelDelta = 0, homeWheelResetTimer = 0, homeWheelLockedUntil = 0
+function setHomeSceneTarget(value: number) {
+  homeSceneTarget = Math.max(0, Math.min(3, value))
+  if (!homeSceneFrame) homeSceneFrame = requestAnimationFrame(animateHomeScene)
+}
+function animateHomeScene() {
+  homeSceneProgress += (homeSceneTarget - homeSceneProgress) * .16
+  if (Math.abs(homeSceneTarget - homeSceneProgress) < .001) homeSceneProgress = homeSceneTarget
+  homePage.style.setProperty('--home-progress', homeSceneProgress.toFixed(4))
+  homePage.querySelectorAll<HTMLElement>('.home-scene').forEach((element, index) => {
+    const distance = index - homeSceneProgress
+    element.style.setProperty('--scene-distance', distance.toFixed(4))
+    element.style.setProperty('--scene-presence', Math.max(0, 1 - Math.abs(distance)).toFixed(4))
+  })
+  const scene = Math.max(0, Math.min(3, Math.round(homeSceneProgress)))
+  homePage.dataset.scene = String(scene)
+  homePage.querySelectorAll<HTMLElement>('[data-home-scene]').forEach(button => button.classList.toggle('active', Number(button.dataset.homeScene) === scene))
+  if (homeSceneProgress !== homeSceneTarget) homeSceneFrame = requestAnimationFrame(animateHomeScene)
+  else homeSceneFrame = 0
+}
+homePage.addEventListener('wheel', event => {
+  if (innerWidth <= 800 || homeLoginModal.classList.contains('open') || homePreview.classList.contains('open') || (event.target as HTMLElement).closest('.home-gallery-card')) return
+  event.preventDefault()
+  if (performance.now() < homeWheelLockedUntil) return
+  homeWheelDelta += event.deltaY
+  window.clearTimeout(homeWheelResetTimer)
+  homeWheelResetTimer = window.setTimeout(() => { homeWheelDelta = 0 }, 180)
+  if (Math.abs(homeWheelDelta) < 54) return
+  setHomeSceneTarget(Math.round(homeSceneTarget) + Math.sign(homeWheelDelta))
+  homeWheelDelta = 0
+  homeWheelLockedUntil = performance.now() + 620
+}, { passive: false })
+homePage.querySelectorAll<HTMLElement>('[data-home-scene]').forEach(button => button.addEventListener('click', () => setHomeSceneTarget(Number(button.dataset.homeScene))))
+homePage.querySelectorAll<HTMLAnchorElement>('a[href="#showcase"]').forEach(link => link.addEventListener('click', event => { if (innerWidth <= 800) return; event.preventDefault(); setHomeSceneTarget(3) }))
+homePage.addEventListener('touchstart', event => { homeTouchY = event.touches[0]?.clientY ?? 0 }, { passive: true })
+homePage.addEventListener('touchend', event => { if (innerWidth <= 800) return; const distance = homeTouchY - (event.changedTouches[0]?.clientY ?? homeTouchY); if (Math.abs(distance) > 45) setHomeSceneTarget(Math.round(homeSceneTarget) + (distance > 0 ? 1 : -1)) }, { passive: true })
+setHomeSceneTarget(0)
 homeLoginModal.querySelector('.home-login-close')!.addEventListener('click', () => homeLoginModal.classList.remove('open'))
 homeLoginModal.addEventListener('click', event => { if (event.target === homeLoginModal) homeLoginModal.classList.remove('open') })
 homeLoginModal.querySelectorAll<HTMLElement>('[data-auth-mode]').forEach(button => button.addEventListener('click', () => setAuthMode(button.dataset.authMode as 'login' | 'register')))
-homeLoginModal.querySelector('form')!.addEventListener('submit', async event => { event.preventDefault(); const form = event.currentTarget as HTMLFormElement, submit = form.querySelector<HTMLButtonElement>('.home-login-submit')!, error = form.querySelector<HTMLOutputElement>('.home-login-error')!, data = new FormData(form); submit.disabled = true; error.textContent = ''; try { const response = await fetch(`/api/auth/${authMode}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: data.get('name'), inviteCode: data.get('inviteCode'), email: data.get('email'), password: data.get('password') }) }); const result = await response.json() as AuthUser & { error?: string }; if (!response.ok) throw new Error(result.error || '登录失败'); authUser = result; authReady = true; renderAuthenticatedUser(); homeLoginModal.classList.remove('open'); form.reset(); await enterWorkspace() } catch (reason) { error.textContent = reason instanceof Error ? reason.message : '登录失败，请重试' } finally { submit.disabled = false } })
+homeLoginModal.querySelector('form')!.addEventListener('submit', async event => { event.preventDefault(); const form = event.currentTarget as HTMLFormElement, submit = form.querySelector<HTMLButtonElement>('.home-login-submit')!, error = form.querySelector<HTMLOutputElement>('.home-login-error')!, data = new FormData(form), completedMode = authMode; submit.disabled = true; error.textContent = ''; try { const response = await fetch(`/api/auth/${completedMode}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: data.get('name'), inviteCode: data.get('inviteCode'), email: data.get('email'), password: data.get('password') }) }); const result = await response.json() as AuthUser & { error?: string }; if (!response.ok) throw new Error(result.error || '登录失败'); authUser = result; authReady = true; renderAuthenticatedUser(); homeLoginModal.classList.remove('open'); form.reset(); if (completedMode === 'register') await enterWorkspace(); else showToast(`欢迎回来，${result.name}`, 'success') } catch (reason) { error.textContent = reason instanceof Error ? reason.message : '登录失败，请重试' } finally { submit.disabled = false } })
 homePreview.querySelector(':scope > button')!.addEventListener('click', closeHomePreview)
 homePreview.addEventListener('click', event => { if (event.target === homePreview) closeHomePreview() })
 const workspaceUserMenu = document.querySelector<HTMLElement>('#workspace-user-menu')!
@@ -159,8 +199,8 @@ function drawGrid() {
   const gap = 42 * camera.zoom
   if (gap < 10) return
   const origin = screen({ x: 0, y: 0 })
-  if (backgroundMode === 'lines') { ctx.beginPath(); for (let x = origin.x % gap; x < innerWidth; x += gap) { ctx.moveTo(x, 0); ctx.lineTo(x, innerHeight) } for (let y = origin.y % gap; y < innerHeight; y += gap) { ctx.moveTo(0, y); ctx.lineTo(innerWidth, y) } ctx.strokeStyle = colorTheme === 'dark' ? 'rgba(245,245,244,.10)' : 'rgba(68,64,60,.12)'; ctx.lineWidth = 1; ctx.stroke(); return }
-  ctx.fillStyle = colorTheme === 'dark' ? 'rgba(245,245,244,.24)' : 'rgba(68,64,60,.28)'
+  if (backgroundMode === 'lines') { ctx.beginPath(); for (let x = origin.x % gap; x < innerWidth; x += gap) { ctx.moveTo(x, 0); ctx.lineTo(x, innerHeight) } for (let y = origin.y % gap; y < innerHeight; y += gap) { ctx.moveTo(0, y); ctx.lineTo(innerWidth, y) } ctx.strokeStyle = colorTheme === 'dark' ? 'rgba(143,197,197,.105)' : 'rgba(74,111,101,.13)'; ctx.lineWidth = 1; ctx.stroke(); return }
+  ctx.fillStyle = colorTheme === 'dark' ? 'rgba(143,197,197,.24)' : 'rgba(74,111,101,.27)'
   for (let x = origin.x % gap; x < innerWidth; x += gap) for (let y = origin.y % gap; y < innerHeight; y += gap) { ctx.beginPath(); ctx.arc(x, y, Math.max(.65, camera.zoom), 0, Math.PI * 2); ctx.fill() }
 }
 
@@ -200,8 +240,8 @@ function drawLink(link: FlowLink, index: number) {
   ctx.bezierCurveTo(ca.x, ca.y, cb.x, cb.y, b.x, b.y)
   const generating = linkIsGenerating(link), hovered = index === hoveredLinkIndex
   ctx.save()
-  if (generating) { ctx.setLineDash([10 * camera.zoom, 8 * camera.zoom]); ctx.lineDashOffset = -(performance.now() / 28) % (18 * camera.zoom); ctx.strokeStyle = colorTheme === 'dark' ? 'rgba(115,145,175,.62)' : 'rgba(68,105,140,.58)'; ctx.lineWidth = 2.25 * camera.zoom }
-  else if (hovered) { ctx.strokeStyle = colorTheme === 'dark' ? 'rgba(210,210,205,.68)' : 'rgba(38,38,36,.76)'; ctx.lineWidth = 3 * camera.zoom; ctx.shadowColor = 'rgba(0,0,0,.16)'; ctx.shadowBlur = 4 * camera.zoom }
+  if (generating) { ctx.setLineDash([10 * camera.zoom, 8 * camera.zoom]); ctx.lineDashOffset = -(performance.now() / 28) % (18 * camera.zoom); ctx.strokeStyle = colorTheme === 'dark' ? 'rgba(111,199,195,.72)' : 'rgba(72,137,122,.64)'; ctx.lineWidth = 2.25 * camera.zoom }
+  else if (hovered) { ctx.strokeStyle = colorTheme === 'dark' ? 'rgba(178,222,218,.72)' : 'rgba(42,76,67,.76)'; ctx.lineWidth = 3 * camera.zoom; ctx.shadowColor = colorTheme === 'dark' ? 'rgba(88,190,186,.2)' : 'rgba(38,76,66,.13)'; ctx.shadowBlur = 5 * camera.zoom }
   else { ctx.strokeStyle = 'rgba(183,190,201,.5)'; ctx.lineWidth = 2 * camera.zoom }
   ctx.stroke(); ctx.restore()
   for (const p of [a, b]) { ctx.beginPath(); ctx.arc(p.x, p.y, 5 * camera.zoom, 0, Math.PI * 2); ctx.fillStyle = '#aab1ba'; ctx.fill() }
@@ -237,7 +277,7 @@ function hitLink(sx: number, sy: number) {
   return -1
 }
 function drawPendingLink() { if (!connecting) return; const node = nodes.find(item => item.id === connecting!.nodeId); if (!node) return; const a = screen(portWorld(node, connecting.side)), b = connecting.pointer; ctx.beginPath(); ctx.moveTo(a.x, a.y); const distance = Math.max(55, Math.hypot(b.x - a.x, b.y - a.y) * .3), control = controlPoint(a, connecting.side, distance); ctx.quadraticCurveTo(control.x, control.y, b.x, b.y); ctx.strokeStyle = node.accent; ctx.lineWidth = 2; ctx.setLineDash([6, 5]); ctx.stroke(); ctx.setLineDash([]); if (connectionSnap) { ctx.beginPath(); ctx.arc(b.x, b.y, 10, 0, Math.PI * 2); ctx.fillStyle = 'rgba(47,128,255,.16)'; ctx.fill(); ctx.beginPath(); ctx.arc(b.x, b.y, 5, 0, Math.PI * 2); ctx.fillStyle = '#2f80ff'; ctx.fill() } }
-function paint() { drawFrame = null; ctx.fillStyle = colorTheme === 'dark' ? '#181715' : '#f4f2ed'; ctx.fillRect(0, 0, innerWidth, innerHeight); drawGrid(); links.forEach(drawLink); drawPendingLink(); syncDomNodes(); zoomSlider.value = String(Math.round(camera.zoom * 100)); zoomSlider.title = `${Math.round(camera.zoom * 100)}%`; zoomPercent.value = `${Math.round(camera.zoom * 100)}%`; nodeCount.textContent = String(nodes.length); if (links.some(linkIsGenerating)) draw() }
+function paint() { drawFrame = null; ctx.fillStyle = colorTheme === 'dark' ? '#0b1113' : '#eef3ef'; ctx.fillRect(0, 0, innerWidth, innerHeight); drawGrid(); links.forEach(drawLink); drawPendingLink(); syncDomNodes(); zoomSlider.value = String(Math.round(camera.zoom * 100)); zoomSlider.title = `${Math.round(camera.zoom * 100)}%`; zoomPercent.value = `${Math.round(camera.zoom * 100)}%`; nodeCount.textContent = String(nodes.length); if (links.some(linkIsGenerating)) draw() }
 function draw() { if (drawFrame === null) drawFrame = requestAnimationFrame(paint) }
 function resize() { const ratio = devicePixelRatio || 1; canvas.width = innerWidth * ratio; canvas.height = innerHeight * ratio; canvas.style.width = `${innerWidth}px`; canvas.style.height = `${innerHeight}px`; ctx.setTransform(ratio, 0, 0, ratio, 0, 0); draw() }
 function setZoom(next: number, anchor = { x: innerWidth / 2, y: innerHeight / 2 }) { const old = camera.zoom; next = Math.min(2.5, Math.max(.3, next)); const cx = innerWidth / 2 + camera.x, cy = innerHeight / 2 + camera.y; camera.x += (anchor.x - cx) * (1 - next / old); camera.y += (anchor.y - cy) * (1 - next / old); camera.zoom = next; draw() }
@@ -484,7 +524,7 @@ function paintNodeMedia(target: HTMLCanvasElement, url: string) {
 }
 function drawMediaImage(target: HTMLCanvasElement, image: HTMLImageElement) {
   const context = target.getContext('2d')!
-  const fill = colorTheme === 'dark' ? '#292524' : '#eef0f2'
+  const fill = colorTheme === 'dark' ? '#111a1c' : '#e7efeb'
   context.fillStyle = fill; context.fillRect(0, 0, target.width, target.height)
   if (image.complete && image.naturalWidth) { const scale = Math.min(target.width / image.naturalWidth, target.height / image.naturalHeight), width = image.naturalWidth * scale, height = image.naturalHeight * scale; context.drawImage(image, (target.width - width) / 2, (target.height - height) / 2, width, height) }
   else if (image.complete) { context.fillStyle = '#777'; context.font = '24px system-ui'; context.textAlign = 'center'; context.fillText('图片加载失败', target.width / 2, target.height / 2) }
