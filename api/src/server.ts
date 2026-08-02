@@ -26,6 +26,8 @@ database.run(`
   CREATE TABLE IF NOT EXISTS project_canvases (project_id TEXT PRIMARY KEY, document TEXT NOT NULL, updated_at TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, user_id TEXT NOT NULL, name TEXT NOT NULL, mime_type TEXT NOT NULL, size INTEGER NOT NULL, storage_name TEXT NOT NULL, created_at TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS user_api_models (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, model TEXT NOT NULL, base_url TEXT NOT NULL, api_key TEXT NOT NULL, proxy_url TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS recharge_codes (id TEXT PRIMARY KEY, code_hash TEXT NOT NULL UNIQUE, credits INTEGER NOT NULL, redeemed_by TEXT, redeemed_at TEXT, created_at TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS credit_transactions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, amount INTEGER NOT NULL, type TEXT NOT NULL, reference_id TEXT, created_at TEXT NOT NULL);
 `)
 ensureColumn('jobs', 'project_id', 'TEXT')
 ensureColumn('jobs', 'user_id', 'TEXT')
@@ -38,6 +40,12 @@ ensureColumn('users', 'password_hash', 'TEXT')
 ensureColumn('users', 'username', 'TEXT')
 ensureColumn('users', 'invite_code', 'TEXT')
 ensureColumn('users', 'invited_by', 'TEXT')
+ensureColumn('users', 'lab_enabled', 'INTEGER NOT NULL DEFAULT 0')
+ensureColumn('users', 'credits', 'INTEGER NOT NULL DEFAULT 20')
+ensureColumn('users', 'reserved_credits', 'INTEGER NOT NULL DEFAULT 0')
+ensureColumn('users', 'is_admin', 'INTEGER NOT NULL DEFAULT 0')
+ensureColumn('jobs', 'credit_cost', 'INTEGER NOT NULL DEFAULT 0')
+ensureColumn('jobs', 'credit_settled', 'INTEGER NOT NULL DEFAULT 0')
 ensureColumn('projects', 'last_opened_at', 'TEXT')
 for (const user of getAll('SELECT id FROM users WHERE invite_code IS NULL OR invite_code = ?', [''])) database.run('UPDATE users SET invite_code = ? WHERE id = ?', [newInviteCode(), String(user.id)])
 const developmentUserId = 'dev-user'
@@ -46,9 +54,11 @@ const generationProvider = createGenerationProvider()
 const generationInputSigningSecret = process.env.GENERATION_INPUT_SIGNING_SECRET || randomBytes(32).toString('hex')
 const generationPublicBaseUrl = String(process.env.GENERATION_PUBLIC_BASE_URL || '').replace(/\/$/, '')
 const bootTime = new Date().toISOString()
+for (const job of getAll("SELECT id FROM jobs WHERE status = 'running'", [])) settleJobCredits(String(job.id), false)
 database.run("UPDATE jobs SET status = 'failed', progress = 0, error = ?, updated_at = ? WHERE status = 'running'", ['生成服务曾重启，任务已中断，请重新生成', bootTime])
 database.run('INSERT OR IGNORE INTO users (id, name, created_at) VALUES (?, ?, ?)', [developmentUserId, '开发用户', bootTime])
 database.run("UPDATE users SET username = ? WHERE id = ? AND (username IS NULL OR username = '')", ['mochen', developmentUserId])
+database.run("UPDATE users SET is_admin = 1 WHERE lower(username) = 'mochen'")
 for (const user of getAll("SELECT id, name FROM users WHERE username IS NULL OR username = ''", [])) database.run('UPDATE users SET username = ? WHERE id = ?', [availableUsername(String(user.name || 'user')), String(user.id)])
 for (const user of getAll('SELECT id FROM users WHERE invite_code IS NULL OR invite_code = ?', [''])) database.run('UPDATE users SET invite_code = ? WHERE id = ?', [newInviteCode(), String(user.id)])
 persist()
@@ -73,7 +83,7 @@ app.post('/agents/prompt', async (request, reply) => {
   const textContent = [`用户想法：${idea}`, context.length ? `画布上下文：\n${context.map((item,index)=>`${index+1}. ${item}`).join('\n')}` : '画布上下文：无', visualInputs.length ? `附带 ${visualInputs.length} 张视觉参考，顺序与参考节点中的图片顺序一致。请理解图片内容后再生成提示词。` : '没有视觉参考。'].join('\n\n')
   const content:unknown = visualInputs.length ? [{type:'text',text:textContent},...visualInputs.map(url=>({type:'image_url',image_url:{url}}))] : textContent
   try {
-    const url = `${baseUrl}/v1/chat/completions`, options = { method:'POST', headers:{ authorization:`Bearer ${apiKey}`, 'content-type':'application/json' }, body:JSON.stringify({ model, stream:false, temperature:complexity === 'simple' ? .35 : .65, max_tokens:complexity === 'simple' ? 1200 : 1800, response_format:{ type:'json_object' }, messages:[{role:'system',content:system},{role:'user',content}] }), signal:AbortSignal.timeout(Number(process.env.PROMPT_AGENT_TIMEOUT_MS || 90000)) }
+    const url = `${baseUrl}/v1/chat/completions`, options = { method:'POST', headers:{ authorization:`Bearer ${apiKey}`, 'content-type':'application/json' }, body:JSON.stringify({ model, stream:false, temperature:complexity === 'simple' ? .35 : .65, max_tokens:complexity === 'simple' ? 2400 : 3600, response_format:{ type:'json_object' }, messages:[{role:'system',content:system},{role:'user',content}] }), signal:AbortSignal.timeout(Number(process.env.PROMPT_AGENT_TIMEOUT_MS || 90000)) }
     const proxyUrl = String(process.env.PROMPT_AGENT_HTTPS_PROXY || process.env.OPENAI_IMAGE_HTTPS_PROXY || '')
     const response = proxyUrl ? await undiciFetch(url, { ...options, dispatcher:new ProxyAgent(proxyUrl) }) : await fetch(url, options)
     const payload = await response.json() as { choices?:Array<{finish_reason?:string;message?:{content?:string}}>; error?:{message?:string} }
@@ -126,18 +136,21 @@ app.post('/auth/register', async (request, reply) => {
   if (legacy) { userId = developmentUserId; database.run('UPDATE users SET name = ?, email = ?, password_hash = ?, username = COALESCE(NULLIF(username, ?), ?), invited_by = COALESCE(invited_by, ?) WHERE id = ?', [name, email, hashPassword(password), '', name, inviter?.id ?? null, userId]) }
   else { userId = randomUUID(); database.run('INSERT INTO users (id, name, email, password_hash, username, invite_code, invited_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [userId, name, email, hashPassword(password), name, newInviteCode(), inviter?.id ?? null, now]); createDefaultProject(userId, now) }
   const token = createSession(userId, now); persist(); setSessionCookie(request, reply, token)
-  const createdUser = getOne('SELECT username, invite_code AS inviteCode FROM users WHERE id = ?', [userId])
-  return reply.code(201).send({ id: userId, name, username: createdUser?.username, email, inviteCode: createdUser?.inviteCode, createdAt: now })
+  if (!legacy) database.run('UPDATE users SET credits = 5 WHERE id = ?', [userId])
+  const createdUser = getOne('SELECT username, invite_code AS inviteCode, credits, reserved_credits AS reservedCredits, is_admin AS isAdmin FROM users WHERE id = ?', [userId])
+  return reply.code(201).send({ id: userId, name, username: createdUser?.username, email, inviteCode: createdUser?.inviteCode, createdAt: now, credits:Number(createdUser?.credits ?? 0), reservedCredits:Number(createdUser?.reservedCredits ?? 0), isAdmin:Boolean(createdUser?.isAdmin) })
 })
 app.post('/auth/login', async (request, reply) => {
-  const body = request.body as { email?: string; account?: string; password?: string }, account = String(body.account ?? body.email ?? '').trim().toLowerCase(), password = String(body.password ?? ''), user = getOne('SELECT id, name, username, email, password_hash, invite_code AS inviteCode, created_at AS createdAt FROM users WHERE lower(email) = ? OR lower(username) = ? ORDER BY CASE WHEN lower(email) = ? THEN 0 ELSE 1 END LIMIT 1', [account, account, account])
+  const body = request.body as { email?: string; account?: string; password?: string }, account = String(body.account ?? body.email ?? '').trim().toLowerCase(), password = String(body.password ?? ''), user = getOne('SELECT id, name, username, email, password_hash, invite_code AS inviteCode, created_at AS createdAt, credits, reserved_credits AS reservedCredits, is_admin AS isAdmin FROM users WHERE lower(email) = ? OR lower(username) = ? ORDER BY CASE WHEN lower(email) = ? THEN 0 ELSE 1 END LIMIT 1', [account, account, account])
   if (!user || !verifyPassword(password, String(user.password_hash ?? ''))) return reply.code(401).send({ error: '用户名、邮箱或密码错误' })
   const token = createSession(String(user.id)); persist(); setSessionCookie(request, reply, token)
-  return { id: user.id, name: user.name, username: user.username, email: user.email, inviteCode: user.inviteCode, createdAt: user.createdAt }
+  return { id: user.id, name: user.name, username: user.username, email: user.email, inviteCode: user.inviteCode, createdAt: user.createdAt, credits:Number(user.credits ?? 0), reservedCredits:Number(user.reservedCredits ?? 0), isAdmin:Boolean(user.isAdmin) }
 })
 app.post('/auth/logout', async (request, reply) => { const token = sessionToken(request); if (token) database.run('DELETE FROM sessions WHERE id = ?', [sessionId(token)]); persist(); clearSessionCookie(request, reply); return { ok: true } })
-app.get('/users/me', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; return { id: user.id, name: user.name, username: user.username, email: user.email, inviteCode: user.inviteCode, createdAt: user.createdAt } })
+app.get('/users/me', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; return { id: user.id, name: user.name, username: user.username, email: user.email, inviteCode: user.inviteCode, createdAt: user.createdAt, credits:Number(user.credits ?? 0), reservedCredits:Number(user.reservedCredits ?? 0), isAdmin:Boolean(user.isAdmin) } })
 app.patch('/users/me', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const name = String((request.body as { name?: string }).name ?? '').trim(); if (name.length < 2 || name.length > 40) return reply.code(400).send({ error: '昵称长度需要在 2 到 40 个字符之间' }); database.run('UPDATE users SET name = ? WHERE id = ?', [name, String(user.id)]); persist(); return { ...user, name } })
+app.post('/users/me/credits/redeem', async (request, reply) => { const user=requireUser(request,reply); if(!user)return; const code=normalizeRechargeCode((request.body as {code?:string}).code), codeHash=hashRechargeCode(code); if(!code)return reply.code(400).send({error:'请输入充值码'}); const voucher=getOne('SELECT id,credits,redeemed_by AS redeemedBy FROM recharge_codes WHERE code_hash = ?', [codeHash]); if(!voucher)return reply.code(404).send({error:'充值码无效'}); if(voucher.redeemedBy)return reply.code(409).send({error:'该充值码已经使用'}); const now=new Date().toISOString(),amount=Number(voucher.credits); database.run('BEGIN'); try{database.run('UPDATE recharge_codes SET redeemed_by = ?, redeemed_at = ? WHERE id = ? AND redeemed_by IS NULL',[String(user.id),now,String(voucher.id)]); database.run('UPDATE users SET credits = credits + ? WHERE id = ?',[amount,String(user.id)]); database.run('INSERT INTO credit_transactions (id,user_id,amount,type,reference_id,created_at) VALUES (?,?,?,?,?,?)',[randomUUID(),String(user.id),amount,'recharge',String(voucher.id),now]); database.run('COMMIT')}catch(error){database.run('ROLLBACK');throw error} persist(); const updated=getOne('SELECT credits,reserved_credits AS reservedCredits FROM users WHERE id = ?',[String(user.id)]); return {ok:true,added:amount,credits:Number(updated?.credits??0),reservedCredits:Number(updated?.reservedCredits??0)} })
+app.post('/admin/recharge-codes', async (request,reply) => { const user=currentUser(request),expected=String(process.env.CREDIT_ADMIN_KEY||''),actual=String(request.headers['x-admin-key']||''),authorized=Boolean(user?.isAdmin)||(Boolean(expected&&actual)&&secureTextEqual(actual,expected)); if(!authorized)return reply.code(403).send({error:'仅管理员可以生成充值码'}); const body=request.body as {credits?:number;count?:number},credits=Math.floor(Number(body.credits)),count=Math.min(100,Math.max(1,Math.floor(Number(body.count||1)))); if(!Number.isFinite(credits)||credits<1||credits>100000)return reply.code(400).send({error:'点数需要在 1 到 100000 之间'}); const now=new Date().toISOString(),codes:string[]=[]; for(let index=0;index<count;index++){const code=`VIO-${credits}-${randomBytes(5).toString('hex').toUpperCase()}`;database.run('INSERT INTO recharge_codes (id,code_hash,credits,created_at) VALUES (?,?,?,?)',[randomUUID(),hashRechargeCode(code),credits,now]);codes.push(code)} persist(); return {credits,count,codes} })
 app.get('/showcase', async () => getAll(`SELECT assets.id, assets.name, assets.mime_type AS mimeType, assets.created_at AS createdAt, users.name AS author
   FROM assets JOIN users ON users.id = assets.user_id WHERE assets.is_public = 1 ORDER BY assets.created_at DESC LIMIT 30`, []).map(asset => ({ ...asset, url: namedAssetUrl(String(asset.id), String(asset.name), true) })))
 
@@ -193,6 +206,8 @@ app.post('/jobs', async (request, reply) => {
   const projectId = input.projectId ?? defaultProjectId
   if (!ownsProject(projectId, userId)) return reply.code(404).send({ error: 'Project not found' })
   let model = input.model ?? (input.kind === 'video' ? process.env.AGNES_VIDEO_DEFAULT_MODEL || 'agnes-video-v2.0' : process.env.OPENAI_IMAGE_DEFAULT_MODEL || 'gpt-image-2')
+  const creditCost = model === 'grok-imagine-video-1.5-preview' ? 2 : 0
+  if (creditCost && Number(user.credits ?? 0) - Number(user.reservedCredits ?? 0) < creditCost) return reply.code(402).send({ error:'创作点数不足，Grok 每次生成需要 2 点' })
   const customId = model.startsWith('custom:') ? model.slice(7) : '', custom = customId ? getOne('SELECT * FROM user_api_models WHERE id = ? AND user_id = ?', [customId,userId]) : undefined
   if (customId && (!custom || String(custom.kind) !== input.kind)) return reply.code(400).send({ error:'自定义模型不存在或类型不匹配' })
   if (custom) model = String(custom.model)
@@ -200,10 +215,11 @@ app.post('/jobs', async (request, reply) => {
   try { validateOwnedInputUrls(inputUrls, userId, input.kind) }
   catch (error) { return reply.code(400).send({ error: error instanceof Error ? error.message : '无法读取输入素材' }) }
   const id = randomUUID(), now = new Date().toISOString()
-  database.run('INSERT INTO jobs (id, project_id, user_id, node_id, kind, prompt, model, status, progress, input_urls, parameters, custom_model_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [id, projectId, userId, input.nodeId, input.kind, input.prompt, model, 'queued', 0, JSON.stringify(inputUrls), JSON.stringify(input.parameters ?? {}), customId || null, now, now])
+  if (creditCost) database.run('UPDATE users SET reserved_credits = reserved_credits + ? WHERE id = ?', [creditCost,userId])
+  database.run('INSERT INTO jobs (id, project_id, user_id, node_id, kind, prompt, model, status, progress, input_urls, parameters, custom_model_id, credit_cost, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [id, projectId, userId, input.nodeId, input.kind, input.prompt, model, 'queued', 0, JSON.stringify(inputUrls), JSON.stringify(input.parameters ?? {}), customId || null, creditCost, now, now])
   persist()
   queueMicrotask(pumpGenerationQueue)
-  return reply.code(202).send({ id, status: 'queued', progress: 0, model, provider: generationProvider.name })
+  return reply.code(202).send({ id, status: 'queued', progress: 0, model, provider: generationProvider.name, creditCost, creditsAvailable:Number(user.credits ?? 0) - Number(user.reservedCredits ?? 0) - creditCost })
 })
 
 app.get('/jobs/:id', async (request, reply) => {
@@ -239,16 +255,18 @@ function validEmail(email: string) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em
 function assetDisposition(name: string) { const safe = name.replace(/[\r\n]/g, '').slice(0, 240) || 'asset'; return `inline; filename="asset"; filename*=UTF-8''${encodeURIComponent(safe)}` }
 function namedAssetUrl(id: string, name: string, isPublic = false) { const safe = name.replace(/[\r\n/\\]/g, '').slice(0, 240) || 'asset'; return `/api/${isPublic ? 'public/' : ''}assets/${id}/content/${encodeURIComponent(safe)}` }
 function validateOwnedInputUrls(urls: string[], userId: string, kind: JobInput['kind']) { for (const source of urls) { const match = source.match(/^\/api\/assets\/([^/]+)\/content(?:\/|$)/); if (!match) continue; const asset = getOne('SELECT size FROM assets WHERE id = ? AND user_id = ?', [decodeURIComponent(match[1]), userId]); if (!asset) throw new Error('输入素材不存在或不属于当前用户'); if (kind === 'video' && Number(asset.size ?? 0) > 15 * 1024 * 1024) throw new Error('参考图片超过 15MB') } }
-function resolveOwnedInputUrls(urls: string[], userId: string, kind: JobInput['kind'], model: string) { return urls.map(source => { const match = source.match(/^\/api\/assets\/([^/]+)\/content(?:\/|$)/); if (!match) return source; const assetId = decodeURIComponent(match[1]), asset = getOne('SELECT mime_type, size, storage_name FROM assets WHERE id = ? AND user_id = ?', [assetId, userId]); if (!asset) throw new Error('输入素材不存在或不属于当前用户'); const size = Number(asset.size ?? 0); if (kind === 'video' && size > 15 * 1024 * 1024) throw new Error('参考图片超过 15MB'); const bytes = readFileSync(`${uploadDirectory}/${asset.storage_name}`); if (!bytes.length) throw new Error('输入素材为空'); if (kind === 'video' && !model.startsWith('agnes-')) { if (!generationPublicBaseUrl) throw new Error('Grok 图生视频需要配置公网访问地址'); return signedGenerationInputUrl(assetId) } return `data:${String(asset.mime_type || 'application/octet-stream')};base64,${bytes.toString('base64')}` }) }
+function resolveOwnedInputUrls(urls: string[], userId: string, kind: JobInput['kind'], _model: string) { return urls.map(source => { const match = source.match(/^\/api\/assets\/([^/]+)\/content(?:\/|$)/); if (!match) return source; const assetId = decodeURIComponent(match[1]), asset = getOne('SELECT mime_type, size, storage_name FROM assets WHERE id = ? AND user_id = ?', [assetId, userId]); if (!asset) throw new Error('输入素材不存在或不属于当前用户'); const size = Number(asset.size ?? 0); if (kind === 'video' && size > 15 * 1024 * 1024) throw new Error('参考图片超过 15MB'); const bytes = readFileSync(`${uploadDirectory}/${asset.storage_name}`); if (!bytes.length) throw new Error('输入素材为空'); return `data:${String(asset.mime_type || 'application/octet-stream')};base64,${bytes.toString('base64')}` }) }
 function signedGenerationInputUrl(assetId: string) { const expires = Math.floor(Date.now() / 1000) + 1800, signature = createHmac('sha256', generationInputSigningSecret).update(`${assetId}:${expires}`).digest('base64url'); return `${generationPublicBaseUrl}/api/generation-inputs/${encodeURIComponent(assetId)}?expires=${expires}&signature=${signature}` }
 function validGenerationInputSignature(assetId: string, expires: number, signature: string) { const expected = createHmac('sha256', generationInputSigningSecret).update(`${assetId}:${expires}`).digest('base64url'); return secureTextEqual(signature, expected) }
 function hashPassword(password: string) { const salt = randomBytes(16).toString('hex'), digest = scryptSync(password, salt, 64).toString('hex'); return `scrypt:${salt}:${digest}` }
 function verifyPassword(password: string, stored: string) { const [, salt, expected] = stored.split(':'); if (!salt || !expected) return false; try { const actual = scryptSync(password, salt, 64), expectedBytes = Buffer.from(expected, 'hex'); return actual.length === expectedBytes.length && timingSafeEqual(actual, expectedBytes) } catch { return false } }
 function secureTextEqual(actual: string, expected: string) { const left = createHash('sha256').update(actual).digest(), right = createHash('sha256').update(expected).digest(); return timingSafeEqual(left, right) }
+function normalizeRechargeCode(value:unknown){return String(value??'').trim().toUpperCase().replace(/\s+/g,'')}
+function hashRechargeCode(code:string){return createHash('sha256').update(code).digest('hex')}
 function sessionId(token: string) { return createHash('sha256').update(token).digest('hex') }
 function sessionToken(request: FastifyRequest) { const cookie = String(request.headers.cookie ?? '').split(';').map(part => part.trim()).find(part => part.startsWith('flow_session=')); return cookie ? decodeURIComponent(cookie.slice('flow_session='.length)) : '' }
 function createSession(userId: string, createdAt = new Date().toISOString()) { const token = randomBytes(32).toString('base64url'), expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); database.run('DELETE FROM sessions WHERE expires_at <= ?', [createdAt]); database.run('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)', [sessionId(token), userId, createdAt, expiresAt]); return token }
-function currentUser(request: FastifyRequest) { const token = sessionToken(request); if (!token) return undefined; return getOne(`SELECT users.id, users.name, users.username, users.email, users.invite_code AS inviteCode, users.created_at AS createdAt FROM sessions JOIN users ON users.id = sessions.user_id
+function currentUser(request: FastifyRequest) { const token = sessionToken(request); if (!token) return undefined; return getOne(`SELECT users.id, users.name, users.username, users.email, users.invite_code AS inviteCode, users.created_at AS createdAt, users.credits, users.reserved_credits AS reservedCredits, users.is_admin AS isAdmin FROM sessions JOIN users ON users.id = sessions.user_id
   WHERE sessions.id = ? AND sessions.expires_at > ?`, [sessionId(token), new Date().toISOString()]) }
 function requireUser(request: FastifyRequest, reply: FastifyReply) { const user = currentUser(request); if (!user) { void reply.code(401).send({ error: 'Unauthorized' }); return undefined } return user }
 function secureRequest(request: FastifyRequest) { const proto = request.headers['x-forwarded-proto']; return (Array.isArray(proto) ? proto[0] : proto) === 'https' }
@@ -259,24 +277,28 @@ function createDefaultProject(userId: string, now = new Date().toISOString()) { 
 
 function persist() { writeFileSync(databasePath, Buffer.from(database.export())) }
 
-const configuredGenerationConcurrency = Number(process.env.GENERATION_CONCURRENCY || 2)
-const generationConcurrency = Number.isFinite(configuredGenerationConcurrency) ? Math.max(1, Math.floor(configuredGenerationConcurrency)) : 2
-const activeGenerationJobs = new Set<string>()
+const configuredImageConcurrency = Number(process.env.IMAGE_GENERATION_CONCURRENCY || 8)
+const configuredVideoConcurrency = Number(process.env.VIDEO_GENERATION_CONCURRENCY || 2)
+const generationConcurrency: Record<JobInput['kind'], number> = {
+  image: Number.isFinite(configuredImageConcurrency) ? Math.max(1, Math.floor(configuredImageConcurrency)) : 8,
+  video: Number.isFinite(configuredVideoConcurrency) ? Math.max(1, Math.floor(configuredVideoConcurrency)) : 2,
+}
+const activeGenerationJobs: Record<JobInput['kind'], Set<string>> = { image:new Set(), video:new Set() }
 let queuePumpRunning = false
 
 function pumpGenerationQueue() {
   if (queuePumpRunning) return
   queuePumpRunning = true
   try {
-    while (activeGenerationJobs.size < generationConcurrency) {
-      const job = getOne("SELECT * FROM jobs WHERE status = 'queued' ORDER BY created_at ASC, rowid ASC LIMIT 1", [])
+    for (const kind of ['video','image'] as const) while (activeGenerationJobs[kind].size < generationConcurrency[kind]) {
+      const job = getOne("SELECT * FROM jobs WHERE status = 'queued' AND kind = ? ORDER BY created_at ASC, rowid ASC LIMIT 1", [kind])
       if (!job) break
       const id = String(job.id)
-      activeGenerationJobs.add(id)
+      activeGenerationJobs[kind].add(id)
       database.run("UPDATE jobs SET status = 'running', progress = 0, updated_at = ? WHERE id = ? AND status = 'queued'", [new Date().toISOString(), id])
       persist()
-      app.log.info({ jobId:id, active:activeGenerationJobs.size, concurrency:generationConcurrency }, 'generation queue started job')
-      void executeQueuedJob(job).finally(() => { activeGenerationJobs.delete(id); queueMicrotask(pumpGenerationQueue) })
+      app.log.info({ jobId:id, kind, active:activeGenerationJobs[kind].size, concurrency:generationConcurrency[kind] }, 'generation queue started job')
+      void executeQueuedJob(job).finally(() => { activeGenerationJobs[kind].delete(id); queueMicrotask(pumpGenerationQueue) })
     }
   } finally { queuePumpRunning = false }
 }
@@ -302,14 +324,19 @@ function parseJsonObject(value: unknown) { try { const parsed = JSON.parse(Strin
 
 async function updateJob(id: string, update: GenerationUpdate) {
   let resultUrl = update.resultUrl
+  let succeeded = update.status === 'succeeded'
   try {
     if (update.status === 'succeeded' && resultUrl) resultUrl = await archiveJobResult(id, resultUrl)
     database.run('UPDATE jobs SET status = ?, progress = ?, result_url = COALESCE(?, result_url), error = ?, updated_at = ? WHERE id = ?', [update.status, update.progress, resultUrl ?? null, update.error ?? null, new Date().toISOString(), id])
   } catch (error) {
+    succeeded = false
     database.run('UPDATE jobs SET status = ?, progress = ?, error = ?, updated_at = ? WHERE id = ?', ['failed', 0, `结果保存到资产库失败：${error instanceof Error ? error.message : 'unknown error'}`, new Date().toISOString(), id])
   }
+  if (update.status === 'succeeded' || update.status === 'failed') settleJobCredits(id, succeeded)
   persist()
 }
+
+function settleJobCredits(jobId:string, succeeded:boolean) { const job = getOne('SELECT user_id, credit_cost, credit_settled FROM jobs WHERE id = ?', [jobId]), cost = Number(job?.credit_cost ?? 0); if (!job || !cost || Boolean(job.credit_settled)) return; database.run('UPDATE users SET reserved_credits = MAX(0,reserved_credits - ?), credits = MAX(0,credits - ?) WHERE id = ?', [cost,succeeded ? cost : 0,String(job.user_id)]); database.run('UPDATE jobs SET credit_settled = 1 WHERE id = ?', [jobId]) }
 
 async function archiveJobResult(jobId: string, source: string) {
   const job = getOne('SELECT project_id, user_id, kind, prompt FROM jobs WHERE id = ?', [jobId])

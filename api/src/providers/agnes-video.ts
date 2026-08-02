@@ -14,10 +14,27 @@ type AgnesTask = {
   code?: string
 }
 
+const agnesCooldownMs = Math.max(1000, Number(process.env.AGNES_VIDEO_KEY_COOLDOWN_MS || 60000))
+const agnesCredentialPool = [process.env.AGNES_VIDEO_API_KEY, process.env.AGNES_VIDEO_API_KEY_2, ...(process.env.AGNES_VIDEO_API_KEYS || '').split(',')]
+  .map(value => String(value || '').trim()).filter((value, index, values) => value && values.indexOf(value) === index)
+  .map((key, index) => ({ key, channel:index + 1, nextAvailableAt:0 }))
+
+async function acquireAgnesCredential() {
+  if (!agnesCredentialPool.length) throw new Error('AGNES_VIDEO_API_KEY is required when using agnes-video')
+  const credential = agnesCredentialPool.reduce((earliest, item) => item.nextAvailableAt < earliest.nextAvailableAt ? item : earliest)
+  const reservedAt = Math.max(Date.now(), credential.nextAvailableAt)
+  credential.nextAvailableAt = reservedAt + agnesCooldownMs
+  const waitMs = reservedAt - Date.now()
+  if (waitMs > 0) {
+    console.info('[agnes-video] waiting for credential cooldown', { channel:credential.channel, waitMs, channelCount:agnesCredentialPool.length })
+    await wait(waitMs)
+  }
+  return credential
+}
+
 export class AgnesVideoProvider implements GenerationProvider {
   readonly name = 'agnes-video'
   private readonly baseUrl = required('AGNES_VIDEO_BASE_URL').replace(/\/$/, '')
-  private readonly apiKey = required('AGNES_VIDEO_API_KEY')
   private readonly defaultModel = process.env.AGNES_VIDEO_DEFAULT_MODEL || 'agnes-video-v2.0'
   private readonly pollInterval = Number(process.env.AGNES_VIDEO_POLL_INTERVAL_MS || 8000)
   private readonly timeout = Number(process.env.AGNES_VIDEO_TIMEOUT_MS || 900000)
@@ -32,17 +49,19 @@ export class AgnesVideoProvider implements GenerationProvider {
 
   async run(input: GenerationInput, onUpdate: (update: GenerationUpdate) => void) {
     if (input.kind !== 'video') throw new Error('Agnes Video Adapter 仅支持视频任务')
+    const credential = await acquireAgnesCredential()
     const settings = normalizeSettings(input.parameters)
     const imageSources = input.inputUrls ?? []
     let images = await Promise.all(imageSources.map(source => this.resolveImage(source)))
     onUpdate({ status: 'running', progress: 0 })
     console.info('[agnes-video] preparing ordered inputs', { internalJobId: input.internalJobId, imageCount: images.length, orderedInputIndexes: images.map((_, index) => index + 1) })
-    let response = await this.request('/v1/videos', { method: 'POST', body: createBody(input, images, settings, this.defaultModel) }, this.timeoutForImages(images))
+    console.info('[agnes-video] credential assigned', { internalJobId:input.internalJobId, channel:credential.channel, channelCount:agnesCredentialPool.length })
+    let response = await this.request('/v1/videos', { method: 'POST', body: createBody(input, images, settings, this.defaultModel) }, this.timeoutForImages(images), credential.key)
     let created = await readTask(response)
     if (!response.ok && imageSources.length && images.some(image => /^https?:\/\//i.test(image)) && /image URL|image.*download/i.test(taskError(created))) {
       console.info('[agnes-video] public image rejected, retrying with embedded images', { internalJobId: input.internalJobId, imageCount: imageSources.length })
       images = await Promise.all(imageSources.map(source => this.resolveImage(source, true)))
-      response = await this.request('/v1/videos', { method: 'POST', body: createBody(input, images, settings, this.defaultModel) }, this.timeoutForImages(images))
+      response = await this.request('/v1/videos', { method: 'POST', body: createBody(input, images, settings, this.defaultModel) }, this.timeoutForImages(images), credential.key)
       created = await readTask(response)
     }
     if (!response.ok) throw new Error(taskError(created) || `Agnes 创建视频任务失败（${response.status}）`)
@@ -54,7 +73,7 @@ export class AgnesVideoProvider implements GenerationProvider {
     while (Date.now() - startedAt < this.timeout) {
       await wait(this.pollInterval)
       const query = `/agnesapi?video_id=${encodeURIComponent(videoId)}&model_name=${encodeURIComponent(input.model || this.defaultModel)}`
-      const statusResponse = await this.request(query, {}, this.queryTimeout)
+      const statusResponse = await this.request(query, {}, this.queryTimeout, credential.key)
       const task = await readTask(statusResponse)
       if (!statusResponse.ok) {
         if (statusResponse.status === 429 || /rate limit/i.test(taskError(task))) continue
@@ -73,7 +92,7 @@ export class AgnesVideoProvider implements GenerationProvider {
     throw new Error('Agnes 视频生成超时')
   }
 
-  private async request(path: string, init: { method?: string; body?: string; headers?: Record<string, string> } = {}, timeout = this.queryTimeout) {
+  private async request(path: string, init: { method?: string; body?: string; headers?: Record<string, string> } = {}, timeout = this.queryTimeout, apiKey = required('AGNES_VIDEO_API_KEY')) {
     // curl is used only by the Agnes adapter. Its HTTP CONNECT implementation is
     // compatible with the configured LAN proxy; Undici stalls on this proxy/API pair.
     const marker = '\n__AGNES_HTTP_STATUS__:'
@@ -81,7 +100,7 @@ export class AgnesVideoProvider implements GenerationProvider {
       '--silent', '--show-error', '--location',
       '--connect-timeout', '10', '--max-time', String(Math.ceil(timeout / 1000)),
       '--write-out', `${marker}%{http_code}`,
-      '--header', `Authorization: Bearer ${this.apiKey}`,
+      '--header', `Authorization: Bearer ${apiKey}`,
       '--header', 'Content-Type: application/json',
     ]
     if (this.proxyUrl) args.push('--proxy', this.proxyUrl)
