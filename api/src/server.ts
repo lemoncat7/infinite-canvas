@@ -28,6 +28,7 @@ database.run(`
   CREATE TABLE IF NOT EXISTS user_api_models (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, model TEXT NOT NULL, base_url TEXT NOT NULL, api_key TEXT NOT NULL, proxy_url TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS recharge_codes (id TEXT PRIMARY KEY, code_hash TEXT NOT NULL UNIQUE, credits INTEGER NOT NULL, redeemed_by TEXT, redeemed_at TEXT, created_at TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS credit_transactions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, amount INTEGER NOT NULL, type TEXT NOT NULL, reference_id TEXT, created_at TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS app_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL);
 `)
 ensureColumn('jobs', 'project_id', 'TEXT')
 ensureColumn('jobs', 'user_id', 'TEXT')
@@ -41,11 +42,16 @@ ensureColumn('users', 'username', 'TEXT')
 ensureColumn('users', 'invite_code', 'TEXT')
 ensureColumn('users', 'invited_by', 'TEXT')
 ensureColumn('users', 'lab_enabled', 'INTEGER NOT NULL DEFAULT 0')
-ensureColumn('users', 'credits', 'INTEGER NOT NULL DEFAULT 20')
+ensureColumn('users', 'credits', 'INTEGER NOT NULL DEFAULT 5')
 ensureColumn('users', 'reserved_credits', 'INTEGER NOT NULL DEFAULT 0')
 ensureColumn('users', 'is_admin', 'INTEGER NOT NULL DEFAULT 0')
 ensureColumn('jobs', 'credit_cost', 'INTEGER NOT NULL DEFAULT 0')
 ensureColumn('jobs', 'credit_settled', 'INTEGER NOT NULL DEFAULT 0')
+if (!getOne('SELECT id FROM app_migrations WHERE id = ?', ['reset-initial-credits-to-5'])) {
+  const now = new Date().toISOString()
+  database.run('UPDATE users SET credits = 5, reserved_credits = 0')
+  database.run('INSERT INTO app_migrations (id,applied_at) VALUES (?,?)', ['reset-initial-credits-to-5',now])
+}
 ensureColumn('projects', 'last_opened_at', 'TEXT')
 for (const user of getAll('SELECT id FROM users WHERE invite_code IS NULL OR invite_code = ?', [''])) database.run('UPDATE users SET invite_code = ? WHERE id = ?', [newInviteCode(), String(user.id)])
 const developmentUserId = 'dev-user'
