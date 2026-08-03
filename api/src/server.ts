@@ -6,6 +6,7 @@ import { createGenerationProvider, type GenerationUpdate } from './providers/ind
 import { OpenAiImageProvider } from './providers/openai-image.js'
 import { OpenAiVideoProvider } from './providers/openai-video.js'
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
+import sharp from 'sharp'
 
 type CanvasPayload = { nodes: unknown[]; links: unknown[]; camera?: unknown }
 type JobInput = { projectId?: string; nodeId: number; kind: 'image' | 'video'; prompt: string; model?: string; inputUrls?: string[]; parameters?: Record<string, unknown> }
@@ -13,8 +14,10 @@ type JobInput = { projectId?: string; nodeId: number; kind: 'image' | 'video'; p
 const dataDirectory = process.env.DATA_DIR ?? './data'
 const databasePath = `${dataDirectory}/flow-studio.sqlite`
 const uploadDirectory = `${dataDirectory}/uploads`
+const thumbnailDirectory = `${dataDirectory}/thumbnails`
 mkdirSync(dataDirectory, { recursive: true })
 mkdirSync(uploadDirectory, { recursive: true })
+mkdirSync(thumbnailDirectory, { recursive: true })
 const SQL = await initSqlJs()
 const database: Database = existsSync(databasePath) ? new SQL.Database(readFileSync(databasePath)) : new SQL.Database()
 database.run(`
@@ -81,27 +84,39 @@ app.post('/agents/prompt', async (request, reply) => {
   if (!idea || idea.length > 4000) return reply.code(400).send({ error:'请输入 1–4000 字的创作想法' })
   const baseUrl = String(process.env.PROMPT_AGENT_BASE_URL || process.env.OPENAI_IMAGE_BASE_URL || '').replace(/\/$/, ''), apiKey = String(process.env.PROMPT_AGENT_API_KEY || process.env.OPENAI_IMAGE_API_KEY || ''), allowedModels = ['gpt-5.5','kimi-k2.5','gpt-5.4-mini'], requestedModel = String(input.model || process.env.PROMPT_AGENT_MODEL || 'gpt-5.5'), model = allowedModels.includes(requestedModel) ? requestedModel : 'gpt-5.5'
   if (!baseUrl || !apiKey) return reply.code(503).send({ error:'提示词 Agent 接口尚未配置' })
-  const detailRule = complexity === 'simple' ? `finalPrompt 控制在${kind === 'video' ? '180' : '120'}个中文字符以内，只保留主体、场景、关键动作或构图与一种主要风格，避免堆砌。` : `可补充构图、光线、材质、风格与动作细节，但保持自然清晰；另可返回 subject、scene、composition、lighting、style、motion、negativePrompt 字符串字段。`
-  const system = `你是 Viora 无限画布中的创作 Agent。理解用户需求、当前节点和上游视觉素材，规划下一步并生成底层提示词。只返回合法完整 JSON，不要 Markdown或解释。必须包含 finalPrompt、action、targetType、summary、shouldGenerate、steps。steps 是通用创作步骤数组，每项必须为 {"title":"简短名称","kind":"image或video","prompt":"该节点独立使用的完整提示词","referenceIndexes":[1]}。referenceIndexes 使用附带视觉参考的 1 开始编号，只选择该步骤真正需要的图片。需要多张图、多个方案、多个场景或多个分镜时，拆成多个 image 步骤；需要多个镜头视频时拆成多个 video 步骤，每个镜头独立一个节点；单一任务也返回一个 step，最多 8 步。action 只能是 update_current、create_child、create_new；targetType 只能是 image、video；summary 用一句简短中文说明将创建多少个图片和视频节点。没有当前节点时 create_new；有素材并继续创作时 create_child；空生成节点或明确改写当前时 update_current。只有用户明确要求立即/直接/开始生成时 shouldGenerate=true。${detailRule} 当前节点信息：${JSON.stringify(input.target ?? null)}。即使 shouldGenerate=true，也只规划节点，不声称已经生成媒体。`
+  const detailRule = complexity === 'simple' ? `finalPrompt 控制在${kind === 'video' ? '180' : '120'}个中文字符以内，只保留主体、场景、关键动作或构图与一种主要风格，避免堆砌。` : `详细模式通过拆分更多必要步骤、分镜和依赖关系表达复杂度，不要增加单个图片步骤的提示词长度；另可返回 subject、scene、composition、lighting、style、motion、negativePrompt 字符串字段。`
+  const system = `你是 Viora 无限画布中的创作 Agent。理解用户需求、当前节点和上游视觉素材，规划可实际执行的完整工作流并生成底层提示词。只返回合法完整 JSON，不要 Markdown或解释。必须包含 finalPrompt、action、targetType、summary、shouldGenerate、steps。steps 是按执行顺序排列的数组，每项必须为 {"title":"简短名称","kind":"image或video","prompt":"该节点独立使用的完整提示词","referenceIndexes":[1],"dependsOn":[1]}。所有 kind=image 的步骤默认使用 gpt-image-2，每条 prompt 必须控制在 140 个中文字符以内，只保留主体/参考素材对应关系、关键修改、场景构图和一种主要风格；禁止堆砌形容词、镜头参数、材质清单和重复约束。图片需求复杂时拆为多个具有明确职责的 image 步骤，不得写成一条超长提示词。referenceIndexes 使用用户附带视觉参考的 1 开始编号；dependsOn 使用 steps 的 1 开始编号，只能引用当前步骤之前的步骤。复杂视频必须采用分层生产链：先按需要生成可复用的人物、产品和环境设定图；再为每个镜头创建独立的最终分镜 image 步骤，通过 dependsOn 组合该镜头所需的设定素材；最后每个 video 步骤只依赖自己对应的最终分镜图，不要再次直接依赖已经被该分镜使用的人物或场景祖先素材。每个含人物或产品的 video 提示词都要明确要求严格保持输入分镜中的身份、脸型、发型、服装、产品外形和配色，禁止换脸、改变年龄性别、重设计服装或产品；只描述必要动作、环境运动和镜头运动。若最终视频需要先创造场景、人物或分镜参考图，必须先规划 image 步骤，再让 video 步骤通过 dependsOn 引用对应图片步骤。不同镜头需要不同场景时分别生成并正确复用；需要保持角色、产品或美术一致性时复用统一设定图。最终交付物必须出现在 steps 中：用户要视频时不能只返回准备图片，必须包含至少一个 video 步骤；用户明确不要视频时禁止添加 video。若用户已有合适图片，应优先直接引用素材，不重复生成。需要多个方案、场景或分镜时拆成多个步骤，每个视频镜头独立一个 video 步骤，最多 16 步。用户明确指定数量时必须准确提供相应数量的最终交付步骤；若还需要角色设定等中间步骤，应在 16 步内一并规划。禁止循环依赖，video 步骤通常作为末端。需求非常模糊且未指定媒体类型时，采用最小可行方案，只创建一个 image 步骤，不擅自扩展视频。action 只能是 update_current、create_child、create_new；targetType 只能是 image、video；summary 用一句简短中文说明完整执行链。没有当前节点时 create_new；有素材并继续创作时 create_child。用户点击开始创作即视为授权执行，shouldGenerate 默认 true，除非用户明确只要求规划或提示词。${detailRule} 当前节点信息：${JSON.stringify(input.target ?? null)}。不要声称媒体已经生成。`
   const visualSources = (input.visuals ?? []).map(String).filter(source=>/^\/api\/assets\/[^/]+\/content(?:\/|$)/.test(source)).slice(0,8)
   let visualInputs:string[]=[]
   try { validateOwnedInputUrls(visualSources,String(user.id),'image'); visualInputs=resolveOwnedInputUrls(visualSources,String(user.id),'image',model) } catch { return reply.code(400).send({error:'Agent 无法读取所选参考图片'}) }
   const textContent = [`用户想法：${idea}`, context.length ? `画布上下文：\n${context.map((item,index)=>`${index+1}. ${item}`).join('\n')}` : '画布上下文：无', visualInputs.length ? `附带 ${visualInputs.length} 张视觉参考，顺序与参考节点中的图片顺序一致。请理解图片内容后再生成提示词。` : '没有视觉参考。'].join('\n\n')
   const content:unknown = visualInputs.length ? [{type:'text',text:textContent},...visualInputs.map(url=>({type:'image_url',image_url:{url}}))] : textContent
+  const clientAbort=new AbortController();request.raw.once('aborted',()=>clientAbort.abort());reply.raw.once('close',()=>{if(!reply.raw.writableEnded)clientAbort.abort()})
   try {
-    const url = `${baseUrl}/v1/chat/completions`, options = { method:'POST', headers:{ authorization:`Bearer ${apiKey}`, 'content-type':'application/json' }, body:JSON.stringify({ model, stream:false, temperature:complexity === 'simple' ? .35 : .65, max_tokens:complexity === 'simple' ? 2400 : 3600, response_format:{ type:'json_object' }, messages:[{role:'system',content:system},{role:'user',content}] }), signal:AbortSignal.timeout(Number(process.env.PROMPT_AGENT_TIMEOUT_MS || 90000)) }
+    const url = `${baseUrl}/v1/chat/completions`
     const proxyUrl = String(process.env.PROMPT_AGENT_HTTPS_PROXY || process.env.OPENAI_IMAGE_HTTPS_PROXY || '')
-    const response = proxyUrl ? await undiciFetch(url, { ...options, dispatcher:new ProxyAgent(proxyUrl) }) : await fetch(url, options)
-    const payload = await response.json() as { choices?:Array<{finish_reason?:string;message?:{content?:string}}>; error?:{message?:string} }
-    if (!response.ok) return reply.code(response.status).send({ error:payload.error?.message || `Agent 接口返回 ${response.status}` })
-    const raw = String(payload.choices?.[0]?.message?.content || '').replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim(), result = parsePromptAgentResult(raw)
-    request.log.info({ model, complexity, finishReason:payload.choices?.[0]?.finish_reason, responseLength:raw.length }, 'prompt agent response received')
+    let result:Record<string,unknown>|undefined,raw='',finishReason=''
+    for(let attempt=1;attempt<=2;attempt++){
+      const options = { method:'POST', headers:{ authorization:`Bearer ${apiKey}`, 'content-type':'application/json' }, body:JSON.stringify({ model, stream:false, temperature:complexity === 'simple' ? .35 : .65, max_tokens:complexity === 'simple' ? 4800 : 7000, response_format:{ type:'json_object' }, messages:[{role:'system',content:system},{role:'user',content}] }), signal:AbortSignal.any([clientAbort.signal,AbortSignal.timeout(Number(process.env.PROMPT_AGENT_TIMEOUT_MS || 90000))]) }
+      const response = proxyUrl ? await undiciFetch(url, { ...options, dispatcher:new ProxyAgent(proxyUrl) }) : await fetch(url, options)
+      const payload = await response.json() as { choices?:Array<{finish_reason?:string;message?:{content?:string}}>; error?:{message?:string} }
+      if(!response.ok){if(attempt<2&&(response.status===429||response.status>=500)){request.log.warn({attempt,status:response.status},'prompt agent upstream retry');continue}return reply.code(response.status).send({ error:payload.error?.message || `Agent 接口返回 ${response.status}` })}
+      raw=String(payload.choices?.[0]?.message?.content||'').replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim();finishReason=String(payload.choices?.[0]?.finish_reason||'')
+      try{const parsed=parsePromptAgentResult(raw);if(!String(parsed.finalPrompt??'').trim())throw new SyntaxError('Agent missing finalPrompt');result=parsed;break}catch(error){if(attempt>=2)throw error;request.log.warn({attempt,finishReason,responseLength:raw.length},'prompt agent malformed response retry')}
+    }
+    if(!result)throw new SyntaxError('Agent returned no valid plan')
+    request.log.info({ model, complexity, finishReason, responseLength:raw.length }, 'prompt agent response received')
     const field = (name:string) => String(result[name] ?? '').trim()
-    const finalPrompt = field('finalPrompt'); if (!finalPrompt) throw new Error('Agent 未返回 finalPrompt')
+    const rawFinalPrompt = field('finalPrompt'); if (!rawFinalPrompt) throw new Error('Agent 未返回 finalPrompt')
     const action=['update_current','create_child','create_new'].includes(field('action'))?field('action'):'create_child', targetType=field('targetType')==='video'?'video':field('targetType')==='image'?'image':kind
-    const rawSteps=Array.isArray(result.steps)?result.steps:[],steps=rawSteps.slice(0,8).map(item=>{const step=item&&typeof item==='object'?item as Record<string,unknown>:{};return {title:String(step.title||'').trim(),kind:step.kind==='video'?'video':'image',prompt:String(step.prompt||'').trim(),referenceIndexes:Array.isArray(step.referenceIndexes)?step.referenceIndexes.map(Number).filter(value=>Number.isInteger(value)&&value>=1&&value<=visualInputs.length):[]}}).filter(step=>step.prompt)
-    return { model, kind:targetType, action, targetType, summary:field('summary')||`已准备${targetType==='video'?'视频':'图像'}创作节点`, shouldGenerate:result.shouldGenerate===true, steps:steps.length?steps:[{title:'创作任务',kind:targetType,prompt:finalPrompt,referenceIndexes:visualInputs.map((_,index)=>index+1)}], subject:field('subject'), scene:field('scene'), composition:field('composition'), lighting:field('lighting'), style:field('style'), motion:field('motion'), negativePrompt:field('negativePrompt'), finalPrompt }
-  } catch (error) { request.log.error({ message:error instanceof Error ? error.message : String(error) }, 'prompt agent failed'); return reply.code(502).send({ error:error instanceof SyntaxError ? 'Agent 返回内容不完整，请重新生成一次' : error instanceof Error ? error.message : '提示词生成失败' }) }
+    const finalPrompt = targetType === 'image' ? compactImagePrompt(rawFinalPrompt) : rawFinalPrompt
+    const rawSteps=Array.isArray(result.steps)?result.steps:[];let steps=rawSteps.slice(0,16).map((item,index)=>{const step=item&&typeof item==='object'?item as Record<string,unknown>:{};const stepKind=step.kind==='video'?'video':'image';const rawPrompt=String(step.prompt||'').trim();return {title:String(step.title||'').trim(),kind:stepKind,prompt:stepKind==='image'?compactImagePrompt(rawPrompt):rawPrompt,referenceIndexes:Array.isArray(step.referenceIndexes)?[...new Set(step.referenceIndexes.map(Number).filter(value=>Number.isInteger(value)&&value>=1&&value<=visualInputs.length))]:[],dependsOn:Array.isArray(step.dependsOn)?[...new Set(step.dependsOn.map(Number).filter(value=>Number.isInteger(value)&&value>=1&&value<=index))]:[]}}).filter(step=>step.prompt)
+    const explicitlyNoVideo=/(?:不要|无需|不需要|禁止)(?:生成|制作)?视频|只(?:要|生成).{0,8}(?:图片|海报|封面)/.test(idea);let forcedFinalVideo=false
+    if(kind==='video'&&!explicitlyNoVideo&&!steps.some(step=>step.kind==='video')){forcedFinalVideo=true;steps=steps.slice(0,15);const imageDependencies=steps.map((step,index)=>step.kind==='image'?index+1:0).filter(Boolean);steps.push({title:'最终视频',kind:'video',prompt:`根据前置关键视觉素材制作完整视频：${idea}`.slice(0,500),referenceIndexes:visualInputs.map((_,index)=>index+1),dependsOn:imageDependencies})}
+    const isAncestor=(candidate:number,stepNumber:number,seen=new Set<number>()):boolean=>{if(seen.has(stepNumber))return false;seen.add(stepNumber);const parent=steps[stepNumber-1];return Boolean(parent?.dependsOn.some(dependency=>dependency===candidate||isAncestor(candidate,dependency,seen)))}
+    steps=steps.map(step=>step.kind!=='video'?step:{...step,dependsOn:step.dependsOn.filter(candidate=>!step.dependsOn.some(other=>other!==candidate&&isAncestor(candidate,other)))})
+    return { model, kind:targetType, action, targetType, summary:forcedFinalVideo?'先生成所需关键视觉图，再基于这些素材制作最终视频。':field('summary')||`已准备${targetType==='video'?'视频':'图像'}创作节点`, shouldGenerate:result.shouldGenerate!==false, steps:steps.length?steps:[{title:'创作任务',kind:targetType,prompt:finalPrompt,referenceIndexes:visualInputs.map((_,index)=>index+1),dependsOn:[]}], subject:field('subject'), scene:field('scene'), composition:field('composition'), lighting:field('lighting'), style:field('style'), motion:field('motion'), negativePrompt:field('negativePrompt'), finalPrompt }
+  } catch (error) { if(clientAbort.signal.aborted)return;request.log.error({ message:error instanceof Error ? error.message : String(error) }, 'prompt agent failed'); return reply.code(502).send({ error:error instanceof SyntaxError ? 'Agent 返回内容不完整，请重新生成一次' : error instanceof Error ? error.message : '提示词生成失败' }) }
 })
 app.get('/user-api-models', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; return getAll('SELECT id, kind, name, model, base_url AS baseUrl, CASE WHEN proxy_url IS NULL OR proxy_url = ? THEN 0 ELSE 1 END AS hasProxy, created_at AS createdAt, updated_at AS updatedAt FROM user_api_models WHERE user_id = ? ORDER BY created_at ASC', ['', String(user.id)]).map(item => ({ ...item, hasProxy: Boolean(item.hasProxy), hasKey: true })) })
 app.post('/user-api-models', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const body = request.body as { kind?: string; name?: string; model?: string; baseUrl?: string; apiKey?: string; proxyUrl?: string }, kind = String(body.kind ?? ''), name = String(body.name ?? '').trim(), model = String(body.model ?? '').trim(), baseUrl = normalizeHttpUrl(body.baseUrl), apiKey = String(body.apiKey ?? '').trim(), proxyUrl = String(body.proxyUrl ?? '').trim(); if (!['image', 'video'].includes(kind)) return reply.code(400).send({ error: '请选择图像或视频类型' }); if (!name || name.length > 60 || !model || model.length > 120 || !baseUrl || !apiKey) return reply.code(400).send({ error: '请完整填写名称、模型、接口地址和密钥' }); if (proxyUrl && !normalizeHttpUrl(proxyUrl)) return reply.code(400).send({ error: '代理地址无效' }); const id = randomUUID(), now = new Date().toISOString(); database.run('INSERT INTO user_api_models (id,user_id,kind,name,model,base_url,api_key,proxy_url,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)', [id,String(user.id),kind,name,model,baseUrl,apiKey,proxyUrl,now,now]); persist(); return reply.code(201).send({ id,kind,name,model,baseUrl,hasKey:true,hasProxy:Boolean(proxyUrl),createdAt:now,updatedAt:now }) })
@@ -158,12 +173,12 @@ app.patch('/users/me', async (request, reply) => { const user = requireUser(requ
 app.post('/users/me/credits/redeem', async (request, reply) => { const user=requireUser(request,reply); if(!user)return; const code=normalizeRechargeCode((request.body as {code?:string}).code), codeHash=hashRechargeCode(code); if(!code)return reply.code(400).send({error:'请输入充值码'}); const voucher=getOne('SELECT id,credits,redeemed_by AS redeemedBy FROM recharge_codes WHERE code_hash = ?', [codeHash]); if(!voucher)return reply.code(404).send({error:'充值码无效'}); if(voucher.redeemedBy)return reply.code(409).send({error:'该充值码已经使用'}); const now=new Date().toISOString(),amount=Number(voucher.credits); database.run('BEGIN'); try{database.run('UPDATE recharge_codes SET redeemed_by = ?, redeemed_at = ? WHERE id = ? AND redeemed_by IS NULL',[String(user.id),now,String(voucher.id)]); database.run('UPDATE users SET credits = credits + ? WHERE id = ?',[amount,String(user.id)]); database.run('INSERT INTO credit_transactions (id,user_id,amount,type,reference_id,created_at) VALUES (?,?,?,?,?,?)',[randomUUID(),String(user.id),amount,'recharge',String(voucher.id),now]); database.run('COMMIT')}catch(error){database.run('ROLLBACK');throw error} persist(); const updated=getOne('SELECT credits,reserved_credits AS reservedCredits FROM users WHERE id = ?',[String(user.id)]); return {ok:true,added:amount,credits:Number(updated?.credits??0),reservedCredits:Number(updated?.reservedCredits??0)} })
 app.post('/admin/recharge-codes', async (request,reply) => { const user=currentUser(request),expected=String(process.env.CREDIT_ADMIN_KEY||''),actual=String(request.headers['x-admin-key']||''),authorized=Boolean(user?.isAdmin)||(Boolean(expected&&actual)&&secureTextEqual(actual,expected)); if(!authorized)return reply.code(403).send({error:'仅管理员可以生成充值码'}); const body=request.body as {credits?:number;count?:number},credits=Math.floor(Number(body.credits)),count=Math.min(100,Math.max(1,Math.floor(Number(body.count||1)))); if(!Number.isFinite(credits)||credits<1||credits>100000)return reply.code(400).send({error:'点数需要在 1 到 100000 之间'}); const now=new Date().toISOString(),codes:string[]=[]; for(let index=0;index<count;index++){const code=`VIO-${credits}-${randomBytes(5).toString('hex').toUpperCase()}`;database.run('INSERT INTO recharge_codes (id,code_hash,credits,created_at) VALUES (?,?,?,?)',[randomUUID(),hashRechargeCode(code),credits,now]);codes.push(code)} persist(); return {credits,count,codes} })
 app.get('/showcase', async () => getAll(`SELECT assets.id, assets.name, assets.mime_type AS mimeType, assets.created_at AS createdAt, users.name AS author
-  FROM assets JOIN users ON users.id = assets.user_id WHERE assets.is_public = 1 ORDER BY assets.created_at DESC LIMIT 30`, []).map(asset => ({ ...asset, url: namedAssetUrl(String(asset.id), String(asset.name), true) })))
+  FROM assets JOIN users ON users.id = assets.user_id WHERE assets.is_public = 1 ORDER BY assets.created_at DESC LIMIT 30`, []).map(asset => ({ ...asset, url: namedAssetUrl(String(asset.id), String(asset.name), true), thumbnailUrl: assetThumbnailUrl(String(asset.id), String(asset.mimeType), true) })))
 
 app.get('/projects', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const userId = String(user.id); return getAll(`SELECT projects.id, projects.name, projects.created_at AS createdAt, projects.updated_at AS updatedAt, COALESCE(projects.last_opened_at, projects.updated_at) AS lastOpenedAt,
   (SELECT count(*) FROM assets WHERE assets.project_id = projects.id AND assets.user_id = projects.user_id) AS assetCount,
   (SELECT id FROM assets WHERE assets.project_id = projects.id AND assets.user_id = projects.user_id AND assets.mime_type LIKE 'image/%' ORDER BY assets.created_at DESC LIMIT 1) AS previewAssetId
-  FROM projects WHERE projects.user_id = ? ORDER BY COALESCE(projects.last_opened_at, projects.updated_at) DESC`, [userId]).map(project => { const canvas = getOne('SELECT document FROM project_canvases WHERE project_id = ?', [String(project.id)]); let nodeCount = 0; try { nodeCount = JSON.parse(String(canvas?.document ?? '{}')).nodes?.length ?? 0 } catch { /* malformed legacy canvas */ } return { ...project, nodeCount, previewUrl: project.previewAssetId ? `/api/assets/${project.previewAssetId}/content` : null } }) })
+  FROM projects WHERE projects.user_id = ? ORDER BY COALESCE(projects.last_opened_at, projects.updated_at) DESC`, [userId]).map(project => { const canvas = getOne('SELECT document FROM project_canvases WHERE project_id = ?', [String(project.id)]); let nodeCount = 0; try { nodeCount = JSON.parse(String(canvas?.document ?? '{}')).nodes?.length ?? 0 } catch { /* malformed legacy canvas */ } return { ...project, nodeCount, previewUrl: project.previewAssetId ? `/api/assets/${project.previewAssetId}/thumbnail` : null } }) })
 app.post('/projects', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const body = request.body as { name?: string }, id = randomUUID(), now = new Date().toISOString(); database.run('INSERT INTO projects (id, user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', [id, String(user.id), body.name?.trim() || '未命名项目', now, now]); database.run('INSERT INTO project_canvases (project_id, document, updated_at) VALUES (?, ?, ?)', [id, emptyCanvas(), now]); persist(); return reply.code(201).send({ id, name: body.name?.trim() || '未命名项目', createdAt: now, updatedAt: now }) })
 app.patch('/projects/:projectId', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const userId = String(user.id), { projectId } = request.params as { projectId: string }, name = String((request.body as { name?: string }).name ?? '').trim(); if (!ownsProject(projectId, userId)) return reply.code(404).send({ error: 'Project not found' }); if (!name || name.length > 60) return reply.code(400).send({ error: '项目名称需要在 1 到 60 个字符之间' }); const now = new Date().toISOString(); database.run('UPDATE projects SET name = ?, updated_at = ? WHERE id = ? AND user_id = ?', [name, now, projectId, userId]); persist(); return { id: projectId, name, updatedAt: now } })
 app.post('/projects/:projectId/duplicate', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const userId = String(user.id), { projectId } = request.params as { projectId: string }, source = getOne('SELECT name FROM projects WHERE id = ? AND user_id = ?', [projectId, userId]); if (!source) return reply.code(404).send({ error: 'Project not found' }); const id = randomUUID(), now = new Date().toISOString(), name = `${String(source.name)} 副本`, canvas = getOne('SELECT document FROM project_canvases WHERE project_id = ?', [projectId]); database.run('INSERT INTO projects (id, user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', [id, userId, name, now, now]); database.run('INSERT INTO project_canvases (project_id, document, updated_at) VALUES (?, ?, ?)', [id, String(canvas?.document ?? emptyCanvas()), now]); for (const asset of getAll('SELECT name, mime_type, size, storage_name, is_public FROM assets WHERE project_id = ? AND user_id = ?', [projectId, userId])) { const assetId = randomUUID(), storageName = `${assetId}.bin`; copyFileSync(`${uploadDirectory}/${asset.storage_name}`, `${uploadDirectory}/${storageName}`); database.run('INSERT INTO assets (id, project_id, user_id, name, mime_type, size, storage_name, is_public, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [assetId, id, userId, asset.name, asset.mime_type, asset.size, storageName, 0, now]) } persist(); return reply.code(201).send({ id, name, createdAt: now, updatedAt: now }) })
@@ -172,13 +187,15 @@ app.delete('/projects/:projectId', async (request, reply) => { const user = requ
 app.get('/projects/:projectId/canvas', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const { projectId } = request.params as { projectId: string }; if (!ownsProject(projectId, String(user.id))) return reply.code(404).send({ error: 'Project not found' }); const row = getOne('SELECT document, updated_at FROM project_canvases WHERE project_id = ?', [projectId]); if (!row) return reply.code(404).send({ error: 'Canvas not found' }); database.run('UPDATE projects SET last_opened_at = ? WHERE id = ?', [new Date().toISOString(), projectId]); persist(); return { projectId, ...JSON.parse(String(row.document)), updatedAt: row.updated_at } })
 app.put('/projects/:projectId/canvas', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const { projectId } = request.params as { projectId: string }; if (!ownsProject(projectId, String(user.id))) return reply.code(404).send({ error: 'Project not found' }); const body = request.body as CanvasPayload, now = new Date().toISOString(); database.run('INSERT INTO project_canvases (project_id, document, updated_at) VALUES (?, ?, ?) ON CONFLICT(project_id) DO UPDATE SET document=excluded.document, updated_at=excluded.updated_at', [projectId, JSON.stringify({ nodes: body.nodes, links: body.links, camera: body.camera }), now]); database.run('UPDATE projects SET updated_at = ? WHERE id = ?', [now, projectId]); persist(); return { projectId, updatedAt: now } })
 
-app.get('/projects/:projectId/assets', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const userId = String(user.id), { projectId } = request.params as { projectId: string }; if (!ownsProject(projectId, userId)) return reply.code(404).send({ error: 'Project not found' }); return getAll('SELECT id, name, mime_type AS mimeType, size, is_public AS isPublic, created_at AS createdAt FROM assets WHERE project_id = ? AND user_id = ? ORDER BY created_at DESC', [projectId, userId]).map(asset => ({ ...asset, isPublic: Boolean(asset.isPublic), url: namedAssetUrl(String(asset.id), String(asset.name)) })) })
-app.get('/assets', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const userId = String(user.id); return getAll(`SELECT assets.id, assets.project_id AS projectId, projects.name AS projectName, assets.name, assets.mime_type AS mimeType, assets.size, assets.is_public AS isPublic, assets.created_at AS createdAt FROM assets JOIN projects ON projects.id = assets.project_id WHERE assets.user_id = ? ORDER BY assets.created_at DESC`, [userId]).map(asset => ({ ...asset, isPublic: Boolean(asset.isPublic), url: namedAssetUrl(String(asset.id), String(asset.name)) })) })
+app.get('/projects/:projectId/assets', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const userId = String(user.id), { projectId } = request.params as { projectId: string }; if (!ownsProject(projectId, userId)) return reply.code(404).send({ error: 'Project not found' }); return getAll('SELECT id, name, mime_type AS mimeType, size, is_public AS isPublic, created_at AS createdAt FROM assets WHERE project_id = ? AND user_id = ? ORDER BY created_at DESC', [projectId, userId]).map(asset => ({ ...asset, isPublic: Boolean(asset.isPublic), url: namedAssetUrl(String(asset.id), String(asset.name)), thumbnailUrl: assetThumbnailUrl(String(asset.id), String(asset.mimeType)) })) })
+app.get('/assets', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const userId = String(user.id); return getAll(`SELECT assets.id, assets.project_id AS projectId, projects.name AS projectName, assets.name, assets.mime_type AS mimeType, assets.size, assets.is_public AS isPublic, assets.created_at AS createdAt FROM assets JOIN projects ON projects.id = assets.project_id WHERE assets.user_id = ? ORDER BY assets.created_at DESC`, [userId]).map(asset => ({ ...asset, isPublic: Boolean(asset.isPublic), url: namedAssetUrl(String(asset.id), String(asset.name)), thumbnailUrl: assetThumbnailUrl(String(asset.id), String(asset.mimeType)) })) })
 app.post('/projects/:projectId/assets', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const userId = String(user.id), { projectId } = request.params as { projectId: string }; if (!ownsProject(projectId, userId)) return reply.code(404).send({ error: 'Project not found' }); const body = request.body as { files?: Array<{ name: string; mimeType: string; data: string }> }, uploaded = []; for (const file of body.files ?? []) { const bytes = Buffer.from(file.data, 'base64'); if (bytes.length > 100 * 1024 * 1024) return reply.code(413).send({ error: 'Asset exceeds 100MB' }); const id = randomUUID(), storageName = `${id}.bin`, now = new Date().toISOString(); writeFileSync(`${uploadDirectory}/${storageName}`, bytes); database.run('INSERT INTO assets (id, project_id, user_id, name, mime_type, size, storage_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [id, projectId, userId, file.name, file.mimeType, bytes.length, storageName, now]); uploaded.push({ id, name: file.name, mimeType: file.mimeType, size: bytes.length, createdAt: now, url: namedAssetUrl(id, file.name) }) } persist(); return reply.code(201).send(uploaded) })
 app.get('/assets/:assetId/content', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const { assetId } = request.params as { assetId: string }; const asset = getOne('SELECT name FROM assets WHERE id = ? AND user_id = ?', [assetId, String(user.id)]); if (!asset) return reply.code(404).send({ error: 'Asset not found' }); return reply.code(302).header('location', namedAssetUrl(assetId, String(asset.name))).send() })
 app.get('/assets/:assetId/content/:filename', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const { assetId } = request.params as { assetId: string }; const asset = getOne('SELECT name, mime_type, storage_name FROM assets WHERE id = ? AND user_id = ?', [assetId, String(user.id)]); if (!asset) return reply.code(404).send({ error: 'Asset not found' }); reply.type(String(asset.mime_type)).header('content-disposition', assetDisposition(String(asset.name))).header('cache-control', 'private, max-age=3600'); return reply.send(readFileSync(`${uploadDirectory}/${asset.storage_name}`)) })
+app.get('/assets/:assetId/thumbnail', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const { assetId } = request.params as { assetId: string }; const asset = getOne('SELECT mime_type, storage_name FROM assets WHERE id = ? AND user_id = ?', [assetId, String(user.id)]); if (!asset) return reply.code(404).send({ error: 'Asset not found' }); return sendAssetThumbnail(reply, assetId, asset) })
 app.get('/public/assets/:assetId/content', async (request, reply) => { const { assetId } = request.params as { assetId: string }; const asset = getOne('SELECT name FROM assets WHERE id = ? AND is_public = 1', [assetId]); if (!asset) return reply.code(404).send({ error: 'Asset not found' }); return reply.code(302).header('location', namedAssetUrl(assetId, String(asset.name), true)).send() })
 app.get('/public/assets/:assetId/content/:filename', async (request, reply) => { const { assetId } = request.params as { assetId: string }; const asset = getOne('SELECT name, mime_type, storage_name FROM assets WHERE id = ? AND is_public = 1', [assetId]); if (!asset) return reply.code(404).send({ error: 'Asset not found' }); reply.type(String(asset.mime_type)).header('content-disposition', assetDisposition(String(asset.name))).header('cache-control', 'public, max-age=3600'); return reply.send(readFileSync(`${uploadDirectory}/${asset.storage_name}`)) })
+app.get('/public/assets/:assetId/thumbnail', async (request, reply) => { const { assetId } = request.params as { assetId: string }; const asset = getOne('SELECT mime_type, storage_name FROM assets WHERE id = ? AND is_public = 1', [assetId]); if (!asset) return reply.code(404).send({ error: 'Asset not found' }); return sendAssetThumbnail(reply, assetId, asset, true) })
 app.patch('/assets/:assetId/visibility', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const userId = String(user.id), { assetId } = request.params as { assetId: string }; const asset = getOne('SELECT id FROM assets WHERE id = ? AND user_id = ?', [assetId, userId]); if (!asset) return reply.code(404).send({ error: 'Asset not found' }); const body = request.body as { isPublic?: boolean }; database.run('UPDATE assets SET is_public = ? WHERE id = ? AND user_id = ?', [body.isPublic ? 1 : 0, assetId, userId]); persist(); return { id: assetId, isPublic: Boolean(body.isPublic) } })
 app.delete('/assets/:assetId', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; const userId = String(user.id), { assetId } = request.params as { assetId: string }; const asset = getOne('SELECT storage_name FROM assets WHERE id = ? AND user_id = ?', [assetId, userId]); if (!asset) return reply.code(404).send({ error: 'Asset not found' }); const path = `${uploadDirectory}/${asset.storage_name}`; if (existsSync(path)) unlinkSync(path); database.run('DELETE FROM assets WHERE id = ? AND user_id = ?', [assetId, userId]); persist(); return reply.code(204).send() })
 
@@ -212,8 +229,9 @@ app.post('/jobs', async (request, reply) => {
   const projectId = input.projectId ?? defaultProjectId
   if (!ownsProject(projectId, userId)) return reply.code(404).send({ error: 'Project not found' })
   let model = input.model ?? (input.kind === 'video' ? process.env.AGNES_VIDEO_DEFAULT_MODEL || 'agnes-video-v2.0' : process.env.OPENAI_IMAGE_DEFAULT_MODEL || 'gpt-image-2')
-  const creditCost = model === 'grok-imagine-video-1.5-preview' ? 2 : 0
-  if (creditCost && Number(user.credits ?? 0) - Number(user.reservedCredits ?? 0) < creditCost) return reply.code(402).send({ error:'创作点数不足，Grok 每次生成需要 2 点' })
+  if (model === 'gemini-3.1-flash-image') return reply.code(503).send({ error:'Gemini 图片模型仍处于实验性适配阶段，暂未开放生成' })
+  const creditCost = model === 'grok-imagine-video-1.5-preview' ? 2 : model === 'grok-imagine-image' ? 1 : 0
+  if (creditCost && Number(user.credits ?? 0) - Number(user.reservedCredits ?? 0) < creditCost) return reply.code(402).send({ error:`创作点数不足，当前模型每次生成需要 ${creditCost} 点` })
   const customId = model.startsWith('custom:') ? model.slice(7) : '', custom = customId ? getOne('SELECT * FROM user_api_models WHERE id = ? AND user_id = ?', [customId,userId]) : undefined
   if (customId && (!custom || String(custom.kind) !== input.kind)) return reply.code(400).send({ error:'自定义模型不存在或类型不匹配' })
   if (custom) model = String(custom.model)
@@ -245,6 +263,19 @@ function parsePromptAgentResult(raw: string): Record<string, unknown> {
   }
 }
 
+function compactImagePrompt(value: string, limit = 140) {
+  const normalized = value.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= limit) return normalized
+  const sentences = normalized.match(/[^。！？；.!?;]+[。！？；.!?;]?/g) ?? [normalized]
+  let compact = ''
+  for (const sentence of sentences) {
+    const next = `${compact}${sentence.trim()}`
+    if (next.length > limit) break
+    compact = next
+  }
+  return (compact || normalized.slice(0, limit)).replace(/[，、：:\s]+$/, '')
+}
+
 function getOne(sql: string, values: Array<string | number>) {
   const statement = database.prepare(sql); statement.bind(values)
   const row = statement.step() ? statement.getAsObject() : undefined
@@ -260,6 +291,15 @@ function normalizeHttpUrl(value: unknown) { try { const url = new URL(String(val
 function validEmail(email: string) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 254 }
 function assetDisposition(name: string) { const safe = name.replace(/[\r\n]/g, '').slice(0, 240) || 'asset'; return `inline; filename="asset"; filename*=UTF-8''${encodeURIComponent(safe)}` }
 function namedAssetUrl(id: string, name: string, isPublic = false) { const safe = name.replace(/[\r\n/\\]/g, '').slice(0, 240) || 'asset'; return `/api/${isPublic ? 'public/' : ''}assets/${id}/content/${encodeURIComponent(safe)}` }
+function assetThumbnailUrl(id: string, mimeType: string, isPublic = false) { return mimeType.startsWith('image/') ? `/api/${isPublic ? 'public/' : ''}assets/${id}/thumbnail` : undefined }
+async function sendAssetThumbnail(reply: FastifyReply, assetId: string, asset: Record<string, unknown>, isPublic = false) {
+  const mimeType = String(asset.mime_type ?? '')
+  if (!mimeType.startsWith('image/')) return reply.code(415).send({ error: 'Asset is not an image' })
+  const thumbnailPath = `${thumbnailDirectory}/${assetId}.webp`
+  if (!existsSync(thumbnailPath)) await sharp(`${uploadDirectory}/${String(asset.storage_name)}`).rotate().resize({ width: 640, height: 640, fit: 'inside', withoutEnlargement: true }).webp({ quality: 72, effort: 3 }).toFile(thumbnailPath)
+  reply.type('image/webp').header('cache-control', `${isPublic ? 'public' : 'private'}, max-age=86400, immutable`)
+  return reply.send(readFileSync(thumbnailPath))
+}
 function validateOwnedInputUrls(urls: string[], userId: string, kind: JobInput['kind']) { for (const source of urls) { const match = source.match(/^\/api\/assets\/([^/]+)\/content(?:\/|$)/); if (!match) continue; const asset = getOne('SELECT size FROM assets WHERE id = ? AND user_id = ?', [decodeURIComponent(match[1]), userId]); if (!asset) throw new Error('输入素材不存在或不属于当前用户'); if (kind === 'video' && Number(asset.size ?? 0) > 15 * 1024 * 1024) throw new Error('参考图片超过 15MB') } }
 function resolveOwnedInputUrls(urls: string[], userId: string, kind: JobInput['kind'], _model: string) { return urls.map(source => { const match = source.match(/^\/api\/assets\/([^/]+)\/content(?:\/|$)/); if (!match) return source; const assetId = decodeURIComponent(match[1]), asset = getOne('SELECT mime_type, size, storage_name FROM assets WHERE id = ? AND user_id = ?', [assetId, userId]); if (!asset) throw new Error('输入素材不存在或不属于当前用户'); const size = Number(asset.size ?? 0); if (kind === 'video' && size > 15 * 1024 * 1024) throw new Error('参考图片超过 15MB'); const bytes = readFileSync(`${uploadDirectory}/${asset.storage_name}`); if (!bytes.length) throw new Error('输入素材为空'); return `data:${String(asset.mime_type || 'application/octet-stream')};base64,${bytes.toString('base64')}` }) }
 function signedGenerationInputUrl(assetId: string) { const expires = Math.floor(Date.now() / 1000) + 1800, signature = createHmac('sha256', generationInputSigningSecret).update(`${assetId}:${expires}`).digest('base64url'); return `${generationPublicBaseUrl}/api/generation-inputs/${encodeURIComponent(assetId)}?expires=${expires}&signature=${signature}` }
@@ -283,10 +323,10 @@ function createDefaultProject(userId: string, now = new Date().toISOString()) { 
 
 function persist() { writeFileSync(databasePath, Buffer.from(database.export())) }
 
-const configuredImageConcurrency = Number(process.env.IMAGE_GENERATION_CONCURRENCY || 8)
+const configuredImageConcurrency = Number(process.env.IMAGE_GENERATION_CONCURRENCY || 3)
 const configuredVideoConcurrency = Number(process.env.VIDEO_GENERATION_CONCURRENCY || 2)
 const generationConcurrency: Record<JobInput['kind'], number> = {
-  image: Number.isFinite(configuredImageConcurrency) ? Math.max(1, Math.floor(configuredImageConcurrency)) : 8,
+  image: Number.isFinite(configuredImageConcurrency) ? Math.max(1, Math.floor(configuredImageConcurrency)) : 3,
   video: Number.isFinite(configuredVideoConcurrency) ? Math.max(1, Math.floor(configuredVideoConcurrency)) : 2,
 }
 const activeGenerationJobs: Record<JobInput['kind'], Set<string>> = { image:new Set(), video:new Set() }
@@ -297,7 +337,7 @@ function pumpGenerationQueue() {
   queuePumpRunning = true
   try {
     for (const kind of ['video','image'] as const) while (activeGenerationJobs[kind].size < generationConcurrency[kind]) {
-      const job = getOne("SELECT * FROM jobs WHERE status = 'queued' AND kind = ? ORDER BY created_at ASC, rowid ASC LIMIT 1", [kind])
+      const job = nextQueuedGenerationJob(kind)
       if (!job) break
       const id = String(job.id)
       activeGenerationJobs[kind].add(id)
@@ -309,6 +349,22 @@ function pumpGenerationQueue() {
   } finally { queuePumpRunning = false }
 }
 
+function isImageEditJob(job: Record<string, unknown>) { return parseJsonArray(job.input_urls).length > 0 }
+function activeImageEditCount() {
+  let count = 0
+  for (const id of activeGenerationJobs.image) {
+    const job = getOne('SELECT input_urls FROM jobs WHERE id = ?', [id])
+    if (job && isImageEditJob(job)) count++
+  }
+  return count
+}
+function nextQueuedGenerationJob(kind: JobInput['kind']) {
+  if (kind !== 'image') return getOne("SELECT * FROM jobs WHERE status = 'queued' AND kind = ? ORDER BY created_at ASC, rowid ASC LIMIT 1", [kind])
+  const editSlotAvailable = activeImageEditCount() < 1
+  return getAll("SELECT * FROM jobs WHERE status = 'queued' AND kind = 'image' ORDER BY created_at ASC, rowid ASC", [])
+    .find(job => !isImageEditJob(job) || editSlotAvailable)
+}
+
 async function executeQueuedJob(job: Record<string, unknown>) {
   const id = String(job.id), kind = String(job.kind) as JobInput['kind'], userId = String(job.user_id), model = String(job.model)
   try {
@@ -317,12 +373,31 @@ async function executeQueuedJob(job: Record<string, unknown>) {
     const provider = custom ? (kind === 'image' ? new OpenAiImageProvider({ baseUrl:String(custom.base_url), apiKey:String(custom.api_key) }) : new OpenAiVideoProvider({ baseUrl:String(custom.base_url), apiKey:String(custom.api_key) })) : generationProvider
     const rawInputUrls = parseJsonArray(job.input_urls), inputUrls = resolveOwnedInputUrls(rawInputUrls, userId, kind, model)
     const parameters = parseJsonObject(job.parameters)
-    let updates = Promise.resolve()
-    await provider.run({ internalJobId:id, projectId:String(job.project_id), nodeId:Number(job.node_id), kind, prompt:String(job.prompt), model, inputUrls, parameters }, update => { updates = updates.then(() => updateJob(id, update.status === 'queued' ? { ...update, status:'running' } : update)) })
-    await updates
+    let updates = Promise.resolve(), lastError:unknown
+    const attempts = kind === 'image' ? 3 : 1
+    for (let attempt=1;attempt<=attempts;attempt++) {
+      try {
+        await provider.run({ internalJobId:id, projectId:String(job.project_id), nodeId:Number(job.node_id), kind, prompt:String(job.prompt), model, inputUrls, parameters }, update => { updates = updates.then(() => updateJob(id, update.status === 'queued' ? { ...update, status:'running' } : update)) })
+        await updates
+        return
+      } catch (error) {
+        lastError=error
+        if (attempt>=attempts || !isTransientGenerationError(error)) throw error
+        app.log.warn({ jobId:id, kind, attempt, error:error instanceof Error?error.message:String(error) }, 'transient generation failure, retrying')
+        await updateJob(id,{ status:'running', progress:Math.max(5,Math.min(20,attempt*8)), error:undefined })
+        await new Promise(resolve=>setTimeout(resolve,attempt*2500))
+      }
+    }
+    throw lastError
   } catch (error) {
     await updateJob(id, { status:'failed', progress:0, error:error instanceof Error ? error.message : 'Generation failed' })
   }
+}
+
+function isTransientGenerationError(error:unknown) {
+  const message=error instanceof Error?error.message:String(error)
+  if (/auth_unavailable|no auth available|unexpected EOF|ETIMEDOUT|timeout|timed out|aborted due to timeout|backend-api\/codex\/images/i.test(message)) return false
+  return /ECONNRESET|ECONNREFUSED|fetch failed|socket|network|temporar|502|503|504/i.test(message)
 }
 
 function parseJsonArray(value: unknown) { try { const parsed = JSON.parse(String(value || '[]')); return Array.isArray(parsed) ? parsed.map(String) : [] } catch { return [] } }
