@@ -1220,6 +1220,7 @@ body[data-theme="light"] .canvas-guide-particle-field i { background:#075f6c; bo
 body[data-theme="light"] .canvas-guide-particle-field i:nth-child(3n) { background:#384b91; box-shadow:0 0 0 2px rgba(27,36,82,.24),0 0 17px rgba(56,75,145,.78); }
 body[data-theme="light"] .canvas-guide-particle-field i:nth-child(5n) { background:#172c38; box-shadow:0 0 0 2px rgba(23,44,56,.2),0 0 15px rgba(23,44,56,.62); }
 body:not(.home-mode)[data-theme="dark"] .app-update-popover::after,body:not(.home-mode)[data-theme="dark"] .app-update-popover::before { background:radial-gradient(circle at 12% 0,rgba(126,199,207,.1),transparent 46%),linear-gradient(135deg,rgba(49,48,45,.98),rgba(24,23,21,.98)); border-color:var(--ws-border); }
+body:not(.home-mode)[data-theme="dark"] .app-update-popover::before { background:radial-gradient(circle at 30% 24%,#aeb7b7 0 22%,#737d7e 45%,#41494a 68%,#171c1d 100%); border-color:rgba(174,190,190,.48); box-shadow:0 3px 10px rgba(151,174,173,.16),0 5px 13px rgba(0,0,0,.3); }
 body:not(.home-mode)[data-theme="light"] .app-update-popover::after,body:not(.home-mode)[data-theme="light"] .app-update-popover::before { background:radial-gradient(circle at 9% 0,rgba(255,255,255,.98),rgba(255,255,255,0) 43%),linear-gradient(135deg,rgba(255,255,255,.98),rgba(225,232,235,.96)); border-color:var(--ws-border); }
 .canvas-guide-particle-field i { animation-duration:.72s; }
 .app-update-popover.is-leaving { animation:none!important; }
