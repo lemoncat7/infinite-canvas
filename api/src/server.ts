@@ -5,8 +5,11 @@ import { createHash, createHmac, randomBytes, randomUUID, scryptSync, timingSafe
 import { createGenerationProvider, type GenerationUpdate } from './providers/index.js'
 import { OpenAiImageProvider } from './providers/openai-image.js'
 import { OpenAiVideoProvider } from './providers/openai-video.js'
+import { SdCppImageProvider } from './providers/sdcpp-image.js'
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
 import sharp from 'sharp'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 
 type CanvasPayload = { nodes: unknown[]; links: unknown[]; camera?: unknown }
 type JobInput = { projectId?: string; nodeId: number; kind: 'image' | 'video'; prompt: string; model?: string; inputUrls?: string[]; parameters?: Record<string, unknown> }
@@ -58,6 +61,8 @@ ensureColumn('jobs', 'credit_cost', 'INTEGER NOT NULL DEFAULT 0')
 ensureColumn('jobs', 'credit_settled', 'INTEGER NOT NULL DEFAULT 0')
 ensureColumn('notifications', 'priority', "TEXT NOT NULL DEFAULT 'normal'")
 ensureColumn('notifications', 'auto_popup', 'INTEGER NOT NULL DEFAULT 0')
+ensureColumn('sessions', 'last_activity_at', 'TEXT')
+database.run('UPDATE sessions SET last_activity_at = COALESCE(last_activity_at, created_at)')
 if (!getOne('SELECT id FROM app_migrations WHERE id = ?', ['reset-initial-credits-to-5'])) {
   const now = new Date().toISOString()
   database.run('UPDATE users SET credits = 5, reserved_credits = 0')
@@ -66,6 +71,9 @@ if (!getOne('SELECT id FROM app_migrations WHERE id = ?', ['reset-initial-credit
 if(!getOne('SELECT id FROM notifications WHERE id = ?',['comic-fixes-2026-08-03']))database.run('INSERT INTO notifications (id,title,content,type,created_at) VALUES (?,?,?,?,?)',['comic-fixes-2026-08-03','漫剧创作体验已更新','已增加更细致的制作分镜与连续性检查，单镜头调整为 3–8 秒；修复流式连接中断、自动重试、铺到画布批量创建，以及分镜时长和画幅同步问题。','fix','2026-08-03T10:30:00.000Z'])
 database.run("UPDATE notifications SET priority='important',auto_popup=1 WHERE id=?",['comic-fixes-2026-08-03'])
 if(!getOne('SELECT id FROM notifications WHERE id = ?',['comic-label-save-2026-08-03']))database.run('INSERT INTO notifications (id,title,content,type,created_at) VALUES (?,?,?,?,?)',['comic-label-save-2026-08-03','漫剧灵感，随时留在画布','灵感漫剧创作现已支持一键保存为标签。完成剧情构思后，可将人物设定、剧情大纲与制作分镜完整收进画布，方便随时查看、整理和继续创作。','update','2026-08-03T18:00:00.000Z'])
+if(!getOne('SELECT id FROM notifications WHERE id = ?',['comic-continuity-workflow-2026-08-05']))database.run('INSERT INTO notifications (id,title,content,type,created_at) VALUES (?,?,?,?,?)',['comic-continuity-workflow-2026-08-05','漫剧工作流连续性全面升级','人物现以 Base 基准图派生换装、受伤与变身等独立形态，分镜会连接剧情当下的正确形态；同场景相邻镜头自动承接上一镜头末帧，保持站位、动作、服饰、道具与光线连续。对白和旁白现会完整进入视频节点并指导口型与表演。画布同时新增项目任务监控、图片上传与资产复用，以及保留配置和提示词的清除重做能力。','update','2026-08-05T10:00:00.000Z'])
+if(!getOne('SELECT id FROM notifications WHERE id = ?',['project-task-queue-2026-08-05']))database.run('INSERT INTO notifications (id,title,content,type,created_at) VALUES (?,?,?,?,?)',['project-task-queue-2026-08-05','项目任务队列现在清晰可控','画布顶栏新增项目任务入口，可实时查看生成中、排队中、等待上游和失败任务，并点击快速定位对应节点。任务列表已优化为稳定更新，滚动和点击不再随进度刷新漂移；现在还可一键取消全部排队与等待上游任务，同时保留已经生成中的任务继续执行，并自动释放相关预留点数。','update','2026-08-05T10:30:00.000Z'])
+if(!getOne('SELECT id FROM notifications WHERE id = ?',['comic-reference-voice-2026-08-05']))database.run('INSERT INTO notifications (id,title,content,type,created_at) VALUES (?,?,?,?,?)',['comic-reference-voice-2026-08-05','分镜参考与中文对白全面优化','漫剧分镜现在会校验实际出镜角色，避免将配角 Base 复制成重复路人；单张分镜参考图限制为 4 张，同场景连续镜头优先沿用上一分镜，不再重复堆叠场景与旧道具。视频提示词同步加入稳定角色声线、自然中文普通话、准确口型、停顿、表情与旁白规则，让连续镜头的人物和声音更统一。','update','2026-08-05T15:00:00.000Z'])
 ensureColumn('projects', 'last_opened_at', 'TEXT')
 for (const user of getAll('SELECT id FROM users WHERE invite_code IS NULL OR invite_code = ?', [''])) database.run('UPDATE users SET invite_code = ? WHERE id = ?', [newInviteCode(), String(user.id)])
 const developmentUserId = 'dev-user'
@@ -84,15 +92,23 @@ for (const user of getAll('SELECT id FROM users WHERE invite_code IS NULL OR inv
 persist()
 
 const app = Fastify({ logger: true, bodyLimit: 150 * 1024 * 1024 })
+const localImageFallback = process.env.SDCPP_IMAGE_BASE_URL ? new SdCppImageProvider() : null
+let localImageFallbackAvailable = false
+async function probeLocalImageFallback(){localImageFallbackAvailable=localImageFallback ? await localImageFallback.available() : false}
+void probeLocalImageFallback()
+setInterval(()=>void probeLocalImageFallback(),15000).unref()
 const notificationStreams = new Set<FastifyReply['raw']>()
 function sendNotificationSync(stream: FastifyReply['raw']) {
   if (!stream.destroyed) stream.write(`event: notifications\ndata: ${JSON.stringify({ updatedAt:new Date().toISOString(), serverVersion:bootTime })}\n\n`)
 }
 function broadcastNotificationSync(){for(const stream of notificationStreams)sendNotificationSync(stream)}
 app.get('/health', async () => ({ ok: true, service: 'flow-studio-api', generationProvider: generationProvider.name }))
-app.get('/generation/capabilities', async () => generationProvider.capabilities ?? {
+app.get('/generation/capabilities', async () => {
+  const capabilities = generationProvider.capabilities ?? {
   image: { provider: generationProvider.name, defaultModel: process.env.OPENAI_IMAGE_DEFAULT_MODEL || 'gpt-image-2' },
   video: { provider: generationProvider.name, defaultModel: process.env.AGNES_VIDEO_DEFAULT_MODEL || 'agnes-video-v2.0', seconds: { min: 1, max: 18, default: 5 }, resolutions: ['480p', '720p', '1080p'], aspectRatios: ['1:1', '4:3', '16:9'] },
+  }
+  return { ...capabilities, image:{ ...capabilities.image, localFallback:{ model:'flux1-kontext-dev', available:localImageFallbackAvailable } } }
 })
 app.post('/agents/prompt', async (request, reply) => {
   const user = requireUser(request, reply); if (!user) return
@@ -145,20 +161,24 @@ app.post('/agents/comic', async (request, reply) => {
   const visualSources=(input.visuals??[]).map(String).filter(source=>/^\/api\/assets\/[^/]+\/content(?:\/|$)/.test(source)).slice(0,8)
   let visualInputs:string[]=[]
   try{validateOwnedInputUrls(visualSources,String(user.id),'image');visualInputs=resolveOwnedInputUrls(visualSources,String(user.id),'image',model)}catch{return reply.code(400).send({error:'Agent 无法读取所选参考素材'})}
-  const system=`你是 Viora 的漫剧导演与编剧。把用户创意规划成可执行的短篇漫剧，但此阶段只做策划，不声称已经生成图片或视频。用户没有说明时长或画幅时，根据内容规模主动选择合适的总时长和 9:16、16:9 或 1:1，不要反问，也不要使用“由对话内容推断”作为最终值。只返回合法 JSON，不要 Markdown。结构必须为：{"title":"片名","logline":"一句话梗概","tone":"明确的美术风格、时代、环境与情绪基调","duration":"总时长","aspectRatio":"画幅","characters":[{"name":"角色名","description":"外貌、服装、性格、动机与关键关系的稳定设定","imagePrompt":"用于生成统一角色定妆图的完整提示词，纯背景、全身、正面与侧面特征清楚"}],"outline":[{"act":"剧情段落","content":"包含因果、冲突、转折和人物状态变化的详细剧情"}],"shots":[{"number":1,"title":"镜头标题","duration":5,"sceneId":"可复用场景标识，如 library-night","scene":"景别、人物位置、动作、环境与画面结果","scenePrompt":"只生成无人物环境基准图的完整提示词","characterIndexes":[1],"dialogue":"准确对白或旁白，没有则为空","imagePrompt":"结合角色定妆图和场景基准图生成最终分镜静帧的完整提示词","videoPrompt":"承接静帧的动作、运镜、环境变化与镜头结束状态","transition":"与下一镜头的剪辑或转场方式","continuity":"从上一镜头继承的人物位置、动作、道具和情绪状态","referenceIndexes":[1]}],"changeSummary":"本轮修改摘要"}。characterIndexes 是本镜实际出场角色在 characters 中从 1 开始的编号；相同地点与时段必须使用相同 sceneId 和一致的 scenePrompt，场景图禁止出现人物。imagePrompt 不重复捏造人物外貌，而应明确沿用所连接角色定妆图和场景基准图。这是可直接进入制作的分镜，不是剧情摘要。按时长动态生成：30 秒约 8–12 镜，60 秒约 12–18 镜，90 秒约 18–20 镜；每镜必须为 3–8 秒，禁止用大量长镜头压缩剧情。场景建立、关键动作、线索特写、人物反应和转场不能省略。生成完成前逐镜检查 continuity，确保上一镜头的结束状态与下一镜头开场在人物位置、道具、动作、视线和情绪上连续；发现跳跃时主动补充过渡镜头。每个 scene、scenePrompt、imagePrompt、videoPrompt 可使用 80–160 个中文字符，对白自然且信息明确。referenceIndexes 是用户所选视觉素材从 1 开始的编号。首次生成要有完整起承转合；修改时保留未被要求改变的内容并落实本轮意见。`
+  const system=`你是 Viora 的漫剧导演、编剧和分镜师。把用户创意规划成一份先讲得通、再能生产的短篇漫剧剧本，此阶段只做策划，不声称已生成图片或视频。用户没有说明时长或画幅时，根据内容规模主动选择合适的总时长和 9:16、16:9 或 1:1，不要反问。只返回合法 JSON，不要 Markdown。结构必须为：{"title":"片名","logline":"一句话梗概","tone":"统一的美术、时代、环境与情绪基调","duration":"总时长","aspectRatio":"画幅","characters":[{"name":"角色名","description":"稳定角色设定","voiceProfile":"中文声线：年龄感、音色、音高、语速、情绪与说话习惯","imagePrompt":"统一角色定妆图提示词"}],"props":[{"name":"关键物品名","description":"形状、材质、颜色、尺寸、磨损和剧情用途的固定设定","imagePrompt":"纯背景道具设定图提示词"}],"outline":[{"act":"剧情段落","content":"包含人物目标、阻碍、因果、冲突、转折和状态变化的详细剧情"}],"shots":[{"number":1,"title":"制作镜头标题","duration":5,"storyBeat":"本镜头在剧情中的目的、承接的原因和产生的结果","action":"角色可见动作、反应、走位以及动作结束后的状态","sceneId":"可复用场景标识","scene":"场景、景别、走位、动作与画面结果","scenePrompt":"无人物环境基准图提示词","characterIndexes":[1],"propIndexes":[1],"dialogue":"按 角色名：台词 格式书写的中文对白或旁白","frames":[{"title":"起始画面","imagePrompt":"结合所连接角色、道具与场景基准图的连续分镜图提示词"},{"title":"关键变化","imagePrompt":"同一镜头中下一个时序画面提示词"}],"imagePrompt":"本镜头主静帧提示词，用于兼容","videoPrompt":"按 frames 顺序演进的动作、运镜、环境变化与结束状态","transition":"与下一镜头的剪辑方式","continuity":"从上一镜头继承的人物、道具、动作、视线、信息和情绪状态","referenceIndexes":[1]}],"changeSummary":"本轮修改摘要"}。先在内部完成故事因果链，再拆成镜头，禁止把互不相干的漂亮画面当成剧情。每个镜头的 storyBeat 必须说明“因为什么发生什么，导致什么”；action 必须有可见的开始、变化和结果；下一个镜头必须承接上一个镜头已经发生的结果或明确交代时间/地点转换。只要角色开口、交流、争执、解释或作出关键决定，dialogue 必须提供可直接配音的具体中文台词，并使用“角色名：台词”；不能用“二人交谈”“简单对话”等占位描述。没有角色对白的镜头也必须填写“旁白：具体内容”或“无对白，以某个明确动作推进”，不得留空。对白应自然、简短、有信息增量和人物语气，不能重复画面说明。所有 imagePrompt 和 scenePrompt 必须控制在 100 个中文字符以内，只写当前图片新增的主体关系、动作、构图和关键状态，不重复上游角色、道具、场景设定。characters 和 props 只收录需要跨镜头保持一致的视觉资产；普通背景小物件不要单独建档。镜头数量不得套用固定值，应由总时长、剧情节拍、必要反应和转场共同决定；不得为凑数量拆镜或删减因果。每个制作镜头 3–8 秒。frames 是同一段视频的连续参考画面：静态或简单动作用 1 张，明显走位、物品状态变化、镜头转折用 2–4 张；各帧必须是同一场景和时间轴上的先后状态，视频将按 frames 顺序连接生成。相同地点与时段使用相同 sceneId 和 scenePrompt，场景图禁止出现人物。characterIndexes 和 propIndexes 分别是本镜所需角色和道具的 1 起始编号。分镜提示词不重新捏造外观，必须明确沿用连接的设定图。输出前逐镜审查：人物目标是否清楚、冲突是否升级、信息是否被下一镜承接、动作和道具状态是否连续、对白是否推动剧情；发现断层时主动补充必要镜头，但不固定总数。referenceIndexes 是用户所选素材的编号。首次生成要有完整起承转合和可配音对白；修改时保留未被要求改变的内容。`
+  const comicProductionRules='补充硬性规则：characters 中必须返回 visualAsset 布尔值。只有具有稳定可见外形、需要跨镜头保持一致的实体人物才是 true；系统声音、旁白、意识、文字提示、无实体光效必须为 false，且不得为它们生成定妆图。角色存在换装、战斗服、受伤、变身、年龄阶段等明显视觉状态时，在对应 character 中返回 forms 数组，格式为 [{"name":"形态名","description":"相对 Base 基准形态发生的外观变化","imagePrompt":"严格基于 Base 人物基准图，只改变该形态服饰或状态的设定图提示词"}]；Base 形态仍由 character 本身表示，不得在 forms 重复创建。每个镜头必须返回 characterForms 数组，格式为 [{"characterIndex":1,"form":"形态名"}]，只在该镜头确实使用非 Base 形态时填写；未列出的角色默认使用 Base。不得在同一分镜混用同一角色的 Base 与其他形态。characterIndexes 只能列出该镜头画面中明确出镜的具名角色；仅在对白、前后剧情或场外存在但画面不可见的角色不得加入。路人、群众、行人、围观者等匿名背景人物绝不能借用任何具名配角的 characterIndexes 或 Base 设定，必须作为无需资产连线的差异化背景角色；每个具名角色在单帧中默认只出现一个实例，禁止把角色 Base 复制成多个群众。sceneId 表示地点与时段的稳定身份，不是镜头编号；同一地点即使出现变暗、破坏、天气、光效或剧情状态变化，也必须沿用相同 sceneId 和同一张无人物场景基准图，把变化写入 frames.imagePrompt。只有真正切换到不同地点或时段才创建新 sceneId。'
+  const comicContinuityRules='跨镜头连续性规则：相邻制作镜头若 sceneId 相同且时间连续，后一镜头第一张 frame 必须明确承接前一镜头最后一张 frame 的人物站位、动作结束姿态、视线方向、服饰形态、道具状态、环境光线和左右空间关系；continuity 必须写清继承项与本镜头新增变化。只有明确切换地点、时段或蒙太奇段落时才允许重置构图。不要让每个镜头都从人物正面站立的初始状态重新开始。每张最终分镜最多使用 4 张参考图，优先级是上一连续分镜、当前具名出镜角色、当前首次出现的关键道具、场景基准。若已连接同场景的上一分镜，不要再重复依赖场景基准，也不要重复依赖已在上一分镜出现且外观未变化的道具；上一分镜应作为场景、站位、光线与既有道具的合成状态参考。'
+  const comicDialogueRules='视频对白与声线规则：characters.voiceProfile 必须为每个可说话角色提供稳定中文声线，写清年龄感、音色、音高、语速、情绪底色和说话习惯，同一角色跨镜头不得换声。每个镜头的 videoPrompt 必须结合 dialogue 安排说话顺序、自然中文普通话发音、口型、呼吸、停顿、表情、动作反应和未说话者的倾听反应；不得翻译成英语或生成无意义拟声。旁白使用独立、稳定的中文旁白声线，且不得让画面人物无故张嘴。dialogue 的具体台词不得只存在于剧本文本而从视频制作提示中丢失。若镜头无对白，要明确通过何种动作和环境变化推进。'
+  const comicCharacterSheetRules='人物资产规则：characters.imagePrompt 与 forms.imagePrompt 不受分镜 100 字限制，应提供 180–350 个中文字符的专业角色设定板说明。Base 人物必须是 16:9 横向 Character Design Sheet，同一人物同一比例排列正面、严格侧面、背面三视图，并包含头部/五官/发型近景、服装内外层结构、鞋靴、关键装备、武器、饰品、徽记和材质纹理的独立局部放大；写清年龄感、身高体型、肤色、发色瞳色、轮廓、主辅色和不可变化的身份锚点。不要生成三种不同人物、动作海报或复杂场景。特殊形态也使用三视图设定板，严格继承 Base 的脸、发型、体型和身份锚点，只展示该形态发生变化的服饰、伤势、装备或身体状态。'
   const previous=input.previousPlan&&typeof input.previousPlan==='object'?JSON.stringify(input.previousPlan):''
   const context=(input.context??[]).map(String).filter(Boolean).slice(0,8)
   const text=[`创作想法：${idea||'沿用上一版'}`,`目标：${duration}，${aspectRatio}`,context.length?`所选素材：\n${context.map((item,index)=>`${index+1}. ${item}`).join('\n')}`:'没有选择素材',previous?`上一版方案：${previous}`:'',revision?`本轮修改要求：${revision}`:'请生成第一版完整方案'].filter(Boolean).join('\n\n')
   const content:unknown=visualInputs.length?[{type:'text',text},...visualInputs.map(url=>({type:'image_url',image_url:{url}}))]:text
-  let streamStarted=false,streamHeartbeat:ReturnType<typeof setInterval>|null=null
+  let streamStarted=false,streamHeartbeat:ReturnType<typeof setInterval>|null=null,streamReceivedBytes=0,streamProgress=0,lastStreamContentAt=Date.now()
   try{
     const proxyUrl=String(process.env.PROMPT_AGENT_HTTPS_PROXY||process.env.OPENAI_IMAGE_HTTPS_PROXY||''),startedAt=Date.now()
-    reply.hijack();streamStarted=true;reply.raw.writeHead(200,{'content-type':'application/x-ndjson; charset=utf-8','cache-control':'no-cache, no-transform','x-accel-buffering':'no','connection':'keep-alive'});const emit=(value:unknown)=>reply.raw.write(`${JSON.stringify(value)}\n`);emit({type:'start',message:revision?'正在读取现有方案…':'正在理解故事想法…'});streamHeartbeat=setInterval(()=>{if(!reply.raw.destroyed)emit({type:'heartbeat',at:Date.now()})},10000)
+    reply.hijack();streamStarted=true;lastStreamContentAt=Date.now();reply.raw.writeHead(200,{'content-type':'application/x-ndjson; charset=utf-8','cache-control':'no-cache, no-transform','x-accel-buffering':'no','connection':'keep-alive'});const emit=(value:unknown)=>reply.raw.write(`${JSON.stringify(value)}\n`);emit({type:'start',message:revision?'正在读取现有方案…':'正在理解故事想法…'});streamHeartbeat=setInterval(()=>{if(!reply.raw.destroyed)emit({type:'heartbeat',at:Date.now(),idleSeconds:Math.floor((Date.now()-lastStreamContentAt)/1000),receivedBytes:streamReceivedBytes,progress:streamProgress})},10000)
     const candidateModels=[model,...(model==='gpt-5.4-mini'?[]:['gpt-5.4-mini'])],headerTimeout=Math.max(20000,Math.min(90000,Number(process.env.COMIC_AGENT_HEADER_TIMEOUT_MS||45000))),idleTimeout=Math.max(20000,Math.min(120000,Number(process.env.COMIC_AGENT_IDLE_TIMEOUT_MS||60000))),maxStreamTime=Math.max(180000,Math.min(900000,Number(process.env.COMIC_AGENT_MAX_STREAM_MS||480000)));let responseBody:ReadableStream<Uint8Array>|undefined,upstreamController:AbortController|undefined,usedModel=model,lastUpstreamError=''
     for(let attempt=0;attempt<candidateModels.length;attempt++){
       usedModel=candidateModels[attempt]
       if(attempt>0)emit({type:'progress',progress:4,phase:'主模型响应较慢，正在切换备用线路…'})
-      const controller=new AbortController(),headerTimer=setTimeout(()=>controller.abort(new DOMException('漫剧上游连接超时','TimeoutError')),headerTimeout),options={method:'POST',headers:{authorization:`Bearer ${apiKey}`,'content-type':'application/json'},body:JSON.stringify({model:usedModel,stream:true,stream_options:{include_usage:true},reasoning_effort:'low',temperature:.42,max_tokens:6500,response_format:{type:'json_object'},messages:[{role:'system',content:system},{role:'user',content}]}),signal:controller.signal}
+      const controller=new AbortController(),headerTimer=setTimeout(()=>controller.abort(new DOMException('漫剧上游连接超时','TimeoutError')),headerTimeout),options={method:'POST',headers:{authorization:`Bearer ${apiKey}`,'content-type':'application/json'},body:JSON.stringify({model:usedModel,stream:true,stream_options:{include_usage:true},reasoning_effort:'low',temperature:.42,max_tokens:12000,response_format:{type:'json_object'},messages:[{role:'system',content:`${system}\n${comicProductionRules}\n${comicContinuityRules}\n${comicDialogueRules}\n${comicCharacterSheetRules}`},{role:'user',content}]}),signal:controller.signal}
       try{
         const candidate=proxyUrl?await undiciFetch(`${baseUrl}/v1/chat/completions`,{...options,dispatcher:new ProxyAgent(proxyUrl)}):await fetch(`${baseUrl}/v1/chat/completions`,options)
         clearTimeout(headerTimer)
@@ -167,19 +187,22 @@ app.post('/agents/comic', async (request, reply) => {
       }catch(error){clearTimeout(headerTimer);lastUpstreamError=error instanceof Error?error.message:String(error);request.log.warn({attempt:attempt+1,model:usedModel,message:lastUpstreamError},'comic agent upstream retry')}
     }
     if(!responseBody)throw new Error(lastUpstreamError||'漫剧策划接口未返回响应流')
-    const reader=responseBody.getReader(),decoder=new TextDecoder();let buffer='',raw='',lastProgress=0,receivedBytes=0
+    const reader=responseBody.getReader(),decoder=new TextDecoder();let buffer='',raw='',lastProgress=0
     while(true){
       const elapsed=Date.now()-startedAt;if(elapsed>=maxStreamTime){upstreamController?.abort();throw new DOMException('漫剧生成超过最终安全时限','TimeoutError')}
       let idleTimer:ReturnType<typeof setTimeout>|undefined
       const chunk=await Promise.race([reader.read(),new Promise<never>((_,reject)=>{idleTimer=setTimeout(()=>{upstreamController?.abort();reject(new DOMException('漫剧生成长时间没有新数据','TimeoutError'))},Math.min(idleTimeout,maxStreamTime-elapsed))})]).finally(()=>{if(idleTimer)clearTimeout(idleTimer)})
-      const {done,value}=chunk;if(done)break;receivedBytes+=value.byteLength;buffer+=decoder.decode(value,{stream:true});const lines=buffer.split(/\r?\n/);buffer=lines.pop()||'';for(const line of lines){const data=line.startsWith('data:')?line.slice(5).trim():'';if(!data||data==='[DONE]')continue;try{const packet=JSON.parse(data) as {choices?:Array<{delta?:{content?:string}}>},delta=String(packet.choices?.[0]?.delta?.content||'');if(!delta)continue;raw+=delta;const characterAt=raw.indexOf('"characters"'),outlineAt=raw.indexOf('"outline"'),shotsAt=raw.indexOf('"shots"');let phase='正在构思故事核心…',progress=6+Math.min(16,Math.floor(raw.length/120));if(characterAt>=0){phase='正在塑造角色…';progress=24+Math.min(18,Math.floor((raw.length-characterAt)/180))}if(outlineAt>=0){phase='正在组织剧情大纲…';progress=44+Math.min(18,Math.floor((raw.length-outlineAt)/240))}if(shotsAt>=0){phase='正在拆分关键分镜…';progress=64+Math.min(31,Math.floor((raw.length-shotsAt)/300))}if(progress>=lastProgress+1){lastProgress=progress;emit({type:'progress',progress,phase,receivedBytes})}}catch{/* ignore upstream keepalive lines */}}
+      const {done,value}=chunk;if(done)break;buffer+=decoder.decode(value,{stream:true});const lines=buffer.split(/\r?\n/);buffer=lines.pop()||'';for(const line of lines){const data=line.startsWith('data:')?line.slice(5).trim():'';if(!data||data==='[DONE]')continue;try{const packet=JSON.parse(data) as {choices?:Array<{delta?:{content?:string}}>},delta=String(packet.choices?.[0]?.delta?.content||'');if(!delta)continue;raw+=delta;lastStreamContentAt=Date.now();streamReceivedBytes=Buffer.byteLength(raw,'utf8');const characterAt=raw.indexOf('"characters"'),outlineAt=raw.indexOf('"outline"'),shotsAt=raw.indexOf('"shots"');let phase='正在构思故事核心…',progress=6+Math.min(16,Math.floor(raw.length/120));if(characterAt>=0){phase='正在塑造角色…';progress=24+Math.min(18,Math.floor((raw.length-characterAt)/180))}if(outlineAt>=0){phase='正在组织剧情大纲…';progress=44+Math.min(18,Math.floor((raw.length-outlineAt)/240))}if(shotsAt>=0){phase='正在拆分关键分镜…';progress=64+Math.min(31,Math.floor((raw.length-shotsAt)/300))}streamProgress=Math.max(streamProgress,progress);if(progress>=lastProgress+1){lastProgress=progress;emit({type:'progress',progress,phase,receivedBytes:streamReceivedBytes})}}catch{/* ignore upstream keepalive lines */}}
     }
     if(streamHeartbeat){clearInterval(streamHeartbeat);streamHeartbeat=null}raw=raw.replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'').trim();const plan=JSON.parse(raw) as Record<string,unknown>,rawShots=Array.isArray(plan.shots)?plan.shots:[],rawCharacters=Array.isArray(plan.characters)?plan.characters:[]
     request.log.info({model:usedModel,requestedModel:model,elapsedMs:Date.now()-startedAt,responseLength:raw.length},'comic agent response received')
-    const characters=rawCharacters.slice(0,12).map(value=>{const character=value&&typeof value==='object'?value as Record<string,unknown>:{};const name=String(character.name||'未命名角色').slice(0,50),description=String(character.description||'').slice(0,800);return {name,description,imagePrompt:compactImagePrompt(String(character.imagePrompt||`${name}角色定妆设定图，${description}，纯净背景，全身正面与侧面设计，造型细节清楚，保持角色一致性`))}}),shots=rawShots.slice(0,20).map((value,index)=>{const shot=value&&typeof value==='object'?value as Record<string,unknown>:{},scene=String(shot.scene||'').slice(0,800),dialogue=String(shot.dialogue||'').slice(0,500),imagePrompt=compactImagePrompt(String(shot.imagePrompt||scene||'')),explicitCharacters=Array.isArray(shot.characterIndexes)?shot.characterIndexes.map(Number).filter(number=>Number.isInteger(number)&&number>=1&&number<=characters.length):[],inferredCharacters=characters.map((character,characterIndex)=>new RegExp(character.name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).test(`${scene}${dialogue}${imagePrompt}`)?characterIndex+1:0).filter(Boolean);return {number:index+1,title:String(shot.title||`镜头 ${index+1}`).slice(0,50),duration:Math.max(3,Math.min(8,Number(shot.duration)||5)),scene,sceneId:String(shot.sceneId||`scene-${index+1}`).slice(0,80),scenePrompt:compactImagePrompt(String(shot.scenePrompt||`无人物环境基准图，${scene}，保持《${String(plan.title||'漫剧')}》统一美术风格`)),characterIndexes:[...new Set(explicitCharacters.length?explicitCharacters:inferredCharacters)],dialogue,imagePrompt,videoPrompt:String(shot.videoPrompt||'').slice(0,800),transition:String(shot.transition||'').slice(0,300),continuity:String(shot.continuity||'').slice(0,500),referenceIndexes:Array.isArray(shot.referenceIndexes)?[...new Set(shot.referenceIndexes.map(Number).filter(number=>Number.isInteger(number)&&number>=1&&number<=visualInputs.length))]:[]}}).filter(shot=>shot.imagePrompt&&shot.videoPrompt)
+    const characters=rawCharacters.slice(0,12).map(value=>{const character=value&&typeof value==='object'?value as Record<string,unknown>:{};const name=String(character.name||'未命名角色').slice(0,50),description=String(character.description||'').slice(0,800),voiceProfile=String(character.voiceProfile||character.voice||'自然中文普通话，声线与角色年龄和性格一致，跨镜头保持稳定').slice(0,300),nonVisual=/无实体|没有实体|仅(?:以|通过).*(?:声音|文字|光阵)|旁白|系统之声/.test(`${name}${description}`),rawForms=Array.isArray(character.forms)?character.forms:Array.isArray(character.variants)?character.variants:[],forms=rawForms.slice(0,6).map(formValue=>{const form=formValue&&typeof formValue==='object'?formValue as Record<string,unknown>:{},formName=String(form.name||'特殊形态').slice(0,50),formDescription=String(form.description||'').slice(0,600);return{name:formName,description:formDescription,imagePrompt:compactImagePrompt(String(form.imagePrompt||`严格参考${name} Base 人物基准图，保持面部、发型、体型和身份一致，只变更为${formName}：${formDescription}。16:9 横向角色设定板，正面、侧面、背面三视图，并展示变化服饰、伤势、装备和饰品局部细节。`),420)}}).filter(form=>form.name&&!/^(?:base|基础|默认|常态)$/i.test(form.name));return {name,description,voiceProfile,visualAsset:character.visualAsset!==false&&!nonVisual,imagePrompt:compactImagePrompt(String(character.imagePrompt||`${name} Base 角色设定板。${description}。16:9 横向排版，同一人物正面、严格侧面、背面三视图；附头部五官发型近景、服装分层、鞋靴、关键装备武器饰品与材质纹理局部放大，纯净中性背景，保持比例和身份完全一致。`),420),forms}})
+    const rawProps=Array.isArray(plan.props)?plan.props:[],props=rawProps.slice(0,16).map(value=>{const prop=value&&typeof value==='object'?value as Record<string,unknown>:{},name=String(prop.name||'未命名道具').slice(0,60),description=String(prop.description||'').slice(0,800);return {name,description,imagePrompt:compactImagePrompt(String(prop.imagePrompt||`${name}道具设定图，${description}，纯背景，材质、尺寸和特征清楚`))}})
+    const shots=rawShots.slice(0,48).map((value,index)=>{const shot=value&&typeof value==='object'?value as Record<string,unknown>:{},scene=String(shot.scene||'').slice(0,800),storyBeat=String(shot.storyBeat||'').slice(0,700),action=String(shot.action||scene||'').slice(0,800),dialogue=String(shot.dialogue||'无对白，以画面动作推进').slice(0,700),imagePrompt=compactImagePrompt(String(shot.imagePrompt||scene||'')),explicitCharacters=Array.isArray(shot.characterIndexes)?shot.characterIndexes.map(Number).filter(number=>Number.isInteger(number)&&number>=1&&number<=characters.length):[],characterEvidence=`${scene}${storyBeat}${action}${dialogue}${imagePrompt}${JSON.stringify(shot.frames||[])}`,inferredCharacters=characters.map((character,characterIndex)=>new RegExp(character.name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).test(characterEvidence)?characterIndex+1:0).filter(Boolean),validatedCharacters=explicitCharacters.length&&inferredCharacters.length?explicitCharacters.filter(number=>inferredCharacters.includes(number)):explicitCharacters.length?explicitCharacters:inferredCharacters,propIndexes=Array.isArray(shot.propIndexes)?[...new Set(shot.propIndexes.map(Number).filter(number=>Number.isInteger(number)&&number>=1&&number<=props.length))]:[],rawFrames=Array.isArray(shot.frames)?shot.frames:[],frames=(rawFrames.length?rawFrames:[{title:'主画面',imagePrompt}]).slice(0,4).map((frameValue,frameIndex)=>{const frame=frameValue&&typeof frameValue==='object'?frameValue as Record<string,unknown>:{};return {title:String(frame.title||`画面 ${frameIndex+1}`).slice(0,60),imagePrompt:compactImagePrompt(String(frame.imagePrompt||imagePrompt))}}).filter(frame=>frame.imagePrompt);return {number:index+1,title:String(shot.title||`镜头 ${index+1}`).slice(0,50),duration:Math.max(3,Math.min(8,Number(shot.duration)||5)),storyBeat,action,scene,sceneId:String(shot.sceneId||`scene-${index+1}`).slice(0,80),scenePrompt:compactImagePrompt(String(shot.scenePrompt||`无人物环境基准图，${scene}，保持《${String(plan.title||'漫剧')}》统一美术风格`)),characterIndexes:[...new Set(validatedCharacters)],propIndexes,dialogue,frames,imagePrompt:frames[0]?.imagePrompt||imagePrompt,videoPrompt:String(shot.videoPrompt||'').slice(0,800),transition:String(shot.transition||'').slice(0,300),continuity:String(shot.continuity||'').slice(0,500),referenceIndexes:Array.isArray(shot.referenceIndexes)?[...new Set(shot.referenceIndexes.map(Number).filter(number=>Number.isInteger(number)&&number>=1&&number<=visualInputs.length))]:[]}}).filter(shot=>shot.frames.length&&shot.videoPrompt)
+    shots.forEach((shot,index)=>{const rawShot=rawShots[index]&&typeof rawShots[index]==='object'?rawShots[index] as Record<string,unknown>:{},rawForms=Array.isArray(rawShot.characterForms)?rawShot.characterForms:[],characterForms=rawForms.slice(0,12).map(value=>{const selection=value&&typeof value==='object'?value as Record<string,unknown>:{},characterIndex=Number(selection.characterIndex),requestedForm=String(selection.form||selection.formName||'').trim(),character=characters[characterIndex-1],form=character?.forms.find(item=>item.name===requestedForm);return form?{characterIndex,form:form.name}:null}).filter((value):value is {characterIndex:number;form:string}=>Boolean(value));for(const selection of characterForms)if(!shot.characterIndexes.includes(selection.characterIndex))shot.characterIndexes.push(selection.characterIndex);(shot as typeof shot&{characterForms:Array<{characterIndex:number;form:string}>}).characterForms=characterForms})
     if(!shots.length)throw new SyntaxError('missing shots')
     const outline=(Array.isArray(plan.outline)?plan.outline:[]).slice(0,8).map((value,index)=>{const item=value&&typeof value==='object'?value as Record<string,unknown>:{};return {act:String(item.act||`第 ${index+1} 幕`).slice(0,50),content:String(item.content||'').slice(0,1200)}})
-    const result={title:String(plan.title||'未命名漫剧').slice(0,100),logline:String(plan.logline||'').slice(0,600),tone:String(plan.tone||'').slice(0,300),duration:duration==='由对话内容推断'?String(plan.duration||`${shots.reduce((sum,shot)=>sum+shot.duration,0)} 秒`).slice(0,30):duration,aspectRatio:aspectRatio==='由对话内容推断'?(['9:16','16:9','1:1'].includes(String(plan.aspectRatio))?String(plan.aspectRatio):'9:16'):aspectRatio,characters,outline,shots,changeSummary:String(plan.changeSummary||'').slice(0,300),model:usedModel};emit({type:'result',data:result});reply.raw.end();return
+    const result={title:String(plan.title||'未命名漫剧').slice(0,100),logline:String(plan.logline||'').slice(0,600),tone:String(plan.tone||'').slice(0,300),duration:duration==='由对话内容推断'?String(plan.duration||`${shots.reduce((sum,shot)=>sum+shot.duration,0)} 秒`).slice(0,30):duration,aspectRatio:aspectRatio==='由对话内容推断'?(['9:16','16:9','1:1'].includes(String(plan.aspectRatio))?String(plan.aspectRatio):'9:16'):aspectRatio,characters,props,outline,shots,changeSummary:String(plan.changeSummary||'').slice(0,300),model:usedModel};emit({type:'result',data:result});reply.raw.end();return
   }catch(error){if(streamHeartbeat)clearInterval(streamHeartbeat);request.log.error({message:error instanceof Error?error.message:String(error)},'comic agent failed');const message=error instanceof SyntaxError?'漫剧方案返回不完整，请重试':error instanceof DOMException&&error.name==='TimeoutError'?'漫剧构思响应超时，请重试':'漫剧策划暂时失败，请稍后重试';if(streamStarted){reply.raw.write(`${JSON.stringify({type:'error',error:message})}\n`);reply.raw.end();return}return reply.code(error instanceof DOMException&&error.name==='TimeoutError'?504:502).send({error:message})}
 })
 app.get('/user-api-models', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; return getAll('SELECT id, kind, name, model, base_url AS baseUrl, CASE WHEN proxy_url IS NULL OR proxy_url = ? THEN 0 ELSE 1 END AS hasProxy, created_at AS createdAt, updated_at AS updatedAt FROM user_api_models WHERE user_id = ? ORDER BY created_at ASC', ['', String(user.id)]).map(item => ({ ...item, hasProxy: Boolean(item.hasProxy), hasKey: true })) })
@@ -240,6 +263,7 @@ app.post('/auth/login', async (request, reply) => {
   return { id: user.id, name: user.name, username: user.username, email: user.email, inviteCode: user.inviteCode, createdAt: user.createdAt, credits:Number(user.credits ?? 0), reservedCredits:Number(user.reservedCredits ?? 0), isAdmin:Boolean(user.isAdmin) }
 })
 app.post('/auth/logout', async (request, reply) => { const token = sessionToken(request); if (token) database.run('DELETE FROM sessions WHERE id = ?', [sessionId(token)]); persist(); clearSessionCookie(request, reply); return { ok: true } })
+app.post('/auth/activity', async (request, reply) => { const token=sessionToken(request);if(!token)return reply.code(401).send({error:'Unauthorized'});const id=sessionId(token),now=new Date(),cutoff=new Date(now.getTime()-sessionIdleTimeoutMs).toISOString(),session=getOne('SELECT id FROM sessions WHERE id=? AND expires_at>? AND COALESCE(last_activity_at,created_at)>?',[id,now.toISOString(),cutoff]);if(!session){database.run('DELETE FROM sessions WHERE id=?',[id]);persist();clearSessionCookie(request,reply);return reply.code(401).send({error:'Session expired'})}database.run('UPDATE sessions SET last_activity_at=? WHERE id=?',[now.toISOString(),id]);persist();return {ok:true} })
 app.get('/users/me', async (request, reply) => { const user = requireUser(request, reply); if (!user) return; return { id: user.id, name: user.name, username: user.username, email: user.email, inviteCode: user.inviteCode, createdAt: user.createdAt, credits:Number(user.credits ?? 0), reservedCredits:Number(user.reservedCredits ?? 0), isAdmin:Boolean(user.isAdmin) } })
 app.post('/users/me/api-token',async(request,reply)=>{const user=requireUser(request,reply);if(!user)return;const token=`viora_${randomBytes(30).toString('base64url')}`,hint=`${token.slice(0,10)}…${token.slice(-6)}`;database.run('UPDATE users SET api_token_hash=?,api_token_hint=? WHERE id=?',[hashApiToken(token),hint,String(user.id)]);persist();return {token,hint,createdAt:new Date().toISOString()}})
 app.get('/users/me/api-token',async(request,reply)=>{const user=requireUser(request,reply);if(!user)return;const row=getOne('SELECT api_token_hint AS hint FROM users WHERE id=?',[String(user.id)]);return {exists:Boolean(row?.hint),hint:String(row?.hint||'')}})
@@ -327,6 +351,40 @@ app.get('/jobs/:id', async (request, reply) => {
   return row ?? reply.code(404).send({ error: 'Job not found' })
 })
 
+app.post('/projects/:projectId/jobs/cancel-active', async (request, reply) => {
+  const user = requireUser(request, reply); if (!user) return
+  const userId=String(user.id),{projectId}=request.params as {projectId:string}
+  if(!ownsProject(projectId,userId))return reply.code(404).send({error:'Project not found'})
+  const active=getAll("SELECT id,credit_cost,credit_settled FROM jobs WHERE project_id=? AND user_id=? AND status IN ('queued','running')",[projectId,userId]),now=new Date().toISOString()
+  if(!active.length)return {ok:true,canceled:0}
+  database.run('BEGIN')
+  try{
+    for(const job of active){const cost=Number(job.credit_cost??0);if(cost&&!Boolean(job.credit_settled)){database.run('UPDATE users SET reserved_credits=MAX(0,reserved_credits-?) WHERE id=?',[cost,userId]);database.run('UPDATE jobs SET credit_settled=1 WHERE id=?',[String(job.id)])}}
+    database.run("UPDATE jobs SET status='canceled',progress=0,error='用户已取消',updated_at=? WHERE project_id=? AND user_id=? AND status IN ('queued','running')",[now,projectId,userId])
+    database.run('COMMIT')
+  }catch(error){database.run('ROLLBACK');throw error}
+  persist();queueMicrotask(pumpGenerationQueue)
+  request.log.info({userId,projectId,canceled:active.length},'active project jobs canceled')
+  return {ok:true,canceled:active.length}
+})
+
+app.post('/projects/:projectId/jobs/cancel-pending', async (request, reply) => {
+  const user=requireUser(request,reply);if(!user)return
+  const userId=String(user.id),{projectId}=request.params as {projectId:string}
+  if(!ownsProject(projectId,userId))return reply.code(404).send({error:'Project not found'})
+  const pending=getAll("SELECT id,credit_cost,credit_settled FROM jobs WHERE project_id=? AND user_id=? AND status='queued'",[projectId,userId]),now=new Date().toISOString()
+  if(!pending.length)return {ok:true,canceled:0,ids:[]}
+  database.run('BEGIN')
+  try{
+    for(const job of pending){const cost=Number(job.credit_cost??0);if(cost&&!Boolean(job.credit_settled)){database.run('UPDATE users SET reserved_credits=MAX(0,reserved_credits-?) WHERE id=?',[cost,userId]);database.run('UPDATE jobs SET credit_settled=1 WHERE id=?',[String(job.id)])}}
+    database.run("UPDATE jobs SET status='canceled',progress=0,error='用户取消等待任务',updated_at=? WHERE project_id=? AND user_id=? AND status='queued'",[now,projectId,userId])
+    database.run('COMMIT')
+  }catch(error){database.run('ROLLBACK');throw error}
+  persist();queueMicrotask(pumpGenerationQueue)
+  const ids=pending.map(job=>String(job.id));request.log.info({userId,projectId,canceled:ids.length},'pending project jobs canceled')
+  return {ok:true,canceled:ids.length,ids}
+})
+
 function parsePromptAgentResult(raw: string): Record<string, unknown> {
   if (!raw) throw new SyntaxError('Agent returned an empty response')
   try { return JSON.parse(raw) as Record<string, unknown> }
@@ -337,7 +395,7 @@ function parsePromptAgentResult(raw: string): Record<string, unknown> {
   }
 }
 
-function compactImagePrompt(value: string, limit = 140) {
+function compactImagePrompt(value: string, limit = 100) {
   const normalized = value.replace(/\s+/g, ' ').trim()
   if (normalized.length <= limit) return normalized
   const sentences = normalized.match(/[^。！？；.!?;]+[。！？；.!?;]?/g) ?? [normalized]
@@ -365,13 +423,22 @@ function normalizeHttpUrl(value: unknown) { try { const url = new URL(String(val
 function validEmail(email: string) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 254 }
 function assetDisposition(name: string) { const safe = name.replace(/[\r\n]/g, '').slice(0, 240) || 'asset'; return `inline; filename="asset"; filename*=UTF-8''${encodeURIComponent(safe)}` }
 function namedAssetUrl(id: string, name: string, isPublic = false) { const safe = name.replace(/[\r\n/\\]/g, '').slice(0, 240) || 'asset'; return `/api/${isPublic ? 'public/' : ''}assets/${id}/content/${encodeURIComponent(safe)}` }
-function assetThumbnailUrl(id: string, mimeType: string, isPublic = false) { return mimeType.startsWith('image/') ? `/api/${isPublic ? 'public/' : ''}assets/${id}/thumbnail` : undefined }
+function assetThumbnailUrl(id: string, mimeType: string, isPublic = false) { return /^(image|video)\//.test(mimeType) ? `/api/${isPublic ? 'public/' : ''}assets/${id}/thumbnail` : undefined }
+const execFileAsync = promisify(execFile)
+const pendingVideoThumbnails = new Map<string, Promise<void>>()
 async function sendAssetThumbnail(reply: FastifyReply, assetId: string, asset: Record<string, unknown>, isPublic = false) {
   const mimeType = String(asset.mime_type ?? '')
-  if (!mimeType.startsWith('image/')) return reply.code(415).send({ error: 'Asset is not an image' })
-  const thumbnailPath = `${thumbnailDirectory}/${assetId}.webp`
-  if (!existsSync(thumbnailPath)) await sharp(`${uploadDirectory}/${String(asset.storage_name)}`).rotate().resize({ width: 640, height: 640, fit: 'inside', withoutEnlargement: true }).webp({ quality: 72, effort: 3 }).toFile(thumbnailPath)
-  reply.type('image/webp').header('cache-control', `${isPublic ? 'public' : 'private'}, max-age=86400, immutable`)
+  if (!/^(image|video)\//.test(mimeType)) return reply.code(415).send({ error: 'Asset does not support thumbnails' })
+  const video = mimeType.startsWith('video/'), thumbnailPath = `${thumbnailDirectory}/${assetId}.${video ? 'jpg' : 'webp'}`
+  if (!existsSync(thumbnailPath) && video) {
+    let task = pendingVideoThumbnails.get(assetId)
+    if (!task) {
+      task = execFileAsync('ffmpeg', ['-hide_banner','-loglevel','error','-ss','0.15','-i',`${uploadDirectory}/${String(asset.storage_name)}`,'-frames:v','1','-vf',"scale='min(640,iw)':-2",'-q:v','5','-y',thumbnailPath], { timeout: 20_000, maxBuffer: 1024 * 1024 }).then(() => undefined).finally(() => pendingVideoThumbnails.delete(assetId))
+      pendingVideoThumbnails.set(assetId, task)
+    }
+    try { await task } catch { return reply.code(422).send({ error: 'Video thumbnail generation failed' }) }
+  } else if (!existsSync(thumbnailPath)) await sharp(`${uploadDirectory}/${String(asset.storage_name)}`).rotate().resize({ width: 640, height: 640, fit: 'inside', withoutEnlargement: true }).webp({ quality: 72, effort: 3 }).toFile(thumbnailPath)
+  reply.type(video ? 'image/jpeg' : 'image/webp').header('cache-control', `${isPublic ? 'public' : 'private'}, max-age=86400, immutable`)
   return reply.send(readFileSync(thumbnailPath))
 }
 function validateOwnedInputUrls(urls: string[], userId: string, kind: JobInput['kind']) { for (const source of urls) { const match = source.match(/^\/api\/assets\/([^/]+)\/content(?:\/|$)/); if (!match) continue; const asset = getOne('SELECT size FROM assets WHERE id = ? AND user_id = ?', [decodeURIComponent(match[1]), userId]); if (!asset) throw new Error('输入素材不存在或不属于当前用户'); if (kind === 'video' && Number(asset.size ?? 0) > 15 * 1024 * 1024) throw new Error('参考图片超过 15MB') } }
@@ -386,9 +453,10 @@ function hashRechargeCode(code:string){return createHash('sha256').update(code).
 function hashApiToken(token:string){return createHash('sha256').update(token).digest('hex')}
 function sessionId(token: string) { return createHash('sha256').update(token).digest('hex') }
 function sessionToken(request: FastifyRequest) { const cookie = String(request.headers.cookie ?? '').split(';').map(part => part.trim()).find(part => part.startsWith('flow_session=')); return cookie ? decodeURIComponent(cookie.slice('flow_session='.length)) : '' }
-function createSession(userId: string, createdAt = new Date().toISOString()) { const token = randomBytes(32).toString('base64url'), expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); database.run('DELETE FROM sessions WHERE expires_at <= ?', [createdAt]); database.run('INSERT INTO sessions (id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)', [sessionId(token), userId, createdAt, expiresAt]); return token }
-function currentUser(request: FastifyRequest) { const authorization=String(request.headers.authorization||''),bearer=authorization.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();if(bearer?.startsWith('viora_'))return getOne('SELECT id,name,username,email,invite_code AS inviteCode,created_at AS createdAt,credits,reserved_credits AS reservedCredits,is_admin AS isAdmin FROM users WHERE api_token_hash=?',[hashApiToken(bearer)]);const token = sessionToken(request); if (!token) return undefined; return getOne(`SELECT users.id, users.name, users.username, users.email, users.invite_code AS inviteCode, users.created_at AS createdAt, users.credits, users.reserved_credits AS reservedCredits, users.is_admin AS isAdmin FROM sessions JOIN users ON users.id = sessions.user_id
-  WHERE sessions.id = ? AND sessions.expires_at > ?`, [sessionId(token), new Date().toISOString()]) }
+const sessionIdleTimeoutMs = Math.max(60_000, Number(process.env.SESSION_IDLE_TIMEOUT_MS || 30 * 60 * 1000))
+function createSession(userId: string, createdAt = new Date().toISOString()) { const token = randomBytes(32).toString('base64url'), expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); database.run('DELETE FROM sessions WHERE expires_at <= ?', [createdAt]); database.run('INSERT INTO sessions (id, user_id, created_at, expires_at, last_activity_at) VALUES (?, ?, ?, ?, ?)', [sessionId(token), userId, createdAt, expiresAt, createdAt]); return token }
+function currentUser(request: FastifyRequest) { const authorization=String(request.headers.authorization||''),bearer=authorization.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();if(bearer?.startsWith('viora_'))return getOne('SELECT id,name,username,email,invite_code AS inviteCode,created_at AS createdAt,credits,reserved_credits AS reservedCredits,is_admin AS isAdmin FROM users WHERE api_token_hash=?',[hashApiToken(bearer)]);const token = sessionToken(request); if (!token) return undefined; const now=new Date(),idleCutoff=new Date(now.getTime()-sessionIdleTimeoutMs).toISOString();return getOne(`SELECT users.id, users.name, users.username, users.email, users.invite_code AS inviteCode, users.created_at AS createdAt, users.credits, users.reserved_credits AS reservedCredits, users.is_admin AS isAdmin FROM sessions JOIN users ON users.id = sessions.user_id
+  WHERE sessions.id = ? AND sessions.expires_at > ? AND COALESCE(sessions.last_activity_at,sessions.created_at) > ?`, [sessionId(token),now.toISOString(),idleCutoff]) }
 function requireAdmin(request:FastifyRequest,reply:FastifyReply){const user=currentUser(request),configured=String(process.env.ADMIN_API_KEY||''),provided=String(request.headers['x-admin-key']||''),keyAuthorized=Boolean(configured&&provided&&secureTextEqual(provided,configured));if(user?.isAdmin)return user;if(keyAuthorized)return {id:'admin-api-key',isAdmin:true};void reply.code(user?403:401).send({error:user?'仅管理员可以执行此操作':'Unauthorized'});return undefined}
 function requireUser(request: FastifyRequest, reply: FastifyReply) { const user = currentUser(request); if (!user) { void reply.code(401).send({ error: 'Unauthorized' }); return undefined } return user }
 function secureRequest(request: FastifyRequest) { const proto = request.headers['x-forwarded-proto']; return (Array.isArray(proto) ? proto[0] : proto) === 'https' }
@@ -464,6 +532,15 @@ async function executeQueuedJob(job: Record<string, unknown>) {
         await new Promise(resolve=>setTimeout(resolve,attempt*2500))
       }
     }
+    if (!custom && kind === 'image' && process.env.SDCPP_IMAGE_FALLBACK_ENABLED === 'true' && !['flux1-kontext-dev','z-image-turbo'].includes(model) && isLocalImageFallbackError(lastError) && localImageFallback) {
+      if (await localImageFallback.available()) {
+        app.log.warn({ jobId:id, model, error:lastError instanceof Error?lastError.message:String(lastError) }, 'primary image provider failed, using local fallback')
+        await updateJob(id,{ status:'running', progress:3, error:undefined })
+        await localImageFallback.run({ internalJobId:id, projectId:String(job.project_id), nodeId:Number(job.node_id), kind, prompt:String(job.prompt), model:'flux1-kontext-dev', inputUrls, parameters }, update => { updates = updates.then(() => updateJob(id, update.status === 'queued' ? { ...update, status:'running' } : update)) })
+        await updates
+        return
+      }
+    }
     throw lastError
   } catch (error) {
     await updateJob(id, { status:'failed', progress:0, error:error instanceof Error ? error.message : 'Generation failed' })
@@ -476,10 +553,17 @@ function isTransientGenerationError(error:unknown) {
   return /ECONNRESET|ECONNREFUSED|fetch failed|socket|network|temporar|502|503|504/i.test(message)
 }
 
+function isLocalImageFallbackError(error:unknown) {
+  const message=error instanceof Error?error.message:String(error)
+  if (/safety|rejected|content policy|auth_unavailable|no auth available|unauthori[sz]ed|forbidden|\b400\b|\b401\b|\b403\b/i.test(message)) return false
+  return /unexpected EOF|ETIMEDOUT|timeout|timed out|aborted|ECONNRESET|ECONNREFUSED|fetch failed|socket|network|temporar|\b429\b|\b5\d\d\b|backend-api\/codex\/images/i.test(message)
+}
+
 function parseJsonArray(value: unknown) { try { const parsed = JSON.parse(String(value || '[]')); return Array.isArray(parsed) ? parsed.map(String) : [] } catch { return [] } }
 function parseJsonObject(value: unknown) { try { const parsed = JSON.parse(String(value || '{}')); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {} } catch { return {} } }
 
 async function updateJob(id: string, update: GenerationUpdate) {
+  if(String(getOne('SELECT status FROM jobs WHERE id = ?',[id])?.status)==='canceled')return
   let resultUrl = update.resultUrl
   let succeeded = update.status === 'succeeded'
   try {

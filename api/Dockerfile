@@ -11,7 +11,7 @@ WORKDIR /app
 ENV NODE_ENV=production DATA_DIR=/data PORT=3000
 ARG APT_BUILD_PROXY
 RUN if [ -n "$APT_BUILD_PROXY" ]; then export http_proxy="$APT_BUILD_PROXY" https_proxy="$APT_BUILD_PROXY"; fi; \
-    apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
+    apt-get update && apt-get install -y --no-install-recommends curl ca-certificates ffmpeg && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/package*.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
