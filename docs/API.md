@@ -48,6 +48,21 @@ curl -H "Authorization: Bearer <ADMIN_TOKEN>" \
 
 返回值包含反馈内容、状态、用户、项目、联系方式、来源页面和浏览器信息。
 
+### 更新反馈状态
+
+```http
+PATCH /api/admin/feedback/:id
+Content-Type: application/json
+```
+
+请求体：
+
+```json
+{"status":"resolved"}
+```
+
+状态支持 `open`、`reviewing`、`resolved` 和 `closed`。该接口仅限管理员，用于在确认修复后同步关闭反馈。
+
 ### 发送全站通知
 
 ```http
@@ -180,4 +195,3 @@ curl -X POST \
 - 不要在 URL 查询参数中传 Token。
 - Token 泄露后应立即在用户菜单刷新。
 - 管理员 Token 应只用于可信脚本和管理工具。
-
