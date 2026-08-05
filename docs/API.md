@@ -110,6 +110,26 @@ curl -X POST \
 | `GET` | `/api/users/me` | 登录用户 | 当前用户资料与点数 |
 | `PATCH` | `/api/users/me` | 登录用户 | 修改昵称 |
 | `GET` | `/api/users/me/api-token` | 登录用户 | 查询 Token 状态 |
+
+## 漫剧对话与生成
+
+漫剧采用“先讨论、后确认生成”的两阶段接口：
+
+```http
+POST /api/agents/comic/chat
+POST /api/agents/comic
+```
+
+`/agents/comic/chat` 只更新创作简报并返回自然语言回复，不会生成完整剧本。首次请求不传 `sessionId`，服务端返回新会话 ID；后续请求必须同时携带原 `sessionId` 与 `projectId`。
+
+当用户明确确认后，前端调用 `/agents/comic` 生成完整方案。已有方案的后续对话只累计 `pendingRevision`，再次确认后才应用修改。
+
+会话安全规则：
+
+- 会话在数据库中同时绑定 `user_id`、`project_id` 和随机 `sessionId`。
+- 读取、讨论和正式生成都会重新校验当前登录用户及项目归属。
+- 跨用户、跨项目或伪造的会话统一返回 `404`，不会透露会话是否属于其他用户。
+- 删除项目时会同步删除该项目的漫剧会话。
 | `POST` | `/api/users/me/api-token` | 登录用户 | 生成或刷新 Token |
 | `POST` | `/api/users/me/credits/redeem` | 登录用户 | 兑换充值码 |
 | `POST` | `/api/admin/recharge-codes` | 管理员 | 创建充值码 |
