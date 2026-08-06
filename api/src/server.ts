@@ -47,7 +47,7 @@ type JobInput = {
   nodeId: number;
   kind: "image" | "video";
   prompt: string;
-  promptProfile?: "character" | "prop" | "scene" | "storyboard" | "manual";
+  promptProfile?: "character" | "prop" | "scene" | "storyboard" | "composite" | "manual";
   model?: string;
   inputUrls?: string[];
   parameters?: Record<string, unknown>;
