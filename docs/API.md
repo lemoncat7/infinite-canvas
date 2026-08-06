@@ -100,6 +100,44 @@ curl -X POST \
   "https://example.com/api/admin/notifications"
 ```
 
+### 导出项目视频
+
+```http
+POST /api/admin/projects/export-videos
+Content-Type: application/json
+```
+
+接口按视频生成节点在画布中的纵坐标从上到下排序，每个生成节点选择横坐标最右侧的成功视频结果，并依次复制为 `1.mp4`、`2.mp4`。没有成功结果的节点会出现在 `skipped` 中，不占用编号。
+
+可直接指定项目 ID：
+
+```json
+{
+  "projectId": "25ecd646-56f1-455f-9a58-0f6efa30c0c6",
+  "directory": "2"
+}
+```
+
+也可以使用用户名和项目名定位：
+
+```json
+{
+  "username": "mochen",
+  "projectName": "斗破苍穹",
+  "directory": "2"
+}
+```
+
+`directory` 必须是 `VIDEO_EXPORT_ROOT` 下的相对子目录。绝对路径、空目录以及包含 `.` 或 `..` 的路径都会被拒绝。容器默认将宿主机的 `VIDEO_EXPORT_HOST_DIR`（默认 `../vedio`）挂载为 `/exports`。
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer <ADMIN_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"mochen","projectName":"斗破苍穹","directory":"2"}' \
+  "https://example.com/api/admin/projects/export-videos"
+```
+
 ## 用户与认证
 
 | 方法 | 路径 | 权限 | 用途 |

@@ -71,8 +71,10 @@ services:
       CUSTOM_GENERATION_TIMEOUT_MS: ${CUSTOM_GENERATION_TIMEOUT_MS:-600000}
       REGISTRATION_INVITE_CODE: ${REGISTRATION_INVITE_CODE:-}
       SESSION_IDLE_TIMEOUT_MS: ${SESSION_IDLE_TIMEOUT_MS:-1800000}
+      VIDEO_EXPORT_ROOT: ${VIDEO_EXPORT_ROOT:-/exports}
     volumes:
       - canvas-data:/data
+      - ${VIDEO_EXPORT_HOST_DIR:-../vedio}:/exports
 
 volumes:
   canvas-data:
