@@ -125,12 +125,19 @@ let promptAgentContextSelection = new Set<number>()
 let promptAgentSelecting = false
 let saveTimer: number | undefined
 let drawFrame: number | null = null
+let drawNeedsDomSync=true,animatedLinkTimer=0
+const nodeDomStates=new Map<number,unknown[]>()
 let cameraFrame: number | null = null
 let zoomTarget = camera.zoom
 let zoomAnchor: Point = { x: innerWidth / 2, y: innerHeight / 2 }
 const canvasTouches = new Map<number, Point>()
 let pinchGesture: { distance:number; center:Point } | null = null
 const imageCache = new Map<string, HTMLImageElement>()
+const MAX_THUMBNAIL_CACHE_SIZE=120
+function rememberCachedImage(url:string,image:HTMLImageElement){imageCache.delete(url);imageCache.set(url,image);while(imageCache.size>MAX_THUMBNAIL_CACHE_SIZE){const oldest=imageCache.keys().next().value as string|undefined;if(!oldest)return;imageCache.delete(oldest)}}
+document.addEventListener('visibilitychange',()=>{const backgrounded=document.hidden;document.body.classList.toggle('page-backgrounded',backgrounded);if(backgrounded){window.clearTimeout(animatedLinkTimer);animatedLinkTimer=0;imageCache.clear();nodeLayer.querySelectorAll<HTMLElement>('.node-media').forEach(media=>delete media.dataset.sourceKey);nodeLayer.querySelectorAll<HTMLCanvasElement>('.node-media-canvas').forEach(media=>{media.width=2;media.height=2})}else draw()})
+window.addEventListener('blur',()=>document.body.classList.add('page-unfocused'))
+window.addEventListener('focus',()=>{document.body.classList.remove('page-unfocused');draw()})
 const pendingMediaLoads = new Set<string>()
 function modelDisplayName(value?: string) { if (!value?.startsWith('custom:')) return value || ''; return customApiModels.find(item => `custom:${item.id}` === value)?.name || '自定义模型' }
 const activeJobPolls = new Map<string, number>()
@@ -154,9 +161,9 @@ function showToast(message: string, type: 'error' | 'success' | 'warning' = 'err
   const toast = document.createElement('div'), raw = detail || message, friendly = type === 'error' ? friendlyGenerationError(raw, message) : null
   toast.className = `app-toast ${type}`
   toast.innerHTML = `<i>${type === 'error' ? '!' : type === 'success' ? '✓' : 'i'}</i><span><b>${escapeHtml(friendly?.title || (type === 'success' ? '生成完成' : type === 'warning' ? '提示' : '生成失败'))}</b><small>${escapeHtml(friendly?.message || message)}</small>${friendly ? `<p>${escapeHtml(friendly.advice)}</p><details><summary>技术详情</summary><em>${escapeHtml(raw)}${friendly.requestId ? `\nRequest ID: ${escapeHtml(friendly.requestId)}` : ''}</em></details>` : detail ? `<em>${escapeHtml(detail)}</em>` : ''}</span><button type="button" aria-label="关闭">×</button>`
-  let timer = window.setTimeout(() => toast.remove(), type === 'error' ? 20000 : 6000)
+  let timer = type === 'error' ? 0 : window.setTimeout(() => toast.remove(), type === 'warning' ? 9000 : 6000)
   toast.querySelector('button')!.addEventListener('click', () => { window.clearTimeout(timer); toast.remove() })
-  toast.querySelector('details')?.addEventListener('toggle', event => { if ((event.currentTarget as HTMLDetailsElement).open) window.clearTimeout(timer); else timer = window.setTimeout(() => toast.remove(), 12000) })
+  toast.querySelector('details')?.addEventListener('toggle', event => { if (type === 'error') return;if ((event.currentTarget as HTMLDetailsElement).open) window.clearTimeout(timer); else timer = window.setTimeout(() => toast.remove(), 12000) })
   toastStack.append(toast); while (toastStack.children.length > 3) toastStack.firstElementChild?.remove()
 }
 
@@ -266,7 +273,9 @@ async function checkForAppUpdate() {
     updateNoticeShown = showCanvasGuide({key:'app-update',title:'检测到服务器版本更新',detail:'刷新页面后即可使用最新版本。',priority:80,actions:[{label:'稍后',run:()=>hideCanvasGuide('app-update')},{label:'刷新生效',primary:true,run:()=>location.reload()}]})
   } catch { /* deployment may briefly reset the connection */ }
 }
-window.setTimeout(() => { void checkForAppUpdate(); window.setInterval(() => void checkForAppUpdate(), 30_000) }, 20_000)
+let backgroundMaintenanceTimer=0
+function runBackgroundMaintenance(){if(document.hidden||!authUser)return;void Promise.all([checkForAppUpdate(),loadGenerationCapabilities(true)])}
+window.setTimeout(() => { runBackgroundMaintenance();backgroundMaintenanceTimer=window.setInterval(runBackgroundMaintenance,30_000) }, 20_000)
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') void checkForAppUpdate() })
 
 const homePage = document.querySelector<HTMLElement>('#home-page')!
@@ -426,8 +435,8 @@ async function loadNotifications(){if(!authUser){appNotifications=[];autoPopupCh
 function showServiceStatusNotice(mode:'offline'|'online'){serviceKnownOffline=mode==='offline';showCanvasGuide(mode==='offline'?{key:'service-status',title:'服务器暂时离线',detail:'正在后台尝试重新连接，恢复后会自动同步。',tone:'offline',priority:100}:{key:'service-status',title:'已重新连接',detail:'通知和创作状态已恢复同步。',tone:'online',priority:100,duration:2600})}
 function showCanvasModeNotice(title:string,detail:string){showCanvasGuide({key:'canvas-mode',title,detail,tone:'online',priority:20,duration:2100})}
 function stopNotificationFallback(){window.clearInterval(notificationFallbackTimer);notificationFallbackTimer=0}
-function startNotificationFallback(){if(notificationFallbackTimer)return;notificationFallbackTimer=window.setInterval(()=>{if(!authUser)return;const stream=notificationStream;if(stream)void verifyServiceReachability(stream);void loadNotifications();void checkForAppUpdate()},15000)}
-async function verifyServiceReachability(stream:EventSource){if(notificationStream!==stream||!authUser)return;try{const response=await fetch(`/api/health?guide-check=${Date.now()}`,{cache:'no-store',signal:AbortSignal.timeout(4000)});if(response.ok){serviceReachabilityFailures=0;if(serviceKnownOffline){showServiceStatusNotice('online');void restoreComicAfterReconnect()}startNotificationFallback();void checkForAppUpdate();return}}catch{/* 连续失败后再显示离线 */}if(notificationStream!==stream)return;serviceReachabilityFailures++;if(serviceReachabilityFailures>=2&&!serviceKnownOffline)showServiceStatusNotice('offline')}
+function startNotificationFallback(){if(notificationFallbackTimer)return;notificationFallbackTimer=window.setInterval(()=>{if(!authUser||document.hidden)return;const stream=notificationStream;if(stream)void verifyServiceReachability(stream);void loadNotifications()},15000)}
+async function verifyServiceReachability(stream:EventSource){if(notificationStream!==stream||!authUser)return;try{const response=await fetch(`/api/health?guide-check=${Date.now()}`,{cache:'no-store',signal:AbortSignal.timeout(4000)});if(response.ok){serviceReachabilityFailures=0;if(serviceKnownOffline){showServiceStatusNotice('online');void restoreComicAfterReconnect()}startNotificationFallback();return}}catch{/* 连续失败后再显示离线 */}if(notificationStream!==stream)return;serviceReachabilityFailures++;if(serviceReachabilityFailures>=2&&!serviceKnownOffline)showServiceStatusNotice('offline')}
 function disconnectNotificationStream(){window.clearTimeout(notificationOfflineTimer);stopNotificationFallback();serviceReachabilityFailures=0;notificationStream?.close();notificationStream=null;notificationStreamUserId='';notificationServerVersion='';renderOnlineStatus();hideCanvasGuide('service-status')}
 function connectNotificationStream(){if(!authUser)return disconnectNotificationStream();if(notificationStream&&notificationStreamUserId===authUser.id)return;disconnectNotificationStream();notificationStreamUserId=authUser.id;let connected=false,wasOffline=false;const stream=new EventSource('/api/notifications/stream');notificationStream=stream;stream.onopen=()=>{if(notificationStream!==stream)return;window.clearTimeout(notificationOfflineTimer);stopNotificationFallback();serviceReachabilityFailures=0;const recovered=wasOffline||canvasGuideKey==='service-status';if(recovered){showServiceStatusNotice('online');void restoreComicAfterReconnect()}connected=true;wasOffline=false};stream.onerror=()=>{if(!authUser||notificationStream!==stream)return;connected=false;renderOnlineStatus();window.clearTimeout(notificationOfflineTimer);startNotificationFallback();notificationOfflineTimer=window.setTimeout(()=>{if(notificationStream===stream&&!connected&&stream.readyState!==EventSource.OPEN){wasOffline=true;void verifyServiceReachability(stream)}},3500)};stream.addEventListener('notifications',event=>{if(notificationStream!==stream)return;void loadNotifications();try{const payload=JSON.parse((event as MessageEvent<string>).data) as {serverVersion?:string};if(notificationServerVersion&&payload.serverVersion&&payload.serverVersion!==notificationServerVersion)void checkForAppUpdate();if(payload.serverVersion)notificationServerVersion=payload.serverVersion}catch{/* 下一次事件继续同步 */}});stream.addEventListener('presence',event=>{if(notificationStream!==stream)return;try{const payload=JSON.parse((event as MessageEvent<string>).data) as {online?:number};renderOnlineStatus(Math.max(1,Number(payload.online)||1))}catch{renderOnlineStatus(1)}})}
 document.querySelector('#open-notifications')!.addEventListener('click',()=>{const opening=!notificationModal.classList.contains('open');closeTopbarMenus(opening?'notifications':undefined);if(opening){notificationVisibleCount=3;notificationList.scrollTop=0;notificationModal.classList.add('open');void loadNotifications()}})
@@ -607,8 +616,8 @@ function hitLink(sx: number, sy: number, tolerance = 9) {
   return -1
 }
 function drawPendingLink() { if (!connecting) return; const node = nodes.find(item => item.id === connecting!.nodeId); if (!node) return; const a = screen(portWorld(node, connecting.side)), b = connecting.pointer; ctx.save();ctx.beginPath(); ctx.moveTo(a.x, a.y); const distance = Math.max(55, Math.hypot(b.x - a.x, b.y - a.y) * .3), control = controlPoint(a, connecting.side, distance); ctx.quadraticCurveTo(control.x, control.y, b.x, b.y); ctx.strokeStyle = colorTheme==='dark'?'rgba(132,226,235,.96)':'rgba(24,112,132,.96)';ctx.shadowColor=colorTheme==='dark'?'rgba(77,205,218,.34)':'rgba(20,105,127,.2)';ctx.shadowBlur=6; ctx.lineWidth = 2.4; ctx.setLineDash([7, 5]); ctx.stroke(); ctx.setLineDash([]);ctx.restore(); if (connectionSnap) { ctx.beginPath(); ctx.arc(b.x, b.y, 11, 0, Math.PI * 2); ctx.fillStyle = colorTheme==='dark'?'rgba(111,220,229,.2)':'rgba(20,112,132,.18)'; ctx.fill(); ctx.beginPath(); ctx.arc(b.x, b.y, 5, 0, Math.PI * 2); ctx.fillStyle = colorTheme==='dark'?'#8de3ea':'#176f83'; ctx.fill() } }
-function paint() { drawFrame = null; ctx.fillStyle = colorTheme === 'dark' ? '#0b1113' : '#eef3ef'; ctx.fillRect(0, 0, innerWidth, innerHeight); drawGrid(); selectedFlowLinks=collectSelectedFlowLinks();links.forEach(drawLink); drawPendingLink(); syncDomNodes(); updateTaskMonitor(); updateCancelPendingButton(); updateHistoryControls(); zoomSlider.value = String(Math.round(camera.zoom * 100)); zoomSlider.title = `${Math.round(camera.zoom * 100)}%`; zoomPercent.value = `${Math.round(camera.zoom * 100)}%`; nodeCount.textContent = String(nodes.length); if (links.some(linkIsGenerating)) draw() }
-function draw() { if (drawFrame === null) drawFrame = requestAnimationFrame(paint) }
+function paint() { drawFrame = null;const syncUi=drawNeedsDomSync;drawNeedsDomSync=false; ctx.fillStyle = colorTheme === 'dark' ? '#0b1113' : '#eef3ef'; ctx.fillRect(0, 0, innerWidth, innerHeight); drawGrid(); selectedFlowLinks=collectSelectedFlowLinks();links.forEach(drawLink); drawPendingLink();if(syncUi){syncDomNodes(); updateTaskMonitor(); updateCancelPendingButton(); updateHistoryControls(); zoomSlider.value = String(Math.round(camera.zoom * 100)); zoomSlider.title = `${Math.round(camera.zoom * 100)}%`; zoomPercent.value = `${Math.round(camera.zoom * 100)}%`; nodeCount.textContent = String(nodes.length)}if(links.some(linkIsGenerating)&&!document.hidden&&!animatedLinkTimer)animatedLinkTimer=window.setTimeout(()=>{animatedLinkTimer=0;draw(false)},document.hasFocus()?34:240) }
+function draw(syncDom=true) { if(syncDom)drawNeedsDomSync=true;if (drawFrame === null) drawFrame = requestAnimationFrame(paint) }
 function resize() { const ratio = Math.min(devicePixelRatio || 1, innerWidth <= 780 ? 1.5 : 2); canvas.width = innerWidth * ratio; canvas.height = innerHeight * ratio; canvas.style.width = `${innerWidth}px`; canvas.style.height = `${innerHeight}px`; ctx.setTransform(ratio, 0, 0, ratio, 0, 0); draw() }
 function setZoom(next: number, anchor = { x: innerWidth / 2, y: innerHeight / 2 }) { const old = camera.zoom; next = Math.min(2.5, Math.max(.3, next)); const cx = innerWidth / 2 + camera.x, cy = innerHeight / 2 + camera.y; camera.x += (anchor.x - cx) * (1 - next / old); camera.y += (anchor.y - cy) * (1 - next / old); camera.zoom = next; draw() }
 function currentPinch() { const points=[...canvasTouches.values()].slice(0,2);if(points.length<2)return null;const [a,b]=points;return{distance:Math.max(1,Math.hypot(b.x-a.x,b.y-a.y)),center:{x:(a.x+b.x)/2,y:(a.y+b.y)/2}} }
@@ -663,17 +672,22 @@ function addMediaNode(url: string, title: string, position = contextPosition, ki
 function syncDomNodes() {
   nodeViewport.style.transform = `translate(${innerWidth / 2 + camera.x}px, ${innerHeight / 2 + camera.y}px) scale(${camera.zoom})`
   const live = new Set(nodes.map(node => String(node.id)))
-  nodeLayer.querySelectorAll<HTMLElement>('.flow-node').forEach(element => { if (!live.has(element.dataset.id!)) element.remove() })
+  nodeLayer.querySelectorAll<HTMLElement>('.flow-node').forEach(element => { if (!live.has(element.dataset.id!)){nodeDomStates.delete(Number(element.dataset.id));element.remove()} })
+  const videoDependencySignature=links.map(link=>`${link.from}:${link.to}:${link.inputOrder??''}`).join('|')+'#'+nodes.filter(node=>node.kind==='image').map(node=>`${node.id}:${node.status??''}:${node.mediaUrl??''}`).join('|')
   for (const node of nodes) {
     let element = nodeLayer.querySelector<HTMLElement>(`.flow-node[data-id="${node.id}"]`)
-    if (!element) { element = createDomNode(node); nodeLayer.append(element) }
+    if (!element) { element = createDomNode(node); nodeLayer.append(element);nodeDomStates.delete(node.id) }
+    const nodeScreen=screen(node),renderMargin=480,onscreen=nodeScreen.x+node.width*camera.zoom>-renderMargin&&nodeScreen.x<innerWidth+renderMargin&&nodeScreen.y+node.height*camera.zoom>-renderMargin&&nodeScreen.y<innerHeight+renderMargin
     const workflowWaiting = Boolean(node.agentAuto && node.status === 'waiting')
     const locked = (nodeIsActivelyGenerating(node) || workflowWaiting) && !(node.kind === 'video' && node.role !== 'result')
     if(!Number.isFinite(node.width)||node.width<1)node.width=280;if(!Number.isFinite(node.height)||node.height<1)node.height=220
     if(node.kind==='video'&&node.role!=='result'){node.width=Math.max(290,node.width);node.height=Math.max(225,node.height)}
-    element.className = `flow-node kind-${node.kind}${node.role === 'result' ? ' node-result' : ' node-generator'}${node.id === selectedId ? ' selected' : ''}${batchSelectedIds.has(node.id)?' batch-selected':''}${promptAgentSelecting&&promptAgentContextSelection.has(node.id)?' agent-reference':''}${locked ? ' generating' : ''}${workflowWaiting ? ' workflow-waiting' : ''}`
-    element.querySelectorAll<HTMLElement>('.node-port').forEach(port => { port.hidden = node.kind === 'video' && node.role === 'result' })
+    const className=`flow-node kind-${node.kind}${node.role === 'result' ? ' node-result' : ' node-generator'}${node.id === selectedId ? ' selected' : ''}${batchSelectedIds.has(node.id)?' batch-selected':''}${promptAgentSelecting&&promptAgentContextSelection.has(node.id)?' agent-reference':''}${locked ? ' generating' : ''}${workflowWaiting ? ' workflow-waiting' : ''}${onscreen?'':' node-offscreen'}`
+    if(element.className!==className)element.className=className
     element.style.transform = `translate(${node.x}px, ${node.y}px)`; element.style.width = `${node.width}px`; element.style.height = `${node.height}px`; element.style.setProperty('--accent', node.accent); element.style.setProperty('--font-scale', String(node.fontScale ?? 1))
+    const domState:unknown[]=[node.kind,node.role,node.width,node.height,node.title,node.body,node.originalPrompt,node.generationPrompt,node.accent,node.model,node.jobId,node.progress,node.status,node.mediaUrl,node.fontScale,node.agentAuto,node.imageSettings?.size,node.imageSettings?.quality,node.imageSettings?.background,node.videoSettings?.seconds,node.videoSettings?.resolution,node.videoSettings?.aspectRatio,node.id===selectedId,batchSelectedIds.has(node.id),promptAgentSelecting&&promptAgentContextSelection.has(node.id),locked,workflowWaiting,onscreen,editingTextNodeId===node.id,colorTheme,node.kind==='video'?videoDependencySignature:'']
+    const previousState=nodeDomStates.get(node.id);if(previousState?.length===domState.length&&domState.every((value,index)=>value===previousState[index]))continue;nodeDomStates.set(node.id,domState)
+    element.querySelectorAll<HTMLElement>('.node-port').forEach(port => { port.hidden = node.kind === 'video' && node.role === 'result' })
     const copy = element.querySelector<HTMLElement>('.node-copy')!; if (editingTextNodeId !== node.id) copy.textContent = node.body || defaultNodeCopy(node.kind)
     const labelHeading=element.querySelector<HTMLElement>('.node-label-heading')!;labelHeading.hidden=node.kind!=='prompt';if(node.kind==='prompt'&&document.activeElement!==labelHeading)labelHeading.textContent=node.title||'未命名标签'
     element.querySelector<HTMLElement>('.node-kind')!.textContent = node.kind === 'prompt' ? 'LABEL' : node.kind === 'note' ? 'NOTE' : node.kind === 'video' ? 'VIDEO' : 'IMAGE'
@@ -692,7 +706,8 @@ function syncDomNodes() {
         const placeholders = totalReferences ? '' : '<i><span>1</span></i><i><span>2</span></i><i><span>3</span></i>'
         const content=`<header class="video-node-heading"><div><b>视频生成</b><small>${mode}${totalReferences?` · ${readyReferences} / ${totalReferences} 张已就绪`:''}</small></div></header><div class="video-storyboard" style="--frame-count:${totalReferences||3}">${frames}${placeholders}<em>→</em></div><div class="video-node-summary"><em>${settings.seconds ?? '5'} 秒</em><em>${settings.resolution ?? '720p'}</em><em>${settings.aspectRatio ?? '16:9'}</em></div><p>${node.body.trim()?escapeHtml(node.body.trim()):totalReferences?(readyReferences===totalReferences?'参考图已就绪，在下方描述画面运动':`正在等待 ${totalReferences-readyReferences} 张参考图完成`):'连接图片，或直接输入视频描述'}</p>`
         const renderKey=`video-generator:${content}`
-        if(emptyState.dataset.renderKey!==renderKey){emptyState.dataset.renderKey=renderKey;emptyState.innerHTML=content;emptyState.querySelectorAll<HTMLCanvasElement>('[data-reference-url]').forEach(canvas=>paintNodeMedia(canvas,canvas.dataset.referenceUrl!))}
+        if(emptyState.dataset.renderKey!==renderKey){emptyState.dataset.renderKey=renderKey;emptyState.innerHTML=content}
+        if(onscreen)emptyState.querySelectorAll<HTMLCanvasElement>('[data-reference-url]').forEach(canvas=>{if(canvas.dataset.paintedUrl!==canvas.dataset.referenceUrl){canvas.dataset.paintedUrl=canvas.dataset.referenceUrl;paintNodeMedia(canvas,canvas.dataset.referenceUrl!)}})
       }
     }
     element.querySelectorAll<HTMLElement>('[data-action]').forEach(button => button.hidden = false)
@@ -747,18 +762,20 @@ function syncDomNodes() {
       videoPanel.querySelectorAll<HTMLButtonElement>('[data-video-setting]').forEach(button => button.classList.toggle('active', node.videoSettings?.[button.dataset.videoSetting as 'seconds' | 'resolution' | 'aspectRatio'] === button.dataset.value))
       const button = videoPanel.querySelector<HTMLButtonElement>('[data-video-generate]')!; button.disabled = locked || !canGenerateNode(node); button.classList.toggle('is-running', locked)
     }
-    const media = element.querySelector<HTMLElement>('.node-media')!
-    if (node.mediaUrl) {
+    const media = element.querySelector<HTMLElement>('.node-media')!,mediaCanvas=element.querySelector<HTMLCanvasElement>('.node-media-canvas')!
+    if (node.mediaUrl&&onscreen) {
       media.dataset.hasMedia = 'true'
-      if (media.dataset.sourceKey !== node.mediaUrl) {
+      const desiredWidth=Math.max(180,Math.min(480,Math.round(node.width*1.35))),desiredHeight=Math.max(140,Math.min(420,Math.round(node.height*1.35))),canvasResized=mediaCanvas.width!==desiredWidth||mediaCanvas.height!==desiredHeight
+      if(canvasResized){mediaCanvas.width=desiredWidth;mediaCanvas.height=desiredHeight}
+      if (media.dataset.sourceKey !== node.mediaUrl||canvasResized) {
         media.dataset.sourceKey = node.mediaUrl
         const video = element.querySelector<HTMLVideoElement>('.node-media-video')!
-        if (node.kind === 'video') { media.style.removeProperty('background-image'); video.hidden = true; video.removeAttribute('src'); paintNodeVideo(element.querySelector<HTMLCanvasElement>('.node-media-canvas')!, node.mediaUrl) }
-        else { media.style.removeProperty('background-image'); video.hidden = true; video.removeAttribute('src'); paintNodeMedia(element.querySelector<HTMLCanvasElement>('.node-media-canvas')!, node.mediaUrl) }
+        if (node.kind === 'video') { media.style.removeProperty('background-image'); video.hidden = true; video.removeAttribute('src'); paintNodeVideo(mediaCanvas, node.mediaUrl) }
+        else { media.style.removeProperty('background-image'); video.hidden = true; video.removeAttribute('src'); paintNodeMedia(mediaCanvas, node.mediaUrl) }
       }
     } else {
       delete media.dataset.hasMedia; delete media.dataset.sourceKey; media.style.removeProperty('background-image'); const video = element.querySelector<HTMLVideoElement>('.node-media-video')!; video.hidden = true; video.removeAttribute('src')
-      const mediaCanvas = element.querySelector<HTMLCanvasElement>('.node-media-canvas')!; mediaCanvas.getContext('2d')!.clearRect(0, 0, mediaCanvas.width, mediaCanvas.height)
+      if(mediaCanvas.width!==2||mediaCanvas.height!==2){mediaCanvas.width=2;mediaCanvas.height=2}
     }
     const progress = element.querySelector<HTMLElement>('.node-progress i')!, progressTrack = element.querySelector<HTMLElement>('.node-progress')!, waitingWithoutProgress = locked && (workflowWaiting || node.status === 'queued' || Number(node.progress ?? 0) <= 0); progress.style.width = waitingWithoutProgress ? '100%' : `${node.progress ?? 0}%`
     progressTrack.classList.toggle('visible', locked); progressTrack.classList.toggle('indeterminate', waitingWithoutProgress)
@@ -772,6 +789,7 @@ function createDomNode(node: FlowNode) {
   // object by id instead of retaining the object that created this element.
   const liveNode=()=>nodes.find(item=>item.id===node.id)
   element.innerHTML = `<div class="node-floating-tools"><button data-action="info" title="信息">ⓘ</button><button data-action="edit" title="编辑">✎</button><button data-action="zoom-in" title="放大文字">＋</button><button data-action="zoom-out" title="缩小文字">−</button><button data-action="generate" title="生成">✦</button><button data-action="preview" title="预览">⌕</button><button data-action="download" title="下载图片">↓</button><button data-action="delete" title="删除">⌫</button></div><div class="node-info-popover"></div><div class="node-port input" data-side="left"></div><div class="node-port output" data-side="right"></div><span class="node-kind"></span><h3 class="node-label-heading" hidden></h3><div class="node-media"><canvas class="node-media-canvas" width="560" height="440"></canvas></div><div class="image-empty-state"><span>▧</span><b>空图节点</b><small>生成新图片，或复用已有素材</small><div class="image-source-actions"><button type="button" data-image-upload>↑ 上传</button><button type="button" data-image-library>▦ 资产库</button></div></div><div class="node-copy"></div><div class="node-progress"><i></i></div><section class="image-config-panel"><div class="image-composer-title"><span>IMAGE</span><small>描述你想创造的画面</small></div><textarea data-image-field="description" rows="4" aria-label="图片描述" placeholder="例如：清晨薄雾中的未来城市，电影感光影…"></textarea><footer><details class="image-model-picker"><summary><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"></path></svg><b data-image-model-label>gpt-image-2</b><i>⌄</i></summary><div class="image-model-menu"><small>选择图像模型</small><button type="button" data-image-model="gpt-image-2"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"></rect><rect x="9" y="9" width="6" height="6"></rect></svg><span><b>gpt-image-2</b><small>OpenAI 图像生成</small></span><i>✓</i></button></div><select data-image-field="model" aria-label="模型" hidden><option value="gpt-image-2">gpt-image-2</option></select></details><details><summary><span>⚙</span><b data-image-settings-label>自动质量 · 自动尺寸</b><i>⌃</i></summary><div class="image-settings-popover"><header><span>图像设置</span><small>调整输出规格</small></header><label><span><b>质量</b><small>细节与生成速度</small></span><select data-image-field="quality"><option value="auto">自动质量</option><option value="high">高质量</option><option value="medium">标准质量</option><option value="low">低质量</option></select></label><label><span><b>画面尺寸</b><small>输出宽高比例</small></span><select data-image-field="size"><option value="auto">自动尺寸</option><option value="1024x1024">1:1 · 1024 × 1024</option><option value="1536x1024">3:2 · 1536 × 1024</option><option value="1024x1536">2:3 · 1024 × 1536</option></select></label><label><span><b>背景</b><small>画面底色模式</small></span><select data-image-field="background"><option value="auto">自动背景</option><option value="transparent">透明背景</option><option value="opaque">不透明背景</option></select></label></div></details><button data-image-generate type="button" title="开始生成" aria-label="生成"><span>↑</span></button></footer></section>`
+  const initialMediaCanvas=element.querySelector<HTMLCanvasElement>('.node-media-canvas')!;initialMediaCanvas.width=2;initialMediaCanvas.height=2
   const resizeHandle=document.createElement('button');resizeHandle.type='button';resizeHandle.className='node-resize-handle';resizeHandle.title='拖动调整标签大小';resizeHandle.setAttribute('aria-label','调整标签大小');element.append(resizeHandle);resizeHandle.addEventListener('pointerdown',event=>{if(node.kind!=='prompt')return;event.preventDefault();event.stopPropagation();selectedId=node.id;updateEditor();domResize={id:node.id,startX:event.clientX,startY:event.clientY,width:node.width,height:node.height};resizeHandle.setPointerCapture(event.pointerId)})
   const mediaVideo = document.createElement('video'); mediaVideo.className = 'node-media-video'; mediaVideo.muted = true; mediaVideo.playsInline = true; mediaVideo.preload = 'metadata'; mediaVideo.draggable = false; mediaVideo.hidden = true; element.querySelector('.node-media')!.append(mediaVideo)
   const zoomHint = document.createElement('span'); zoomHint.className = 'image-zoom-hint'; zoomHint.textContent = node.kind === 'video' ? '双击播放' : '双击放大'; element.querySelector('.node-media')!.append(zoomHint)
@@ -904,11 +922,11 @@ function paintNodeMedia(target: HTMLCanvasElement, url: string) {
   const displayUrl = mediaThumbnailUrl(url)
   let image = imageCache.get(displayUrl)
   if (!image) {
-    image = new Image(); imageCache.set(displayUrl, image); pendingMediaLoads.add(displayUrl); refreshAppearanceButton()
+    image = new Image(); rememberCachedImage(displayUrl, image); pendingMediaLoads.add(displayUrl); refreshAppearanceButton()
     image.onload = () => { pendingMediaLoads.delete(displayUrl); repaintMediaUrl(url); refreshAppearanceButton() }
     image.onerror = () => { pendingMediaLoads.delete(displayUrl); repaintMediaUrl(url); refreshAppearanceButton() }
     image.src = displayUrl
-  }
+  } else rememberCachedImage(displayUrl,image)
   drawMediaImage(target, image)
 }
 function mediaThumbnailUrl(url: string) { return url.replace(/^(\/api\/(?:public\/)?assets\/[^/]+)\/content(?:\/.*)?$/, '$1/thumbnail') }
@@ -1707,7 +1725,6 @@ async function bootstrapApplication() {
   applyAppRoute()
 }
 window.addEventListener('resize', resize); resize(); updateEditor(); void bootstrapApplication()
-setInterval(()=>void loadGenerationCapabilities(true),15000)
 
 const idleLogoutMs=30*60*1000
 let lastUserActivity=Date.now(),activityHeartbeatDue=false,idleLogoutTimer=0
