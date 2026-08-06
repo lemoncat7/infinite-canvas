@@ -74,7 +74,7 @@ services:
       VIDEO_EXPORT_ROOT: ${VIDEO_EXPORT_ROOT:-/exports}
     volumes:
       - canvas-data:/data
-      - ${VIDEO_EXPORT_HOST_DIR:-../vedio}:/exports
+      - ${VIDEO_EXPORT_HOST_DIR:-../video}:/exports
 
 volumes:
   canvas-data:

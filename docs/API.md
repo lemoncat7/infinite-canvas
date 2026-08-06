@@ -128,7 +128,7 @@ Content-Type: application/json
 }
 ```
 
-`directory` 必须是 `VIDEO_EXPORT_ROOT` 下的相对子目录。绝对路径、空目录以及包含 `.` 或 `..` 的路径都会被拒绝。容器默认将宿主机的 `VIDEO_EXPORT_HOST_DIR`（默认 `../vedio`）挂载为 `/exports`。
+`directory` 必须是 `VIDEO_EXPORT_ROOT` 下的相对子目录。绝对路径、空目录以及包含 `.` 或 `..` 的路径都会被拒绝。容器默认将宿主机的 `VIDEO_EXPORT_HOST_DIR`（默认 `../video`）挂载为 `/exports`。
 
 ```bash
 curl -X POST \
