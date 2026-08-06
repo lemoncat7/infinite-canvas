@@ -2038,7 +2038,7 @@ app.post("/agents/comic", async (request, reply) => {
       receivedBytes: streamReceivedBytes,
       totalShots,
     });
-    const shotsSystem = `你是漫剧分镜导演。严格按照本批轻量镜头规划逐镜扩写，只返回合法 JSON：{"shots":[完整镜头数组]}，返回数量和 number 必须与本批规划完全一致，不得合并、删除或新增镜头。每项必须包含 number、title、duration、storyBeat、action、sceneId、scene、scenePrompt、characterIndexes、characterForms、propIndexes、hasAnonymousCrowd、crowdPrompt、dialogue、frames、imagePrompt、videoPrompt、transition、continuity、referenceIndexes。frames 每项必须包含 title、imagePrompt、keyframe、inherit、change、lock。imagePrompt 与每个 frame.imagePrompt 不得超过100字，scenePrompt 和 crowdPrompt 不得超过160字，videoPrompt 不得超过125字；角色和道具索引严格引用视觉基座。必须沿用镜头规划中的实际对白和已计算 duration，不得在扩写阶段添加放不下的新台词。自然中文按每秒约3.6个汉字计算，每段台词或说话人切换留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；3–5秒以一句短台词为主，6–8秒最多两句。scenePrompt 只能描述无人物环境、空间、UI界面和光影素材，禁止人物、人体、手部和角色剪影。frame.imagePrompt 才是完整剧情分镜：必须明确当前出镜人物、动作、景别、构图、场景状态和必要道具，禁止三视图、设定板、素材拼贴、重复人物和无关元素。相邻分镜必须延续人物身份、站位、视线、动作结果和场景锚点，但不能只是复制上一张：change 必须写清本帧新增动作、表情、景别、机位或焦点变化。禁止连续三个镜头使用相同景别、相同正面机位、相同人物尺寸和相同中心构图；在特写、近景、中景、全景、过肩、侧面或高低机位之间按剧情目的变化，避免为了变化而越轴。视频提示词只保留主要动作、运镜、结束状态和必要对白，让连接分镜按既定人物身份与场景演进，禁止重新设计人物、换装、换场景或切换画风。${comicProductionRules}\n${comicContinuityRules}\n${comicTransitionRules}\n${comicDialogueRules}\n${comicStyleRules}`;
+    const shotsSystem = `你是漫剧分镜导演。严格按照本批轻量镜头规划逐镜扩写，只返回合法 JSON：{"shots":[完整镜头数组]}，返回数量和 number 必须与本批规划完全一致，不得合并、删除或新增镜头。每项必须包含 number、title、duration、storyBeat、action、sceneId、scene、scenePrompt、characterIndexes、characterForms、propIndexes、hasAnonymousCrowd、crowdPrompt、dialogue、frames、imagePrompt、videoPrompt、transition、continuity、referenceIndexes。frames 每项必须包含 title、imagePrompt、keyframe、inherit、change、lock、characterIndexes、characterForms、propIndexes；这些帧级索引只列当前画面实际可见的人物、形态和关键道具，不得把下一帧才出现的素材提前列入上一帧。imagePrompt 与每个 frame.imagePrompt 不得超过100字，scenePrompt 和 crowdPrompt 不得超过160字，videoPrompt 不得超过125字；角色和道具索引严格引用视觉基座。必须沿用镜头规划中的实际对白和已计算 duration，不得在扩写阶段添加放不下的新台词。自然中文按每秒约3.6个汉字计算，每段台词或说话人切换留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；3–5秒以一句短台词为主，6–8秒最多两句。scenePrompt 只能描述无人物环境、空间、UI界面和光影素材，禁止人物、人体、手部和角色剪影。frame.imagePrompt 才是完整剧情分镜：必须明确当前出镜人物、动作、景别、构图、场景状态和必要道具，且与该帧 characterIndexes、characterForms、propIndexes 一一对应；禁止三视图、设定板、素材拼贴、重复人物和无关元素。相邻分镜必须延续人物身份、站位、视线、动作结果和场景锚点，但不能只是复制上一张：change 必须写清本帧新增动作、表情、景别、机位或焦点变化。禁止连续三个镜头使用相同景别、相同正面机位、相同人物尺寸和相同中心构图；在特写、近景、中景、全景、过肩、侧面或高低机位之间按剧情目的变化，避免为了变化而越轴。视频提示词只保留主要动作、运镜、结束状态和必要对白，让连接分镜按既定人物身份与场景演进，禁止重新设计人物、换装、换场景或切换画风。${comicProductionRules}\n${comicContinuityRules}\n${comicTransitionRules}\n${comicDialogueRules}\n${comicStyleRules}`;
     const shotBatchSize = 4,
       batchCount = Math.ceil(totalShots / shotBatchSize);
     let resumeBatch = Math.min(
@@ -2133,7 +2133,9 @@ app.post("/agents/comic", async (request, reply) => {
       shotPart = normalizeShotBatch(shotPart);
       const batchIssues = (value: Record<string, unknown>) => {
         const issues = validatePromptLengths(value, "shots"),
-          returned = Array.isArray(value.shots) ? value.shots : [];
+          returned = Array.isArray(value.shots) ? value.shots : [],
+          foundationCharacters = Array.isArray(foundation.characters) ? foundation.characters : [],
+          foundationProps = Array.isArray(foundation.props) ? foundation.props : [];
         if (returned.length !== expected.length)
           issues.push(`返回 ${returned.length} 镜，预期 ${expected.length} 镜`);
         expected.forEach((planItem, index) => {
@@ -2147,6 +2149,8 @@ app.post("/agents/comic", async (request, reply) => {
             issues.push(
               `第 ${index + 1} 项镜头编号不匹配，预期 ${planItem.number}`,
             );
+          const rawShot=returned[index]&&typeof returned[index]==="object"?returned[index] as Record<string,unknown>:null,frames=rawShot&&Array.isArray(rawShot.frames)?rawShot.frames:[];
+          frames.forEach((rawFrame,frameIndex)=>{const frame=rawFrame&&typeof rawFrame==="object"?rawFrame as Record<string,unknown>:null,label=`镜头 ${planItem.number} 分镜 ${frameIndex+1}`;if(!frame){issues.push(`${label} 数据无效`);return}for(const field of ["characterIndexes","characterForms","propIndexes"] as const)if(!Array.isArray(frame[field]))issues.push(`${label} 缺少 ${field}`);const evidence=`${String(frame.title||"")}${String(frame.imagePrompt||"")}${String(frame.inherit||"")}${String(frame.change||"")}`,characterIndexes=Array.isArray(frame.characterIndexes)?frame.characterIndexes.map(Number):[],propIndexes=Array.isArray(frame.propIndexes)?frame.propIndexes.map(Number):[];characterIndexes.forEach(characterIndex=>{const raw=foundationCharacters[characterIndex-1],name=raw&&typeof raw==="object"?String((raw as Record<string,unknown>).name||""):"";if(name&&!evidence.includes(name))issues.push(`${label} 连接角色「${name}」但帧描述未说明该角色`)});propIndexes.forEach(propIndex=>{const raw=foundationProps[propIndex-1],name=raw&&typeof raw==="object"?String((raw as Record<string,unknown>).name||""):"";if(name&&!evidence.includes(name))issues.push(`${label} 连接道具「${name}」但帧描述未说明该道具`)});foundationCharacters.forEach((raw,characterIndex)=>{const name=raw&&typeof raw==="object"?String((raw as Record<string,unknown>).name||""):"";if(name&&evidence.includes(name)&&!characterIndexes.includes(characterIndex+1))issues.push(`${label} 描述出现角色「${name}」但 characterIndexes 未连接`)});foundationProps.forEach((raw,propIndex)=>{const name=raw&&typeof raw==="object"?String((raw as Record<string,unknown>).name||""):"";if(name&&evidence.includes(name)&&!propIndexes.includes(propIndex+1))issues.push(`${label} 描述出现道具「${name}」但 propIndexes 未连接`)})});
         });
         return issues;
       };
@@ -2447,6 +2451,21 @@ app.post("/agents/comic", async (request, reply) => {
                 frameValue && typeof frameValue === "object"
                   ? (frameValue as Record<string, unknown>)
                   : {};
+              const frameEvidence = `${String(frame.title || "")}${String(frame.imagePrompt || "")}${String(frame.inherit || "")}${String(frame.change || "")}`,
+                explicitFrameCharacters = Array.isArray(frame.characterIndexes)
+                  ? frame.characterIndexes.map(Number).filter((number) => Number.isInteger(number) && validatedCharacters.includes(number))
+                  : [],
+                inferredFrameCharacters = validatedCharacters.filter((number) => frameEvidence.includes(characters[number - 1]?.name || "\u0000")),
+                frameCharacterIndexes = [...new Set(explicitFrameCharacters.length ? explicitFrameCharacters : inferredFrameCharacters.length ? inferredFrameCharacters : rawFrames.length <= 1 ? validatedCharacters : [])],
+                explicitFrameProps = Array.isArray(frame.propIndexes)
+                  ? frame.propIndexes.map(Number).filter((number) => Number.isInteger(number) && propIndexes.includes(number))
+                  : [],
+                inferredFrameProps = propIndexes.filter((number) => frameEvidence.includes(props[number - 1]?.name || "\u0000")),
+                framePropIndexes = [...new Set(explicitFrameProps.length ? explicitFrameProps : inferredFrameProps.length ? inferredFrameProps : rawFrames.length <= 1 ? propIndexes : [])],
+                frameCharacterForms = (Array.isArray(frame.characterForms) ? frame.characterForms : []).map((value) => {
+                  const selection = value && typeof value === "object" ? value as Record<string, unknown> : {}, characterIndex = Number(selection.characterIndex), requestedForm = String(selection.form || "").trim(), form = characters[characterIndex - 1]?.forms.find((item) => item.name === requestedForm);
+                  return form && frameCharacterIndexes.includes(characterIndex) ? { characterIndex, form: form.name } : null;
+                }).filter((value): value is { characterIndex:number; form:string } => Boolean(value));
               return {
                 title: String(frame.title || `画面 ${frameIndex + 1}`).slice(
                   0,
@@ -2465,6 +2484,9 @@ app.post("/agents/comic", async (request, reply) => {
                 inherit: String(frame.inherit || shot.continuity || "").slice(0, 240),
                 change: String(frame.change || frame.imagePrompt || action || "").slice(0, 240),
                 lock: String(frame.lock || "人物身份、服饰形态、关键道具、空间方向与统一画风保持不变").slice(0, 240),
+                characterIndexes: frameCharacterIndexes,
+                characterForms: frameCharacterForms,
+                propIndexes: framePropIndexes,
               };
             })
             .filter((frame) => frame.imagePrompt),
