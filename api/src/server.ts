@@ -323,6 +323,14 @@ for (const user of getAll(
     newInviteCode(),
     String(user.id),
   ]);
+database.run(`UPDATE canvas_operation_batches SET response='{"expired":true}' WHERE rowid IN (
+  SELECT rowid FROM (
+    SELECT rowid,ROW_NUMBER() OVER(PARTITION BY project_id ORDER BY created_at DESC) AS position
+    FROM canvas_operation_batches
+  ) WHERE position>40
+) AND length(response)>40`);
+const compactedCanvasBatches=database.getRowsModified();
+if(compactedCanvasBatches>0)database.run("VACUUM");
 persist();
 
 const app = Fastify({ logger: true, bodyLimit: 150 * 1024 * 1024 });
@@ -1573,11 +1581,11 @@ app.post("/agents/comic", async (request, reply) => {
             issues.push(`镜头${index + 1}.videoPrompt 超过125字`);
           const duration = Math.max(3, Math.min(8, Number(item.duration) || 5)),
             dialogue = String(item.dialogue || "").trim(),
-            dialogueLimit = Math.round(duration * 10);
-          if (dialogue.length > dialogueLimit)
-            issues.push(
-              `镜头${index + 1}.dialogue ${dialogue.length}>${dialogueLimit}，请拆分镜头而非塞入同一视频`,
-            );
+            speech = estimateComicSpeechDuration(dialogue);
+          if (speech.minimumSeconds > 8)
+            issues.push(`镜头${index + 1}.dialogue 预计至少需要 ${speech.minimumSeconds} 秒，必须拆成连续镜头`);
+          else if (duration < speech.minimumSeconds)
+            issues.push(`镜头${index + 1}.duration=${duration} 秒，最终对白与停顿至少需要 ${speech.minimumSeconds} 秒`);
           if (!String(item.transition || "").trim())
             issues.push(`镜头${index + 1}.transition 为空`);
           if (!String(item.continuity || "").trim())
@@ -1725,7 +1733,7 @@ app.post("/agents/comic", async (request, reply) => {
       ),
       allShots: unknown[] = [];
     const shotPlanSystem =
-      '你是漫剧镜头规划师。本阶段只确定镜头总数和轻量结构，禁止生成图片提示词、视频提示词和 frames。只返回合法 JSON：{"plannedShots":[{"number":1,"outlineIndex":1,"title":"镜头名","duration":5,"storyBeat":"承接上一镜并推动下一镜的剧情节拍","sceneId":"场景ID","characterIndexes":[1],"propIndexes":[1],"dialogueSummary":"对白用途","transition":"与上一镜的过渡方式","continuity":"需要继承的状态"}]}。镜头数由预计时长和必要剧情节拍决定，每镜3–8秒；必须覆盖全部大纲段落，形成完整起承转合，地点、时间、目标或情绪变化处安排必要过渡镜头，不得固定镜头数量。';
+      '你是漫剧镜头规划师。本阶段只确定镜头总数、实际对白草稿和轻量结构，禁止生成图片提示词、视频提示词和 frames。只返回合法 JSON：{"plannedShots":[{"number":1,"outlineIndex":1,"title":"镜头名","duration":5,"storyBeat":"承接上一镜并推动下一镜的剧情节拍","sceneId":"场景ID","characterIndexes":[1],"propIndexes":[1],"dialogue":"旁白或角色可直接配音的实际中文台词；无对白则明确写无对白","transition":"与上一镜的过渡方式","continuity":"需要继承的状态"}]}。镜头数由剧情节拍和真实播音时长决定，不得固定数量。按自然中文每秒约3.6个汉字计算台词时间，每段台词或说话人切换另留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；duration 必须向上取整且为3–8秒。若实际对白需要超过8秒，必须拆成多个连续镜头，不得加速朗读或删掉关键因果。必须覆盖全部大纲段落，形成完整起承转合，地点、时间、目标或情绪变化处安排必要过渡镜头。';
     const shotPlanText = `创作需求：\n${text}\n\n已校验剧情、人物、道具和场景基座：\n${JSON.stringify(foundation)}`;
     let shotPlan = await readStage(
       "正在规划完整镜头列表…",
@@ -1752,6 +1760,11 @@ app.post("/agents/comic", async (request, reply) => {
           issues.push(`镜头${index + 1}.title 为空`);
         if (!String(item.storyBeat || "").trim())
           issues.push(`镜头${index + 1}.storyBeat 为空`);
+        const duration = Number(item.duration),dialogue=String(item.dialogue||"").trim(),speech=estimateComicSpeechDuration(dialogue);
+        if(!dialogue)issues.push(`镜头${index+1}.dialogue 为空`);
+        if(!Number.isInteger(duration)||duration<3||duration>8)issues.push(`镜头${index+1}.duration 必须为3–8秒整数`);
+        if(speech.minimumSeconds>8)issues.push(`镜头${index+1}对白预计需${speech.minimumSeconds}秒，必须拆镜`);
+        else if(duration<speech.minimumSeconds)issues.push(`镜头${index+1}时长${duration}秒不足，至少需${speech.minimumSeconds}秒`);
         if (!String(item.transition || "").trim())
           issues.push(`镜头${index + 1}.transition 为空`);
         if (
@@ -1819,7 +1832,7 @@ app.post("/agents/comic", async (request, reply) => {
       receivedBytes: streamReceivedBytes,
       totalShots,
     });
-    const shotsSystem = `你是漫剧分镜导演。严格按照本批轻量镜头规划逐镜扩写，只返回合法 JSON：{"shots":[完整镜头数组]}，返回数量和 number 必须与本批规划完全一致，不得合并、删除或新增镜头。每项必须包含 number、title、duration、storyBeat、action、sceneId、scene、scenePrompt、characterIndexes、characterForms、propIndexes、hasAnonymousCrowd、crowdPrompt、dialogue、frames、imagePrompt、videoPrompt、transition、continuity、referenceIndexes。imagePrompt 与每个 frame.imagePrompt 不得超过100字，scenePrompt 和 crowdPrompt 不得超过160字，videoPrompt 不得超过125字；角色和道具索引严格引用视觉基座。每个镜头的中文对白总长度不得超过 duration×10 个汉字，3–5秒以一句短台词为主，6–8秒最多两句；放不下的对白必须在镜头规划阶段拆成连续镜头，禁止把多人长对话塞进5秒视频。scenePrompt 只能描述无人物环境、空间、UI界面和光影素材，禁止人物、人体、手部和角色剪影。frame.imagePrompt 才是完整剧情分镜：必须明确当前出镜人物、动作、景别、构图、场景状态和必要道具，禁止三视图、设定板、素材拼贴、重复人物和无关元素。视频提示词只保留主要动作、运镜、结束状态和必要对白，让连接分镜按既定人物身份与场景演进，禁止重新设计人物、换装、换场景或切换画风。${comicProductionRules}\n${comicContinuityRules}\n${comicTransitionRules}\n${comicDialogueRules}\n${comicStyleRules}`;
+    const shotsSystem = `你是漫剧分镜导演。严格按照本批轻量镜头规划逐镜扩写，只返回合法 JSON：{"shots":[完整镜头数组]}，返回数量和 number 必须与本批规划完全一致，不得合并、删除或新增镜头。每项必须包含 number、title、duration、storyBeat、action、sceneId、scene、scenePrompt、characterIndexes、characterForms、propIndexes、hasAnonymousCrowd、crowdPrompt、dialogue、frames、imagePrompt、videoPrompt、transition、continuity、referenceIndexes。imagePrompt 与每个 frame.imagePrompt 不得超过100字，scenePrompt 和 crowdPrompt 不得超过160字，videoPrompt 不得超过125字；角色和道具索引严格引用视觉基座。必须沿用镜头规划中的实际对白和已计算 duration，不得在扩写阶段添加放不下的新台词。自然中文按每秒约3.6个汉字计算，每段台词或说话人切换留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；3–5秒以一句短台词为主，6–8秒最多两句。scenePrompt 只能描述无人物环境、空间、UI界面和光影素材，禁止人物、人体、手部和角色剪影。frame.imagePrompt 才是完整剧情分镜：必须明确当前出镜人物、动作、景别、构图、场景状态和必要道具，禁止三视图、设定板、素材拼贴、重复人物和无关元素。视频提示词只保留主要动作、运镜、结束状态和必要对白，让连接分镜按既定人物身份与场景演进，禁止重新设计人物、换装、换场景或切换画风。${comicProductionRules}\n${comicContinuityRules}\n${comicTransitionRules}\n${comicDialogueRules}\n${comicStyleRules}`;
     const shotBatchSize = 4,
       batchCount = Math.ceil(totalShots / shotBatchSize);
     for (let batchIndex = 0; batchIndex < batchCount; batchIndex++) {
@@ -3488,7 +3501,11 @@ app.post("/projects/:projectId/canvas/sync", async (request, reply) => {
     "SELECT response FROM canvas_operation_batches WHERE project_id=? AND batch_id=?",
     [projectId, batchId],
   );
-  if (existingBatch) return JSON.parse(String(existingBatch.response));
+  if (existingBatch) {
+    const cached=JSON.parse(String(existingBatch.response));
+    if(cached?.expired)return reply.code(409).send({error:"canvas_batch_expired",message:"同步批次已过期，请重新载入画布"});
+    return cached;
+  }
   if (!Number.isSafeInteger(baseVersion) || baseVersion < 1)
     return reply
       .code(428)
@@ -3668,17 +3685,6 @@ app.post("/projects/:projectId/canvas/sync", async (request, reply) => {
           message: "合并后存在悬空连线，请重新同步",
           version: serverVersion,
         });
-  if (
-    nodeMap.size === 0 &&
-    nodeMap.size < (Array.isArray(source.nodes) ? source.nodes.length : 0)
-  )
-    return reply
-      .code(409)
-      .send({
-        error: "canvas_empty_guard",
-        message: "增量同步不能清空非空画布，请使用清除画布操作",
-        version: serverVersion,
-      });
   const resultVersion = serverVersion + 1,
     now = new Date().toISOString(),
     documentObject = {
@@ -3733,6 +3739,12 @@ app.post("/projects/:projectId/canvas/sync", async (request, reply) => {
         now,
       ],
     );
+    database.run(`UPDATE canvas_operation_batches SET response='{"expired":true}' WHERE rowid IN (
+      SELECT rowid FROM (
+        SELECT rowid,ROW_NUMBER() OVER(PARTITION BY project_id ORDER BY created_at DESC) AS position
+        FROM canvas_operation_batches WHERE project_id=?
+      ) WHERE position>40
+    ) AND length(response)>40`,[projectId]);
     database.run("COMMIT");
   } catch (error) {
     database.run("ROLLBACK");
@@ -4254,6 +4266,28 @@ function normalizeComicDialogue(value: unknown): string {
     })
     .filter(Boolean)
     .join("\n");
+}
+
+function estimateComicSpeechDuration(value: unknown) {
+  const dialogue = normalizeComicDialogue(value);
+  if (!dialogue || /^无对白/.test(dialogue))
+    return { spokenCharacters: 0, utterances: 0, minimumSeconds: 3 };
+  const utterances = dialogue
+      .split(/\n+|(?<=[。！？!?])\s*(?=[^，。！？!?：:\s]{1,12}[：:])/)
+      .map((line) => line.trim())
+      .filter(Boolean),
+    spokenCharacters = utterances.reduce((sum, line) => {
+      const speech = line.replace(/^[^：:\n]{1,16}[：:]/, "");
+      return sum + (speech.match(/[\p{Script=Han}A-Za-z0-9]/gu)?.length || 0);
+    }, 0),
+    speechSeconds = spokenCharacters / 3.6,
+    pauseSeconds = Math.max(0, utterances.length - 1) * 0.35,
+    visualSeconds = 1.2;
+  return {
+    spokenCharacters,
+    utterances: utterances.length,
+    minimumSeconds: Math.max(3, Math.ceil(speechSeconds + pauseSeconds + visualSeconds)),
+  };
 }
 
 function getOne(sql: string, values: Array<string | number>) {

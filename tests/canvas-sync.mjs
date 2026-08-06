@@ -78,23 +78,28 @@ try{
   assert.equal(resurrection.status,409)
   assert.equal(resurrection.body.error,'canvas_record_conflict')
 
-  const cleared=await request(`/projects/${projectId}/canvas/clear`,{method:'POST',body:JSON.stringify({version:9})})
-  assert.equal(cleared.status,200)
-  assert.equal(cleared.body.version,9)
+  const deletedLastNode=await sync(projectId,'client_device_a','batch_device_a_0005',8,[{type:'node',action:'delete',key:'2'}])
+  assert.equal(deletedLastNode.status,200)
+  assert.equal(deletedLastNode.body.version,9)
+  assert.deepEqual(deletedLastNode.body.nodes,[])
 
-  const preClearWrite=await sync(projectId,'client_device_old','batch_device_old_0002',8,[{type:'node',action:'upsert',key:'9',value:node(9,'清空前离线新增')}])
+  const cleared=await request(`/projects/${projectId}/canvas/clear`,{method:'POST',body:JSON.stringify({version:10})})
+  assert.equal(cleared.status,200)
+  assert.equal(cleared.body.version,10)
+
+  const preClearWrite=await sync(projectId,'client_device_old','batch_device_old_0002',9,[{type:'node',action:'upsert',key:'9',value:node(9,'清空前离线新增')}])
   assert.equal(preClearWrite.status,409)
   assert.equal(preClearWrite.body.error,'canvas_reset_conflict')
 
-  const invalidBase=await sync(projectId,'client_device_a','batch_device_a_0005',99,[{type:'node',action:'upsert',key:'3',value:node(3,'超前')}])
+  const invalidBase=await sync(projectId,'client_device_a','batch_device_a_0006',99,[{type:'node',action:'upsert',key:'3',value:node(3,'超前')}])
   assert.equal(invalidBase.status,409)
 
   const final=await request(`/projects/${projectId}/canvas`)
   assert.equal(final.status,200)
-  assert.equal(final.body.version,9)
+  assert.equal(final.body.version,10)
   assert.deepEqual(final.body.nodes,[])
   assert.deepEqual(final.body.links,[])
-  console.log(JSON.stringify({ok:true,projectId,checks:20,finalVersion:final.body.version,leases:[[leaseA.body.start,leaseA.body.end],[leaseB.body.start,leaseB.body.end]]}))
+  console.log(JSON.stringify({ok:true,projectId,checks:23,finalVersion:final.body.version,leases:[[leaseA.body.start,leaseA.body.end],[leaseB.body.start,leaseB.body.end]]}))
 }finally{
   const removed=await request(`/projects/${projectId}`,{method:'DELETE'})
   assert.equal(removed.status,204)
