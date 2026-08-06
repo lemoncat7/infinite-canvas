@@ -105,6 +105,8 @@ ensureColumn("users", "api_token_hash", "TEXT");
 ensureColumn("users", "api_token_hint", "TEXT");
 ensureColumn("jobs", "credit_cost", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("jobs", "credit_settled", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("jobs", "retry_after", "TEXT");
+ensureColumn("jobs", "retry_count", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("notifications", "priority", "TEXT NOT NULL DEFAULT 'normal'");
 ensureColumn("notifications", "auto_popup", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("sessions", "last_activity_at", "TEXT");
@@ -141,6 +143,8 @@ ensureColumn(
   "INTEGER NOT NULL DEFAULT 0",
 );
 ensureColumn("comic_sessions", "generation_error", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("comic_sessions", "generation_checkpoint", "TEXT NOT NULL DEFAULT '{}'");
+ensureColumn("comic_sessions", "generation_issues", "TEXT NOT NULL DEFAULT '[]'");
 database.run(
   "UPDATE sessions SET last_activity_at = COALESCE(last_activity_at, created_at)",
 );
@@ -1119,7 +1123,7 @@ app.post("/agents/comic", async (request, reply) => {
     sessionId = String(input.sessionId || ""),
     comicSession = sessionId
       ? getOne(
-          "SELECT id,brief,pending_revision AS pendingRevision,plan FROM comic_sessions WHERE id=? AND user_id=? AND project_id=?",
+          "SELECT id,brief,pending_revision AS pendingRevision,plan,generation_checkpoint AS generationCheckpoint FROM comic_sessions WHERE id=? AND user_id=? AND project_id=?",
           [sessionId, String(user.id), projectId],
         )
       : undefined;
@@ -1221,6 +1225,48 @@ app.post("/agents/comic", async (request, reply) => {
         })),
       ]
     : text;
+  type ComicGenerationCheckpoint = {
+    fingerprint: string;
+    story?: Record<string, unknown>;
+    assets?: Record<string, unknown>;
+    sceneBible?: Record<string, unknown>;
+    shotPlan?: Record<string, unknown>;
+    shots?: unknown[];
+    completedBatches?: number;
+    updatedAt?: string;
+  };
+  const checkpointFingerprint = createHash("sha256")
+    .update(JSON.stringify({ text, model, visualInputs }))
+    .digest("hex");
+  let checkpoint: ComicGenerationCheckpoint = { fingerprint: checkpointFingerprint };
+  try {
+    const stored = JSON.parse(
+      String(comicSession.generationCheckpoint || "{}"),
+    ) as ComicGenerationCheckpoint;
+    if (stored.fingerprint === checkpointFingerprint) checkpoint = stored;
+  } catch {
+    /* 损坏检查点从当前需求重新生成 */
+  }
+  const saveCheckpoint = (patch: Partial<ComicGenerationCheckpoint>) => {
+    const checkpointUpdatedAt = new Date().toISOString();
+    checkpoint = {
+      ...checkpoint,
+      ...patch,
+      fingerprint: checkpointFingerprint,
+      updatedAt: checkpointUpdatedAt,
+    };
+    database.run(
+      "UPDATE comic_sessions SET generation_checkpoint=?,updated_at=? WHERE id=? AND user_id=? AND project_id=?",
+      [
+        JSON.stringify(checkpoint),
+        checkpointUpdatedAt,
+        sessionId,
+        String(user.id),
+        projectId,
+      ],
+    );
+    persist();
+  };
   const comicLockKey = `${String(user.id)}:${projectId}`;
   if (activeComicPlans.has(comicLockKey))
     return reply
@@ -1228,7 +1274,7 @@ app.post("/agents/comic", async (request, reply) => {
       .send({ error: "当前项目已有完整剧本正在生成，请勿重复提交" });
   activeComicPlans.add(comicLockKey);
   database.run(
-    "UPDATE comic_sessions SET generation_status='running',generation_stage=?,generation_progress=2,generation_received_bytes=0,generation_error='',updated_at=? WHERE id=? AND user_id=? AND project_id=?",
+    "UPDATE comic_sessions SET generation_status='running',generation_stage=?,generation_progress=2,generation_received_bytes=0,generation_error='',generation_issues='[]',updated_at=? WHERE id=? AND user_id=? AND project_id=?",
     [
       revision ? "正在读取现有方案…" : "正在理解故事想法…",
       new Date().toISOString(),
@@ -1439,9 +1485,20 @@ app.post("/agents/comic", async (request, reply) => {
           if (!data || data === "[DONE]") continue;
           try {
             const packet = JSON.parse(data) as {
-                choices?: Array<{ delta?: { content?: string } }>;
+                choices?: Array<{
+                  delta?: {
+                    content?: string;
+                    reasoning_content?: string;
+                    reasoning?: string;
+                  };
+                }>;
               },
-              delta = String(packet.choices?.[0]?.delta?.content || "");
+              packetDelta = packet.choices?.[0]?.delta,
+              delta = String(packetDelta?.content || ""),
+              reasoningDelta = String(
+                packetDelta?.reasoning_content || packetDelta?.reasoning || "",
+              );
+            if (reasoningDelta) lastStreamContentAt = Date.now();
             if (!delta) continue;
             raw += delta;
             lastStreamContentAt = Date.now();
@@ -1650,20 +1707,31 @@ app.post("/agents/comic", async (request, reply) => {
       return current;
     };
     const storySystem = `你是漫剧总策划。本阶段只生成剧情基座，禁止返回人物、道具、场景和 shots。只返回合法 JSON：{"title":"片名","logline":"梗概","tone":"统一视觉风格","duration":"预计总时长","aspectRatio":"16:9或9:16或1:1","outline":[{"act":"剧情段落","content":"完整因果、冲突和转折"}]}。大纲段数由剧情自然结构决定，必须有完整起承转合、因果和结局。${comicStyleRules}`;
-    const story = await readStage(
-      "正在生成剧情大纲…",
-      storySystem,
-      content,
-      2400,
-      5,
-      18,
-    );
+    const story = checkpoint.story
+      ? checkpoint.story
+      : await readStage(
+          "正在生成剧情大纲…",
+          storySystem,
+          content,
+          2400,
+          5,
+          18,
+        );
     if (
       !Array.isArray(story.outline) ||
       !story.outline.length ||
       !String(story.title || "").trim()
     )
       throw new SyntaxError("剧情大纲缺少标题或段落");
+    if (!checkpoint.story) saveCheckpoint({ story });
+    else
+      emit({
+        type: "progress",
+        progress: 18,
+        phase: "已恢复剧情大纲检查点",
+        receivedBytes: streamReceivedBytes,
+        resumed: true,
+      });
     emit({
       type: "progress",
       progress: 19,
@@ -1672,14 +1740,16 @@ app.post("/agents/comic", async (request, reply) => {
     });
     const assetSystem = `你是漫剧视觉设定师。只返回合法 JSON：{"characters":[{"name":"角色名","description":"稳定设定","voiceProfile":"中文声线","visualAsset":true,"imagePrompt":"180–420字角色设定板提示词","forms":[]}],"props":[{"name":"道具名","description":"固定设定","imagePrompt":"不超过160字的道具图提示词"}]}。只建立跨镜头需要保持一致的具名人物和关键道具，普通路人不建档。人物提示词的生成目标只能是单一角色设定板，展示固定外观、服饰、三视图与细节，禁止剧情场景、表演动作、多人互动、海报构图和复制角色。道具提示词的生成目标只能是单一道具设定素材，展示结构、材质、颜色与细节，禁止人物、人体、手持动作、剧情表演和复杂背景。角色 imagePrompt 与形态 imagePrompt 均不得超过420字，道具 imagePrompt 不得超过160字。${comicCharacterSheetRules}\n${comicStyleRules}`;
     const assetText = `已确认创作需求：\n${text}\n\n已校验剧情大纲：\n${JSON.stringify(story)}`;
-    let assets = await readStage(
-      "正在生成人物与道具设定…",
-      assetSystem,
-      assetText,
-      3800,
-      20,
-      34,
-    );
+    let assets = checkpoint.assets
+      ? checkpoint.assets
+      : await readStage(
+          "正在生成人物与道具设定…",
+          assetSystem,
+          assetText,
+          3800,
+          20,
+          34,
+        );
     assets = await rewriteUntilValid(
       "人物与道具设定",
       assets,
@@ -1691,6 +1761,15 @@ app.post("/agents/comic", async (request, reply) => {
     );
     if (!Array.isArray(assets.characters) || !assets.characters.length)
       throw new SyntaxError("人物设定为空");
+    if (!checkpoint.assets) saveCheckpoint({ assets });
+    else
+      emit({
+        type: "progress",
+        progress: 34,
+        phase: "已恢复人物与道具检查点",
+        receivedBytes: streamReceivedBytes,
+        resumed: true,
+      });
     emit({
       type: "progress",
       progress: 35,
@@ -1699,14 +1778,16 @@ app.post("/agents/comic", async (request, reply) => {
     });
     const sceneSystem = `你是漫剧场景美术。只返回合法 JSON：{"scenes":[{"sceneId":"稳定地点与时段ID","name":"场景名","description":"空间结构与剧情用途","imagePrompt":"不超过160字的无人物场景设定图提示词"}]}。合并同一地点与时段，状态变化不得重复创建场景。每条 imagePrompt 必须明确写出“无人物场景基准图，禁止出现任何人物、人体、手部、角色剪影或人形主体”，只生成可供后续分镜合成使用的空环境、空间结构、UI界面、道具陈列与光影素材。即使剧情中该场景原本有人，场景基准图也必须保持无人；人物只能在后续 frames 分镜合成阶段加入。每条 imagePrompt 不得超过160字，并继承统一风格。`;
     const sceneText = `剧情与视觉基座：\n${JSON.stringify({ ...story, ...assets })}`;
-    let sceneBible = await readStage(
-      "正在生成场景设定…",
-      sceneSystem,
-      sceneText,
-      2600,
-      36,
-      48,
-    );
+    let sceneBible = checkpoint.sceneBible
+      ? checkpoint.sceneBible
+      : await readStage(
+          "正在生成场景设定…",
+          sceneSystem,
+          sceneText,
+          2600,
+          36,
+          48,
+        );
     sceneBible = await rewriteUntilValid(
       "场景设定",
       sceneBible,
@@ -1716,6 +1797,15 @@ app.post("/agents/comic", async (request, reply) => {
       48,
       2600,
     );
+    if (!checkpoint.sceneBible) saveCheckpoint({ sceneBible });
+    else
+      emit({
+        type: "progress",
+        progress: 48,
+        phase: "已恢复场景设定检查点",
+        receivedBytes: streamReceivedBytes,
+        resumed: true,
+      });
     emit({
       type: "progress",
       progress: 49,
@@ -1731,18 +1821,84 @@ app.post("/agents/comic", async (request, reply) => {
         0,
         8,
       ),
-      allShots: unknown[] = [];
+      allShots: unknown[] = checkpoint.shotPlan && Array.isArray(checkpoint.shots)
+        ? [...checkpoint.shots]
+        : [];
     const shotPlanSystem =
       '你是漫剧镜头规划师。本阶段只确定镜头总数、实际对白草稿和轻量结构，禁止生成图片提示词、视频提示词和 frames。只返回合法 JSON：{"plannedShots":[{"number":1,"outlineIndex":1,"title":"镜头名","duration":5,"storyBeat":"承接上一镜并推动下一镜的剧情节拍","sceneId":"场景ID","characterIndexes":[1],"propIndexes":[1],"dialogue":"旁白或角色可直接配音的实际中文台词；无对白则明确写无对白","transition":"与上一镜的过渡方式","continuity":"需要继承的状态"}]}。镜头数由剧情节拍和真实播音时长决定，不得固定数量。按自然中文每秒约3.6个汉字计算台词时间，每段台词或说话人切换另留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；duration 必须向上取整且为3–8秒。若实际对白需要超过8秒，必须拆成多个连续镜头，不得加速朗读或删掉关键因果。必须覆盖全部大纲段落，形成完整起承转合，地点、时间、目标或情绪变化处安排必要过渡镜头。';
     const shotPlanText = `创作需求：\n${text}\n\n已校验剧情、人物、道具和场景基座：\n${JSON.stringify(foundation)}`;
-    let shotPlan = await readStage(
-      "正在规划完整镜头列表…",
-      shotPlanSystem,
-      shotPlanText,
-      3200,
-      50,
-      57,
-    );
+    let shotPlan = checkpoint.shotPlan
+      ? checkpoint.shotPlan
+      : await readStage(
+          "正在规划完整镜头列表…",
+          shotPlanSystem,
+          shotPlanText,
+          3200,
+          50,
+          57,
+        );
+    const normalizeShotPlan = (value: Record<string, unknown>) => {
+      const planned = Array.isArray(value.plannedShots)
+        ? value.plannedShots
+        : [];
+      value.plannedShots = planned.map((raw, index) => {
+        const item =
+            raw && typeof raw === "object"
+              ? ({ ...(raw as Record<string, unknown>) } as Record<
+                  string,
+                  unknown
+                >)
+              : {},
+          existingOutline = Number(item.outlineIndex),
+          outlineIndex =
+            Number.isInteger(existingOutline) &&
+            existingOutline >= 1 &&
+            existingOutline <= outlineParts.length
+              ? existingOutline
+              : Math.min(
+                  Math.max(1, outlineParts.length),
+                  Math.floor(
+                    (index * Math.max(1, outlineParts.length)) /
+                      Math.max(1, planned.length),
+                  ) + 1,
+                ),
+          outline = outlineParts[outlineIndex - 1] as
+            | Record<string, unknown>
+            | undefined,
+          dialogue = String(item.dialogue || "").trim() || "无对白",
+          speechSeconds = estimateComicSpeechDuration(dialogue).minimumSeconds,
+          requestedDuration = Number(item.duration);
+        item.number = index + 1;
+        item.outlineIndex = outlineIndex;
+        item.title =
+          String(item.title || "").trim() || `镜头 ${index + 1}`;
+        item.storyBeat =
+          String(item.storyBeat || "").trim() ||
+          String(outline?.content || "").trim();
+        item.dialogue = dialogue;
+        item.duration = Math.max(
+          3,
+          Math.min(
+            8,
+            Math.ceil(
+              Math.max(
+                Number.isFinite(requestedDuration) ? requestedDuration : 3,
+                speechSeconds,
+              ),
+            ),
+          ),
+        );
+        item.transition =
+          String(item.transition || "").trim() ||
+          (index === 0 ? "黑场淡入" : "承接上一镜连续切入");
+        item.continuity = String(item.continuity || "").trim() || "承接上一镜人物、场景与道具状态";
+        if (!Array.isArray(item.characterIndexes)) item.characterIndexes = [];
+        if (!Array.isArray(item.propIndexes)) item.propIndexes = [];
+        return item;
+      });
+      return value;
+    };
+    shotPlan = normalizeShotPlan(shotPlan);
     const shotPlanIssues = (value: Record<string, unknown>) => {
       const planned = Array.isArray(value.plannedShots)
           ? value.plannedShots
@@ -1791,6 +1947,7 @@ app.post("/agents/comic", async (request, reply) => {
     for (let rewrite = 1; rewrite <= 2; rewrite++) {
       const issues = shotPlanIssues(shotPlan);
       if (!issues.length) break;
+      request.log.warn({ issues, rewrite }, "comic shot plan validation issues");
       emit({
         type: "progress",
         progress: 57,
@@ -1807,12 +1964,23 @@ app.post("/agents/comic", async (request, reply) => {
         57,
         true,
       );
+      shotPlan = normalizeShotPlan(shotPlan);
     }
     const remainingPlanIssues = shotPlanIssues(shotPlan);
     if (remainingPlanIssues.length)
       throw new SyntaxError(
         `镜头规划复检仍有 ${remainingPlanIssues.length} 项不合格`,
       );
+    if (!checkpoint.shotPlan)
+      saveCheckpoint({ shotPlan, shots: [], completedBatches: 0 });
+    else
+      emit({
+        type: "progress",
+        progress: 57,
+        phase: "已恢复镜头规划检查点",
+        receivedBytes: streamReceivedBytes,
+        resumed: true,
+      });
     const plannedShots = (
         Array.isArray(shotPlan.plannedShots) ? shotPlan.plannedShots : []
       )
@@ -1835,7 +2003,30 @@ app.post("/agents/comic", async (request, reply) => {
     const shotsSystem = `你是漫剧分镜导演。严格按照本批轻量镜头规划逐镜扩写，只返回合法 JSON：{"shots":[完整镜头数组]}，返回数量和 number 必须与本批规划完全一致，不得合并、删除或新增镜头。每项必须包含 number、title、duration、storyBeat、action、sceneId、scene、scenePrompt、characterIndexes、characterForms、propIndexes、hasAnonymousCrowd、crowdPrompt、dialogue、frames、imagePrompt、videoPrompt、transition、continuity、referenceIndexes。imagePrompt 与每个 frame.imagePrompt 不得超过100字，scenePrompt 和 crowdPrompt 不得超过160字，videoPrompt 不得超过125字；角色和道具索引严格引用视觉基座。必须沿用镜头规划中的实际对白和已计算 duration，不得在扩写阶段添加放不下的新台词。自然中文按每秒约3.6个汉字计算，每段台词或说话人切换留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；3–5秒以一句短台词为主，6–8秒最多两句。scenePrompt 只能描述无人物环境、空间、UI界面和光影素材，禁止人物、人体、手部和角色剪影。frame.imagePrompt 才是完整剧情分镜：必须明确当前出镜人物、动作、景别、构图、场景状态和必要道具，禁止三视图、设定板、素材拼贴、重复人物和无关元素。视频提示词只保留主要动作、运镜、结束状态和必要对白，让连接分镜按既定人物身份与场景演进，禁止重新设计人物、换装、换场景或切换画风。${comicProductionRules}\n${comicContinuityRules}\n${comicTransitionRules}\n${comicDialogueRules}\n${comicStyleRules}`;
     const shotBatchSize = 4,
       batchCount = Math.ceil(totalShots / shotBatchSize);
-    for (let batchIndex = 0; batchIndex < batchCount; batchIndex++) {
+    let resumeBatch = Math.min(
+      batchCount,
+      Math.max(0, Number(checkpoint.completedBatches) || 0),
+    );
+    const expectedResumedShots = Math.min(
+      totalShots,
+      resumeBatch * shotBatchSize,
+    );
+    if (allShots.length !== expectedResumedShots) {
+      resumeBatch = 0;
+      allShots.splice(0, allShots.length);
+      saveCheckpoint({ shotPlan, shots: [], completedBatches: 0 });
+    }
+    if (resumeBatch > 0)
+      emit({
+        type: "progress",
+        progress: 59 + Math.floor((resumeBatch * 34) / batchCount),
+        phase: `已恢复 ${allShots.length}/${totalShots} 个已校验镜头`,
+        receivedBytes: streamReceivedBytes,
+        resumed: true,
+        totalShots,
+        completedShots: allShots.length,
+      });
+    for (let batchIndex = resumeBatch; batchIndex < batchCount; batchIndex++) {
       const expected = plannedShots.slice(
           batchIndex * shotBatchSize,
           (batchIndex + 1) * shotBatchSize,
@@ -1865,6 +2056,43 @@ app.post("/agents/comic", async (request, reply) => {
         batchStart,
         Math.max(batchStart + 1, batchEnd - 1),
       );
+      const normalizeShotBatch = (value: Record<string, unknown>) => {
+        const returned = Array.isArray(value.shots) ? value.shots : [],
+          byNumber = new Map<number, Record<string, unknown>>();
+        returned.forEach((raw) => {
+          if (!raw || typeof raw !== "object") return;
+          const item = raw as Record<string, unknown>;
+          byNumber.set(Number(item.number), item);
+        });
+        value.shots = expected.map((planItem, index) => {
+          const plan = planItem as Record<string, unknown>,
+            generated =
+              byNumber.get(Number(plan.number)) ||
+              (returned[index] && typeof returned[index] === "object"
+                ? (returned[index] as Record<string, unknown>)
+                : {});
+          return {
+            ...plan,
+            ...generated,
+            number: Number(plan.number),
+            title: String(generated.title || plan.title || "").trim(),
+            duration: Number(plan.duration),
+            storyBeat: String(plan.storyBeat || generated.storyBeat || "").trim(),
+            sceneId: String(generated.sceneId || plan.sceneId || "").trim(),
+            characterIndexes: Array.isArray(plan.characterIndexes)
+              ? plan.characterIndexes
+              : [],
+            propIndexes: Array.isArray(plan.propIndexes)
+              ? plan.propIndexes
+              : [],
+            dialogue: String(plan.dialogue || generated.dialogue || "无对白").trim(),
+            transition: String(plan.transition || generated.transition || "").trim(),
+            continuity: String(plan.continuity || generated.continuity || "").trim(),
+          };
+        });
+        return value;
+      };
+      shotPart = normalizeShotBatch(shotPart);
       const batchIssues = (value: Record<string, unknown>) => {
         const issues = validatePromptLengths(value, "shots"),
           returned = Array.isArray(value.shots) ? value.shots : [];
@@ -1887,6 +2115,10 @@ app.post("/agents/comic", async (request, reply) => {
       for (let rewrite = 1; rewrite <= 2; rewrite++) {
         const issues = batchIssues(shotPart);
         if (!issues.length) break;
+        request.log.warn(
+          { issues, rewrite, firstNumber, lastNumber },
+          "comic shot batch validation issues",
+        );
         emit({
           type: "progress",
           progress: Math.max(batchStart, batchEnd - 1),
@@ -1903,6 +2135,7 @@ app.post("/agents/comic", async (request, reply) => {
           Math.max(batchStart, batchEnd - 1),
           true,
         );
+        shotPart = normalizeShotBatch(shotPart);
       }
       const remaining = batchIssues(shotPart);
       if (remaining.length)
@@ -1910,6 +2143,11 @@ app.post("/agents/comic", async (request, reply) => {
           `镜头 ${firstNumber}–${lastNumber} 复检仍有 ${remaining.length} 项不合格`,
         );
       allShots.push(...(Array.isArray(shotPart.shots) ? shotPart.shots : []));
+      saveCheckpoint({
+        shotPlan,
+        shots: allShots,
+        completedBatches: batchIndex + 1,
+      });
       emit({
         type: "progress",
         progress: batchEnd,
@@ -1939,6 +2177,10 @@ app.post("/agents/comic", async (request, reply) => {
       const repairs = Array.isArray(audit.repairs) ? audit.repairs : [],
         issues = Array.isArray(audit.issues) ? audit.issues : [];
       if (audit.valid === true && !issues.length) break;
+      request.log.warn(
+        { auditAttempt, issues, repairs },
+        "comic continuity audit issues",
+      );
       if (!repairs.length)
         throw new SyntaxError("跨段审校发现问题但未返回可执行修复");
       emit({
@@ -1960,6 +2202,11 @@ app.post("/agents/comic", async (request, reply) => {
           if (String(repair[field] || "").trim())
             target[field] = String(repair[field]);
       }
+      saveCheckpoint({
+        shotPlan,
+        shots: allShots,
+        completedBatches: batchCount,
+      });
       emit({
         type: "progress",
         progress: 97,
@@ -1969,8 +2216,12 @@ app.post("/agents/comic", async (request, reply) => {
       });
       audit = await readStage(
         "跨段修复复检中…",
-        auditSystem,
-        JSON.stringify({ outline: outlineParts, shots: allShots }),
+        `${auditSystem} 本次是定向复检：只验证上一轮明确列出的 issues 是否已经通过 repairs 修复。除非仍存在会导致剧情事实矛盾、人物或道具状态冲突的硬错误，否则必须返回 valid=true；不得在复检时新增审美偏好、措辞优化或非阻断性建议。`,
+        JSON.stringify({
+          previousAudit: audit,
+          outline: outlineParts,
+          shots: allShots,
+        }),
         1800,
         97,
         97,
@@ -2293,7 +2544,7 @@ app.post("/agents/comic", async (request, reply) => {
       model: usedModel,
     };
     database.run(
-      "UPDATE comic_sessions SET phase=?,plan=?,pending_revision=?,generation_status='succeeded',generation_stage='完整剧本已完成',generation_progress=100,generation_error='',updated_at=? WHERE id=? AND user_id=? AND project_id=?",
+      "UPDATE comic_sessions SET phase=?,plan=?,pending_revision=?,generation_status='succeeded',generation_stage='完整剧本已完成',generation_progress=100,generation_error='',generation_checkpoint='{}',generation_issues='[]',updated_at=? WHERE id=? AND user_id=? AND project_id=?",
       [
         "generated",
         JSON.stringify(result),
@@ -2320,21 +2571,41 @@ app.post("/agents/comic", async (request, reply) => {
       },
       "comic agent failed",
     );
-    const message =
+    const rawError = error instanceof Error ? error.message : String(error),
+      issueCode = /对白|时长|拆镜/.test(rawError)
+        ? "E101"
+        : /提示词|Prompt|超过\d+字/.test(rawError)
+          ? "E203"
+          : /人物|道具|场景|引用|索引/.test(rawError)
+            ? "E301"
+            : /连续性|跨段|转场|承接/.test(rawError)
+              ? "E401"
+              : /镜头|分镜/.test(rawError)
+                ? "E201"
+                : "E001",
+      issue = {
+        code: issueCode,
+        stage: streamProgress,
+        message: rawError,
+        recoverable: Boolean(
+          checkpoint.story || checkpoint.assets || checkpoint.shotPlan,
+        ),
+      },
+      message =
       error instanceof SyntaxError
-        ? "漫剧方案返回不完整，请重试"
+        ? `漫剧校验未通过（${issueCode}）：${rawError}。已保留通过校验的阶段，可直接继续。`
         : error instanceof DOMException && error.name === "TimeoutError"
           ? "漫剧构思连续 60 秒没有新内容，请重试"
           : "漫剧策划暂时失败，请稍后重试";
     database.run(
-      "UPDATE comic_sessions SET generation_status='failed',generation_stage='生成失败',generation_error=?,updated_at=? WHERE id=?",
-      [message, new Date().toISOString(), sessionId],
+      "UPDATE comic_sessions SET generation_status='failed',generation_stage='生成失败',generation_error=?,generation_issues=?,updated_at=? WHERE id=?",
+      [message, JSON.stringify([issue]), new Date().toISOString(), sessionId],
     );
     persist();
     if (streamStarted) {
       if (!reply.raw.destroyed)
         reply.raw.write(
-          `${JSON.stringify({ type: "error", error: message })}\n`,
+          `${JSON.stringify({ type: "error", error: message, issues: [issue] })}\n`,
         );
       if (!reply.raw.destroyed) reply.raw.end();
       return;
@@ -2358,15 +2629,26 @@ app.get("/agents/comic/session", async (request, reply) => {
   if (!projectId || !ownsProject(projectId, String(user.id)))
     return reply.code(404).send({ error: "当前项目不存在" });
   const session = getOne(
-    "SELECT id,phase,brief,messages,pending_revision AS pendingRevision,plan,generation_status AS generationStatus,generation_stage AS generationStage,generation_progress AS generationProgress,generation_received_bytes AS generationReceivedBytes,generation_error AS generationError,updated_at AS updatedAt FROM comic_sessions WHERE user_id=? AND project_id=? ORDER BY CASE WHEN generation_status='running' THEN 0 WHEN plan IS NOT NULL THEN 1 ELSE 2 END,updated_at DESC LIMIT 1",
+    "SELECT id,phase,brief,messages,pending_revision AS pendingRevision,plan,generation_status AS generationStatus,generation_stage AS generationStage,generation_progress AS generationProgress,generation_received_bytes AS generationReceivedBytes,generation_error AS generationError,generation_issues AS generationIssues,generation_checkpoint AS generationCheckpoint,updated_at AS updatedAt FROM comic_sessions WHERE user_id=? AND project_id=? ORDER BY CASE WHEN generation_status='running' THEN 0 WHEN plan IS NOT NULL THEN 1 ELSE 2 END,updated_at DESC LIMIT 1",
     [String(user.id), projectId],
   );
   if (!session) return reply.code(204).send();
+  let checkpoint: Record<string, unknown> = {};
+  try {
+    checkpoint = JSON.parse(String(session.generationCheckpoint || "{}"));
+  } catch {
+    checkpoint = {};
+  }
   return {
     ...session,
     brief: JSON.parse(String(session.brief || "{}")),
     messages: JSON.parse(String(session.messages || "[]")),
     plan: session.plan ? JSON.parse(String(session.plan)) : null,
+    generationIssues: JSON.parse(String(session.generationIssues || "[]")),
+    hasGenerationCheckpoint: Boolean(
+      checkpoint.story || checkpoint.assets || checkpoint.shotPlan,
+    ),
+    generationCheckpoint: undefined,
   };
 });
 app.get("/user-api-models", async (request, reply) => {
@@ -2459,7 +2741,10 @@ app.get("/notifications/stream", async (request, reply) => {
   sendNotificationSync(reply.raw);
   broadcastPresence();
   const heartbeat = setInterval(() => {
-    if (!reply.raw.destroyed) reply.raw.write(`: keepalive ${Date.now()}\n\n`);
+    if (!reply.raw.destroyed) {
+      reply.raw.write(`: keepalive ${Date.now()}\n\n`);
+      sendPresence(reply.raw);
+    }
   }, 25000);
   let closed = false;
   const close = () => {
@@ -4659,6 +4944,26 @@ const activeGenerationJobs: Record<JobInput["kind"], Set<string>> = {
   video: new Set(),
 };
 let queuePumpRunning = false;
+let generationQueueWakeTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleGenerationQueueWake() {
+  if (generationQueueWakeTimer) clearTimeout(generationQueueWakeTimer);
+  generationQueueWakeTimer = null;
+  const next = getOne(
+    "SELECT MIN(retry_after) AS retryAfter FROM jobs WHERE status='queued' AND retry_after IS NOT NULL",
+    [],
+  ),
+    retryAt = Date.parse(String(next?.retryAfter || ""));
+  if (!Number.isFinite(retryAt)) return;
+  generationQueueWakeTimer = setTimeout(
+    () => {
+      generationQueueWakeTimer = null;
+      pumpGenerationQueue();
+    },
+    Math.max(100, retryAt - Date.now() + 100),
+  );
+  generationQueueWakeTimer.unref();
+}
 
 function pumpGenerationQueue() {
   if (queuePumpRunning) return;
@@ -4671,7 +4976,7 @@ function pumpGenerationQueue() {
         const id = String(job.id);
         activeGenerationJobs[kind].add(id);
         database.run(
-          "UPDATE jobs SET status = 'running', progress = 0, updated_at = ? WHERE id = ? AND status = 'queued'",
+          "UPDATE jobs SET status = 'running', progress = 0, error = NULL, retry_after = NULL, updated_at = ? WHERE id = ? AND status = 'queued'",
           [new Date().toISOString(), id],
         );
         persist();
@@ -4691,6 +4996,7 @@ function pumpGenerationQueue() {
       }
   } finally {
     queuePumpRunning = false;
+    scheduleGenerationQueueWake();
   }
 }
 
@@ -4708,8 +5014,8 @@ function activeImageEditCount() {
 function nextQueuedGenerationJob(kind: JobInput["kind"]) {
   if (kind !== "image")
     return getOne(
-      "SELECT * FROM jobs WHERE status = 'queued' AND kind = ? ORDER BY created_at ASC, rowid ASC LIMIT 1",
-      [kind],
+      "SELECT * FROM jobs WHERE status = 'queued' AND kind = ? AND (retry_after IS NULL OR retry_after <= ?) ORDER BY created_at ASC, rowid ASC LIMIT 1",
+      [kind, new Date().toISOString()],
     );
   const imageEditConcurrency = Number.isFinite(configuredImageEditConcurrency)
     ? Math.max(1, Math.min(generationConcurrency.image, Math.floor(configuredImageEditConcurrency)))
@@ -4853,12 +5159,44 @@ async function executeQueuedJob(job: Record<string, unknown>) {
     }
     throw lastError;
   } catch (error) {
+    if (kind === "video" && isProviderQueueCapacityError(error)) {
+      const retryCount = Number(job.retry_count || 0) + 1,
+        retryDelayMs = Math.min(
+          300_000,
+          20_000 * 2 ** Math.min(4, retryCount - 1),
+        ) + Math.floor(Math.random() * 5000),
+        retryAfter = new Date(Date.now() + retryDelayMs).toISOString(),
+        now = new Date().toISOString();
+      database.run(
+        "UPDATE jobs SET status='queued',progress=0,error=?,retry_after=?,retry_count=?,updated_at=? WHERE id=? AND status!='canceled'",
+        [
+          "Agnes 云端队列繁忙，正在等待自动重试",
+          retryAfter,
+          retryCount,
+          now,
+          id,
+        ],
+      );
+      persist();
+      app.log.warn(
+        { jobId: id, retryCount, retryAfter, retryDelayMs },
+        "video provider queue full, job requeued",
+      );
+      return;
+    }
     await updateJob(id, {
       status: "failed",
       progress: 0,
       error: error instanceof Error ? error.message : "Generation failed",
     });
   }
+}
+
+function isProviderQueueCapacityError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /video queue is full|queue full|queue is full|server queue.*full|队列.*(?:已满|繁忙)/i.test(
+    message,
+  );
 }
 
 function isTransientGenerationError(error: unknown) {
@@ -4930,6 +5268,7 @@ async function updateJob(id: string, update: GenerationUpdate) {
     );
   } catch (error) {
     succeeded = false;
+    app.log.error({jobId:id,resultSource:resultUrl?(()=>{try{return new URL(resultUrl).host}catch{return "inline-or-local"}})():"missing",error:error instanceof Error?{message:error.message,cause:error.cause}:String(error)},"job result archive failed");
     database.run(
       "UPDATE jobs SET status = ?, progress = ?, error = ?, updated_at = ? WHERE id = ?",
       [
@@ -4962,7 +5301,7 @@ function settleJobCredits(jobId: string, succeeded: boolean) {
 
 async function archiveJobResult(jobId: string, source: string) {
   const job = getOne(
-    "SELECT project_id, user_id, kind, prompt FROM jobs WHERE id = ?",
+    "SELECT project_id, user_id, kind, prompt, model FROM jobs WHERE id = ?",
     [jobId],
   );
   if (!job) throw new Error("Job not found");
@@ -4980,17 +5319,23 @@ async function archiveJobResult(jobId: string, source: string) {
       String(job.kind) === "video"
         ? process.env.AGNES_VIDEO_HTTPS_PROXY
         : process.env.OPENAI_IMAGE_HTTPS_PROXY;
-    const response = proxyUrl
-      ? await undiciFetch(url, {
-          signal: AbortSignal.timeout(120000),
-          dispatcher: new ProxyAgent(proxyUrl),
-        })
-      : await fetch(url, { signal: AbortSignal.timeout(120000) });
-    if (!response.ok) throw new Error(`下载生成结果失败（${response.status}）`);
-    mimeType =
-      response.headers.get("content-type")?.split(";")[0] ||
-      (String(job.kind) === "video" ? "video/mp4" : "image/png");
-    bytes = Buffer.from(await response.arrayBuffer());
+    const preferProxy=String(job.model).startsWith("agnes-")&&Boolean(proxyUrl),strategies:Array<{name:string;proxy?:string}> = preferProxy?[{name:"proxy",proxy:proxyUrl},{name:"direct"}]:[{name:"direct"},...(proxyUrl?[{name:"proxy",proxy:proxyUrl}]:[])],failures:string[]=[];
+    let downloaded:{bytes:Buffer;mimeType:string}|undefined;
+    for(let round=0;round<2&&!downloaded;round++){
+      for(const strategy of strategies){
+        try{
+          const response=strategy.proxy?await undiciFetch(url,{signal:AbortSignal.timeout(90000),dispatcher:new ProxyAgent(strategy.proxy)}):await fetch(url,{signal:AbortSignal.timeout(90000)});
+          if(!response.ok)throw new Error(`HTTP ${response.status}`);
+          const payload=Buffer.from(await response.arrayBuffer());
+          if(!payload.length)throw new Error("empty response");
+          downloaded={bytes:payload,mimeType:response.headers.get("content-type")?.split(";")[0]||(String(job.kind)==="video"?"video/mp4":"image/png")};
+          break;
+        }catch(error){const cause=error instanceof Error&&error.cause&&typeof error.cause==="object"?String((error.cause as {code?:unknown}).code||""):"";failures.push(`${strategy.name}: ${error instanceof Error?error.message:String(error)}${cause?` (${cause})`:""}`)}
+      }
+      if(!downloaded&&round===0)await new Promise(resolve=>setTimeout(resolve,1500));
+    }
+    if(!downloaded){let sourceHost="unknown";try{sourceHost=new URL(url).host}catch{/* 保持 unknown */}app.log.error({jobId,model:String(job.model),sourceHost,failures},"generated result archive download failed");throw new Error(`下载生成结果失败：${failures.join("；")}`)}
+    bytes=downloaded.bytes;mimeType=downloaded.mimeType;
   }
   if (!bytes.length || bytes.length > 100 * 1024 * 1024)
     throw new Error("生成结果为空或超过 100MB");
