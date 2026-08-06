@@ -409,6 +409,7 @@ app.post("/agents/prompt", async (request, reply) => {
   const input = request.body as {
       idea?: string;
       kind?: string;
+      promptMode?: string;
       complexity?: string;
       context?: string[];
       visuals?: string[];
@@ -423,6 +424,9 @@ app.post("/agents/prompt", async (request, reply) => {
     },
     idea = String(input.idea ?? "").trim(),
     kind = input.kind === "video" ? "video" : "image",
+    promptMode = ["general", "agnes"].includes(String(input.promptMode))
+      ? String(input.promptMode)
+      : "create",
     complexity = input.complexity === "detailed" ? "detailed" : "simple",
     context = (input.context ?? [])
       .map((item) => String(item).trim())
@@ -451,7 +455,10 @@ app.post("/agents/prompt", async (request, reply) => {
     complexity === "simple"
       ? `finalPrompt 控制在${kind === "video" ? "180" : "120"}个中文字符以内，只保留主体、场景、关键动作或构图与一种主要风格，避免堆砌。`
       : `详细模式通过拆分更多必要步骤、分镜和依赖关系表达复杂度，不要增加单个图片步骤的提示词长度；另可返回 subject、scene、composition、lighting、style、motion、negativePrompt 字符串字段。`;
-  const system = `你是 Viora 无限画布中的创作 Agent。理解用户需求、当前节点和上游视觉素材，规划可实际执行的完整工作流并生成底层提示词。只返回合法完整 JSON，不要 Markdown或解释。必须包含 finalPrompt、action、targetType、summary、shouldGenerate、steps。steps 是按执行顺序排列的数组，每项必须为 {"title":"简短名称","kind":"image或video","prompt":"该节点独立使用的完整提示词","referenceIndexes":[1],"dependsOn":[1]}。所有 kind=image 的步骤默认使用 gpt-image-2，每条 prompt 必须控制在 140 个中文字符以内，只保留主体/参考素材对应关系、关键修改、场景构图和一种主要风格；禁止堆砌形容词、镜头参数、材质清单和重复约束。图片需求复杂时拆为多个具有明确职责的 image 步骤，不得写成一条超长提示词。referenceIndexes 使用用户附带视觉参考的 1 开始编号；dependsOn 使用 steps 的 1 开始编号，只能引用当前步骤之前的步骤。复杂视频必须采用分层生产链：先按需要生成可复用的人物、产品和环境设定图；再为每个镜头创建独立的最终分镜 image 步骤，通过 dependsOn 组合该镜头所需的设定素材；最后每个 video 步骤只依赖自己对应的最终分镜图，不要再次直接依赖已经被该分镜使用的人物或场景祖先素材。每个含人物或产品的 video 提示词都要明确要求严格保持输入分镜中的身份、脸型、发型、服装、产品外形和配色，禁止换脸、改变年龄性别、重设计服装或产品；只描述必要动作、环境运动和镜头运动。若最终视频需要先创造场景、人物或分镜参考图，必须先规划 image 步骤，再让 video 步骤通过 dependsOn 引用对应图片步骤。不同镜头需要不同场景时分别生成并正确复用；需要保持角色、产品或美术一致性时复用统一设定图。最终交付物必须出现在 steps 中：用户要视频时不能只返回准备图片，必须包含至少一个 video 步骤；用户明确不要视频时禁止添加 video。若用户已有合适图片，应优先直接引用素材，不重复生成。需要多个方案、场景或分镜时拆成多个步骤，每个视频镜头独立一个 video 步骤，最多 16 步。用户明确指定数量时必须准确提供相应数量的最终交付步骤；若还需要角色设定等中间步骤，应在 16 步内一并规划。禁止循环依赖，video 步骤通常作为末端。需求非常模糊且未指定媒体类型时，采用最小可行方案，只创建一个 image 步骤，不擅自扩展视频。action 只能是 update_current、create_child、create_new；targetType 只能是 image、video；summary 用一句简短中文说明完整执行链。没有当前节点时 create_new；有素材并继续创作时 create_child。用户点击开始创作即视为授权执行，shouldGenerate 默认 true，除非用户明确只要求规划或提示词。${detailRule} 当前节点信息：${JSON.stringify(input.target ?? null)}。不要声称媒体已经生成。`;
+  const creativeSystem = `你是 Viora 无限画布中的创作 Agent。理解用户需求、当前节点和上游视觉素材，规划可实际执行的完整工作流并生成底层提示词。只返回合法完整 JSON，不要 Markdown或解释。必须包含 finalPrompt、action、targetType、summary、shouldGenerate、steps。steps 是按执行顺序排列的数组，每项必须为 {"title":"简短名称","kind":"image或video","prompt":"该节点独立使用的完整提示词","referenceIndexes":[1],"dependsOn":[1]}。所有 kind=image 的步骤默认使用 gpt-image-2，每条 prompt 必须控制在 140 个中文字符以内，只保留主体/参考素材对应关系、关键修改、场景构图和一种主要风格；禁止堆砌形容词、镜头参数、材质清单和重复约束。图片需求复杂时拆为多个具有明确职责的 image 步骤，不得写成一条超长提示词。referenceIndexes 使用用户附带视觉参考的 1 开始编号；dependsOn 使用 steps 的 1 开始编号，只能引用当前步骤之前的步骤。复杂视频必须采用分层生产链：先按需要生成可复用的人物、产品和环境设定图；再为每个镜头创建独立的最终分镜 image 步骤，通过 dependsOn 组合该镜头所需的设定素材；最后每个 video 步骤只依赖自己对应的最终分镜图，不要再次直接依赖已经被该分镜使用的人物或场景祖先素材。每个含人物或产品的 video 提示词都要明确要求严格保持输入分镜中的身份、脸型、发型、服装、产品外形和配色，禁止换脸、改变年龄性别、重设计服装或产品；只描述必要动作、环境运动和镜头运动。若最终视频需要先创造场景、人物或分镜参考图，必须先规划 image 步骤，再让 video 步骤通过 dependsOn 引用对应图片步骤。不同镜头需要不同场景时分别生成并正确复用；需要保持角色、产品或美术一致性时复用统一设定图。最终交付物必须出现在 steps 中：用户要视频时不能只返回准备图片，必须包含至少一个 video 步骤；用户明确不要视频时禁止添加 video。若用户已有合适图片，应优先直接引用素材，不重复生成。需要多个方案、场景或分镜时拆成多个步骤，每个视频镜头独立一个 video 步骤，最多 16 步。用户明确指定数量时必须准确提供相应数量的最终交付步骤；若还需要角色设定等中间步骤，应在 16 步内一并规划。禁止循环依赖，video 步骤通常作为末端。需求非常模糊且未指定媒体类型时，采用最小可行方案，只创建一个 image 步骤，不擅自扩展视频。action 只能是 update_current、create_child、create_new；targetType 只能是 image、video；summary 用一句简短中文说明完整执行链。没有当前节点时 create_new；有素材并继续创作时 create_child。用户点击开始创作即视为授权执行，shouldGenerate 默认 true，除非用户明确只要求规划或提示词。${detailRule} 当前节点信息：${JSON.stringify(input.target ?? null)}。不要声称媒体已经生成。`;
+  const generalPromptSystem = `你是专业 AI 视觉提示词工程师。根据用户的中文画面需求、当前节点上下文和视觉参考，只生成一条可直接使用的${kind === "video" ? "视频" : "图片"}提示词，不创建工作流，不规划节点，不扩写用户未提供的剧情。保持已有角色、服装、道具、场景和风格一致。只返回合法 JSON：{"finalPrompt":"最终提示词","summary":"通用提示词已生成"}。finalPrompt 使用清晰自然的中文，控制在 ${kind === "video" ? 280 : 180} 字以内。`;
+  const agnesPromptSystem = `你是专业动画导演和 Agnes Video v2.0 Prompt 工程师。把用户提供的中文剧情分镜转换成连续动漫视频的英文 Prompt，像动画分镜脚本而不是小说。不得扩写剧情、创造角色、改变设定、增加对白或把多个复杂事件塞入同一镜头。只返回合法 JSON：{"finalPrompt":"完整 Agnes Prompt","summary":"Agnes Video v2.0 提示词已生成"}，不要返回 steps 或解释。finalPrompt 必须严格按以下带英文冒号的标题顺序输出：Style:, Language:, Continuity:, Scene:, Camera:, Action:, Effects:, Audio:, Dialogue:, Voice:, Background:, Constraints:。每个一级标题必须独占一行、只出现一次，正文从下一行开始；多个动作放在同一个 Action: 区块中，每个动作单独一行，绝不能重复输出 Action: 标题。Style 固定为 Anime, cinematic.；Language 固定为 Chinese.。Continuity 说明 Continue seamlessly from the previous shot，并锁定人物身份、服装、发型、建筑、场景与光照，禁止重新设计；同一场景增加 Environment Lock: Keep the same background environment and spatial layout. Do not move, rebuild, or redesign architecture. Scene 只描述当前画面的环境与主体。Camera 只能使用 Wide shot, Medium shot, Medium close-up, Close-up, Slow dolly in, Slow dolly out, Slow pan, Tracking shot, Aerial shot, Reframe toward character 等明确电影语言，禁止抽象镜头描述。输入中的“顺视线切到”必须翻译成 Slow pan 或 Reframe toward character，绝不能在 Camera 或 Action 中出现 follows the line of sight、camera sees、feels closer 等抽象措辞。Action 一句话一个可见动作，不写心理，不增加输入中没有的动作。Effects 只写可见光效、能量、UI、天气或粒子。Audio 中旁白必须写 Narration: "中文旁白"，系统声音必须写 System Announcement: "中文系统声音"，不得放入 Dialogue。Dialogue 只放真实人物台词，格式 Character Name: "中文台词"；已有角色必须始终使用角色名，禁止用 boy、teenager、young man 等模糊称呼替代。一个镜头最多一个主要说话角色。人物讲话时加入 Only the speaking character moves their lips. Everyone else keeps their mouths closed.；无人镜头不得生成 lip sync。Voice 写年龄、性别、音色、情绪、语速和说话方式。Background 写环境声音。Constraints 每次原样包含：No subtitles. No captions. No dialogue text. No narration text. No automatic transcription. No speech bubbles. No text overlays. No logos. No watermarks. Only animate the specified actions. Do not redesign characters. Do not change clothing. Do not change hairstyle. Do not change environment. No extra movement. No idle animation. No unnecessary camera movement. 最终 Prompt 除中文台词、中文旁白和中文系统播报外，其余全部使用英文。`;
+  const system = promptMode === "agnes" ? agnesPromptSystem : promptMode === "general" ? generalPromptSystem : creativeSystem;
   const visualSources = (input.visuals ?? [])
     .map(String)
     .filter((source) => /^\/api\/assets\/[^/]+\/content(?:\/|$)/.test(source))
@@ -566,6 +573,12 @@ app.post("/agents/prompt", async (request, reply) => {
         const parsed = parsePromptAgentResult(raw);
         if (!String(parsed.finalPrompt ?? "").trim())
           throw new SyntaxError("Agent missing finalPrompt");
+        if (promptMode === "agnes") {
+          const normalized = normalizeAgnesPrompt(String(parsed.finalPrompt));
+          const validationError = validateAgnesPrompt(normalized);
+          if (validationError) throw new SyntaxError(validationError);
+          parsed.finalPrompt = normalized;
+        }
         result = parsed;
         break;
       } catch (error) {
@@ -584,6 +597,23 @@ app.post("/agents/prompt", async (request, reply) => {
     const field = (name: string) => String(result[name] ?? "").trim();
     const rawFinalPrompt = field("finalPrompt");
     if (!rawFinalPrompt) throw new Error("Agent 未返回 finalPrompt");
+    if (promptMode !== "create") {
+      return {
+        model,
+        kind,
+        action: "create_new",
+        targetType: kind,
+        summary:
+          field("summary") ||
+          (promptMode === "agnes"
+            ? "Agnes Video v2.0 提示词已生成"
+            : "通用提示词已生成"),
+        shouldGenerate: false,
+        steps: [],
+        finalPrompt: rawFinalPrompt,
+        promptMode,
+      };
+    }
     const action = ["update_current", "create_child", "create_new"].includes(
         field("action"),
       )
@@ -1139,8 +1169,8 @@ app.post("/agents/comic", async (request, reply) => {
       : "由对话内容推断";
   if (!idea && !input.previousPlan)
     return reply.code(400).send({ error: "请先描述你想创作的漫剧" });
-  if (idea.length > 4000 || revision.length > 2000)
-    return reply.code(400).send({ error: "创作描述过长，请精简后重试" });
+  if (idea.length > 12000 || revision.length > 6000)
+    return reply.code(400).send({ error: "本次提交内容异常过长，请重新打开漫剧窗口后重试" });
   const baseUrl = String(
       process.env.PROMPT_AGENT_BASE_URL ||
         process.env.OPENAI_IMAGE_BASE_URL ||
@@ -1174,11 +1204,11 @@ app.post("/agents/comic", async (request, reply) => {
   const comicProductionRules =
     '补充硬性规则：characters 中必须返回 visualAsset 布尔值。只有具有稳定可见外形、需要跨镜头保持一致的实体人物才是 true；系统声音、旁白、意识、文字提示、无实体光效必须为 false，且不得为它们生成定妆图。角色存在换装、战斗服、受伤、变身、年龄阶段等明显视觉状态时，在对应 character 中返回 forms 数组，格式为 [{"name":"形态名","description":"相对 Base 基准形态发生的外观变化","imagePrompt":"严格基于 Base 人物基准图，只改变该形态服饰或状态的设定图提示词"}]；Base 形态仍由 character 本身表示，不得在 forms 重复创建。每个镜头必须返回 characterForms 数组，格式为 [{"characterIndex":1,"form":"形态名"}]，只在该镜头确实使用非 Base 形态时填写；未列出的角色默认使用 Base。不得在同一分镜混用同一角色的 Base 与其他形态。characterIndexes 只能列出该镜头画面中明确出镜的具名角色；仅在对白、前后剧情或场外存在但画面不可见的角色不得加入。路人、群众、行人、围观者等匿名背景人物绝不能借用任何具名配角的 characterIndexes 或 Base 设定。包含匿名人群时必须返回 hasAnonymousCrowd=true 和 crowdPrompt，crowdPrompt 只描述匿名群演的人数范围、分布、行为和差异性，不得写入任何具名角色外观；没有匿名人群时必须为 false。每个具名角色在单帧中默认只出现一个实例，禁止把角色 Base 复制成多个群众。sceneId 表示地点与时段的稳定身份，不是镜头编号；同一地点即使出现变暗、破坏、天气、光效或剧情状态变化，也必须沿用相同 sceneId 和同一张无人物场景基准图，把变化写入 frames.imagePrompt。只有真正切换到不同地点或时段才创建新 sceneId。';
   const comicContinuityRules =
-    "跨镜头连续性规则：相邻制作镜头若 sceneId 相同且时间连续，后一镜头第一张 frame 必须明确承接前一镜头最后一张 frame 的人物站位、动作结束姿态、视线方向、服饰形态、道具状态、环境光线和左右空间关系；continuity 必须写清继承项与本镜头新增变化。只有明确切换地点、时段或蒙太奇段落时才允许重置构图。不要让每个镜头都从人物正面站立的初始状态重新开始。每张最终分镜最多使用 4 张参考图，优先级是上一连续分镜、当前具名出镜角色、当前首次出现的关键道具、场景基准。若已连接同场景的上一分镜，不要再重复依赖场景基准，也不要重复依赖已在上一分镜出现且外观未变化的道具；上一分镜应作为场景、站位、光线与既有道具的合成状态参考。";
+    "跨镜头连续性规则：相邻制作镜头若 sceneId 相同且时间连续，后一镜头第一张 frame 必须明确承接前一镜头最后一张 frame 的人物站位、动作结束姿态、视线方向、服饰形态、道具状态、环境光线和左右空间关系；continuity 必须写清继承项与本镜头新增变化。只有明确切换地点、时段或蒙太奇段落时才允许重置构图。不要让每个镜头都从人物正面站立的初始状态重新开始。frames 中每项必须包含 keyframe、inherit、change、lock：keyframe 只能是 start、middle、end；inherit 写从上一关键帧继承的可见状态；change 只写当前帧发生的动作、机位、景别或状态变化；lock 写绝对不能改变的人物身份、服饰、道具、左右站位与环境锚点。换角度或景别不等于重置人物和场景。每次最终生图最多使用 2 张参考图，优先级是上一连续分镜、当前新人物或新形态、首次出现的关键道具、场景基准；超过 2 张时由画布逐层合成，不得要求单次模型同时理解全部素材。若上一分镜已包含同一场景、人物或道具，不要重复依赖其 Base，上一分镜就是这些既有状态的合成参考。";
   const comicTransitionRules =
     "剧情过渡硬规则：每个镜头必须在 storyBeat 中说明它承接上一镜的原因和为下一镜提供的信息、动作或情绪结果，禁止彼此独立的画面堆砌。transition 不得为空，必须明确使用动作承接、视线匹配、声音先行、反应镜头、环境空镜、道具特写、时间提示或建立镜头中的一种自然过渡。地点、时段、人物状态或剧情目标发生变化时，必须增加必要的建立镜头或过渡镜头，不能直接跳切；但不得为了凑数量生成无剧情作用的重复镜头。相邻镜头的对白必须问答、反应或信息递进，上一镜提出的信息必须在后续镜头得到承接。分段生成时，下一段第一镜必须继承上一段末镜的地点时段、角色形态、道具状态、未完成动作、情绪和悬念，除非先用明确过渡完成转换。";
   const comicDialogueRules =
-    "视频对白与声线规则：characters.voiceProfile 必须为每个可说话角色提供稳定中文声线，写清年龄感、音色、音高、语速、情绪底色和说话习惯，同一角色跨镜头不得换声。每个镜头的 videoPrompt 必须结合 dialogue 安排说话顺序、自然中文普通话发音、口型、呼吸、停顿、表情、动作反应和未说话者的倾听反应；不得翻译成英语或生成无意义拟声。旁白使用独立、稳定的中文旁白声线，且不得让画面人物无故张嘴。dialogue 的具体台词不得只存在于剧本文本而从视频制作提示中丢失。若镜头无对白，要明确通过何种动作和环境变化推进。";
+    "视频对白与声线规则：characters.voiceProfile 必须为每个可说话角色提供稳定中文声线，写清年龄感、音色、音高、语速、情绪底色和说话习惯，同一角色跨镜头不得换声。每个镜头的 videoPrompt 必须结合 dialogue 安排说话顺序、自然中文普通话发音、口型、呼吸、停顿、表情、动作反应和未说话者的倾听反应；不得翻译成英语或生成无意义拟声。旁白使用独立、稳定的中文旁白声线，且不得让画面人物无故张嘴。dialogue 的具体台词不得只存在于剧本文本而从视频制作提示中丢失。所有视频禁止生成字幕、对白文字、旁白文字、歌词、自动转写、文字条、气泡字和水印；对白只通过中文语音与自然口型呈现，画面内仅保留剧情明确要求且已在参考图中固定的界面文字或标识。若镜头无对白，要明确通过何种动作和环境变化推进。";
   const comicCharacterSheetRules =
     "人物资产规则：characters.imagePrompt 与 forms.imagePrompt 不受分镜 100 字限制，应提供 180–350 个中文字符的专业角色设定板说明。Base 人物必须是 16:9 横向 Character Design Sheet，同一人物同一比例排列正面、严格侧面、背面三视图，并包含头部/五官/发型近景、服装内外层结构、鞋靴、关键装备、武器、饰品、徽记和材质纹理的独立局部放大；写清年龄感、身高体型、肤色、发色瞳色、轮廓、主辅色和不可变化的身份锚点。不要生成三种不同人物、动作海报或复杂场景。特殊形态也使用三视图设定板，严格继承 Base 的脸、发型、体型和身份锚点，只展示该形态发生变化的服饰、伤势、装备或身体状态。";
   const comicStyleRules =
@@ -1665,6 +1695,14 @@ app.post("/agents/comic", async (request, reply) => {
               issues.push(
                 `镜头${index + 1}.frames[${frameIndex}].imagePrompt ${framePrompt.length}>100`,
               );
+            if (!["start", "middle", "end"].includes(String(frame.keyframe)))
+              issues.push(`镜头${index + 1}.frames[${frameIndex}].keyframe 无效`);
+            if (!String(frame.inherit || "").trim())
+              issues.push(`镜头${index + 1}.frames[${frameIndex}].inherit 为空`);
+            if (!String(frame.change || "").trim())
+              issues.push(`镜头${index + 1}.frames[${frameIndex}].change 为空`);
+            if (!String(frame.lock || "").trim())
+              issues.push(`镜头${index + 1}.frames[${frameIndex}].lock 为空`);
           });
         });
       }
@@ -1825,7 +1863,7 @@ app.post("/agents/comic", async (request, reply) => {
         ? [...checkpoint.shots]
         : [];
     const shotPlanSystem =
-      '你是漫剧镜头规划师。本阶段只确定镜头总数、实际对白草稿和轻量结构，禁止生成图片提示词、视频提示词和 frames。只返回合法 JSON：{"plannedShots":[{"number":1,"outlineIndex":1,"title":"镜头名","duration":5,"storyBeat":"承接上一镜并推动下一镜的剧情节拍","sceneId":"场景ID","characterIndexes":[1],"propIndexes":[1],"dialogue":"旁白或角色可直接配音的实际中文台词；无对白则明确写无对白","transition":"与上一镜的过渡方式","continuity":"需要继承的状态"}]}。镜头数由剧情节拍和真实播音时长决定，不得固定数量。按自然中文每秒约3.6个汉字计算台词时间，每段台词或说话人切换另留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；duration 必须向上取整且为3–8秒。若实际对白需要超过8秒，必须拆成多个连续镜头，不得加速朗读或删掉关键因果。必须覆盖全部大纲段落，形成完整起承转合，地点、时间、目标或情绪变化处安排必要过渡镜头。';
+      '你是漫剧镜头规划师。本阶段只确定镜头总数、实际对白草稿和轻量结构，禁止生成图片提示词、视频提示词和 frames。只返回合法 JSON：{"plannedShots":[{"number":1,"outlineIndex":1,"title":"镜头名","duration":5,"storyBeat":"承接上一镜并推动下一镜的剧情节拍","sceneId":"场景ID","characterIndexes":[1],"propIndexes":[1],"dialogue":"旁白或角色可直接配音的实际中文台词；无对白则明确写无对白","transition":"与上一镜的过渡方式","continuity":"需要继承的状态"}]}。镜头数由剧情节拍和真实播音时长决定，不得固定数量。按自然中文每秒约3.6个汉字计算台词时间，每段台词或说话人切换另留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；duration 必须向上取整且为3–8秒。若实际对白需要超过8秒，必须拆成多个连续镜头，不得加速朗读或删掉关键因果。必须覆盖全部大纲段落，形成完整起承转合，地点、时间、目标或情绪变化处安排必要过渡镜头。相邻镜头即使在同一场景，也必须有明确的信息、动作或情绪增量；禁止连续安排人物以相同站位、相同正面中景和相同构图重复说话。每连续 2–3 镜应有节奏明确的景别或观察角度变化，但变化必须服务剧情，不能破坏人物站位、视线和动作连续性。';
     const shotPlanText = `创作需求：\n${text}\n\n已校验剧情、人物、道具和场景基座：\n${JSON.stringify(foundation)}`;
     let shotPlan = checkpoint.shotPlan
       ? checkpoint.shotPlan
@@ -2000,7 +2038,7 @@ app.post("/agents/comic", async (request, reply) => {
       receivedBytes: streamReceivedBytes,
       totalShots,
     });
-    const shotsSystem = `你是漫剧分镜导演。严格按照本批轻量镜头规划逐镜扩写，只返回合法 JSON：{"shots":[完整镜头数组]}，返回数量和 number 必须与本批规划完全一致，不得合并、删除或新增镜头。每项必须包含 number、title、duration、storyBeat、action、sceneId、scene、scenePrompt、characterIndexes、characterForms、propIndexes、hasAnonymousCrowd、crowdPrompt、dialogue、frames、imagePrompt、videoPrompt、transition、continuity、referenceIndexes。imagePrompt 与每个 frame.imagePrompt 不得超过100字，scenePrompt 和 crowdPrompt 不得超过160字，videoPrompt 不得超过125字；角色和道具索引严格引用视觉基座。必须沿用镜头规划中的实际对白和已计算 duration，不得在扩写阶段添加放不下的新台词。自然中文按每秒约3.6个汉字计算，每段台词或说话人切换留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；3–5秒以一句短台词为主，6–8秒最多两句。scenePrompt 只能描述无人物环境、空间、UI界面和光影素材，禁止人物、人体、手部和角色剪影。frame.imagePrompt 才是完整剧情分镜：必须明确当前出镜人物、动作、景别、构图、场景状态和必要道具，禁止三视图、设定板、素材拼贴、重复人物和无关元素。视频提示词只保留主要动作、运镜、结束状态和必要对白，让连接分镜按既定人物身份与场景演进，禁止重新设计人物、换装、换场景或切换画风。${comicProductionRules}\n${comicContinuityRules}\n${comicTransitionRules}\n${comicDialogueRules}\n${comicStyleRules}`;
+    const shotsSystem = `你是漫剧分镜导演。严格按照本批轻量镜头规划逐镜扩写，只返回合法 JSON：{"shots":[完整镜头数组]}，返回数量和 number 必须与本批规划完全一致，不得合并、删除或新增镜头。每项必须包含 number、title、duration、storyBeat、action、sceneId、scene、scenePrompt、characterIndexes、characterForms、propIndexes、hasAnonymousCrowd、crowdPrompt、dialogue、frames、imagePrompt、videoPrompt、transition、continuity、referenceIndexes。frames 每项必须包含 title、imagePrompt、keyframe、inherit、change、lock。imagePrompt 与每个 frame.imagePrompt 不得超过100字，scenePrompt 和 crowdPrompt 不得超过160字，videoPrompt 不得超过125字；角色和道具索引严格引用视觉基座。必须沿用镜头规划中的实际对白和已计算 duration，不得在扩写阶段添加放不下的新台词。自然中文按每秒约3.6个汉字计算，每段台词或说话人切换留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；3–5秒以一句短台词为主，6–8秒最多两句。scenePrompt 只能描述无人物环境、空间、UI界面和光影素材，禁止人物、人体、手部和角色剪影。frame.imagePrompt 才是完整剧情分镜：必须明确当前出镜人物、动作、景别、构图、场景状态和必要道具，禁止三视图、设定板、素材拼贴、重复人物和无关元素。相邻分镜必须延续人物身份、站位、视线、动作结果和场景锚点，但不能只是复制上一张：change 必须写清本帧新增动作、表情、景别、机位或焦点变化。禁止连续三个镜头使用相同景别、相同正面机位、相同人物尺寸和相同中心构图；在特写、近景、中景、全景、过肩、侧面或高低机位之间按剧情目的变化，避免为了变化而越轴。视频提示词只保留主要动作、运镜、结束状态和必要对白，让连接分镜按既定人物身份与场景演进，禁止重新设计人物、换装、换场景或切换画风。${comicProductionRules}\n${comicContinuityRules}\n${comicTransitionRules}\n${comicDialogueRules}\n${comicStyleRules}`;
     const shotBatchSize = 4,
       batchCount = Math.ceil(totalShots / shotBatchSize);
     let resumeBatch = Math.min(
@@ -2164,7 +2202,7 @@ app.post("/agents/comic", async (request, reply) => {
       receivedBytes: streamReceivedBytes,
     });
     const auditSystem =
-      '你是漫剧连续性审校。只返回合法 JSON：{"valid":true,"issues":[],"repairs":[{"shotNumber":1,"storyBeat":"修正后剧情承接","transition":"修正后过渡","continuity":"修正后连续性"}]}。检查相邻镜头和分段边界的因果、人物形态、道具状态、地点时段、动作、情绪、对白与悬念是否承接。只给确有问题的镜头 repairs，不修改图片提示词，不重写整个方案。';
+      '你是漫剧连续性审校。只返回合法 JSON：{"valid":true,"issues":[],"repairs":[{"shotNumber":1,"storyBeat":"修正后剧情承接","action":"修正后动作","dialogue":"修正后完整对白","videoPrompt":"修正后视频提示","transition":"修正后过渡","continuity":"修正后连续性"}]}。检查相邻镜头和分段边界的因果、人物形态、道具状态、地点时段、动作、情绪、对白与悬念是否承接。只给确有问题的镜头 repairs，不修改图片提示词，不重写整个方案。修复必须包含真正出错的字段：对白事实错误必须返回 dialogue，动作错误必须返回 action，视频演出与对白不一致必须返回 videoPrompt；不得只修改旁边的描述字段来回避问题。修改 dialogue 时保持原 duration 可自然说完，修改 videoPrompt 时不超过125字并明确无字幕。';
     let audit = await readStage(
       "正在审校跨段过渡…",
       auditSystem,
@@ -2173,7 +2211,7 @@ app.post("/agents/comic", async (request, reply) => {
       94,
       97,
     );
-    for (let auditAttempt = 1; auditAttempt <= 2; auditAttempt++) {
+    for (let auditAttempt = 1; auditAttempt <= 4; auditAttempt++) {
       const repairs = Array.isArray(audit.repairs) ? audit.repairs : [],
         issues = Array.isArray(audit.issues) ? audit.issues : [];
       if (audit.valid === true && !issues.length) break;
@@ -2198,7 +2236,14 @@ app.post("/agents/comic", async (request, reply) => {
           shot = allShots[Math.max(0, Number(repair.shotNumber) - 1)];
         if (!shot || typeof shot !== "object") continue;
         const target = shot as Record<string, unknown>;
-        for (const field of ["storyBeat", "transition", "continuity"])
+        for (const field of [
+          "storyBeat",
+          "action",
+          "dialogue",
+          "videoPrompt",
+          "transition",
+          "continuity",
+        ])
           if (String(repair[field] || "").trim())
             target[field] = String(repair[field]);
       }
@@ -2410,6 +2455,16 @@ app.post("/agents/comic", async (request, reply) => {
                 imagePrompt: compactImagePrompt(
                   String(frame.imagePrompt || imagePrompt),
                 ),
+                keyframe: ["start", "middle", "end"].includes(String(frame.keyframe))
+                  ? String(frame.keyframe)
+                  : rawFrames.length === 1 || frameIndex === 0
+                    ? "start"
+                    : frameIndex === rawFrames.length - 1
+                      ? "end"
+                      : "middle",
+                inherit: String(frame.inherit || shot.continuity || "").slice(0, 240),
+                change: String(frame.change || frame.imagePrompt || action || "").slice(0, 240),
+                lock: String(frame.lock || "人物身份、服饰形态、关键道具、空间方向与统一画风保持不变").slice(0, 240),
               };
             })
             .filter((frame) => frame.imagePrompt),
@@ -4495,6 +4550,70 @@ function parsePromptAgentResult(raw: string): Record<string, unknown> {
       return JSON.parse(raw.slice(start, end + 1)) as Record<string, unknown>;
     throw new SyntaxError("Agent returned truncated JSON");
   }
+}
+
+const agnesPromptSections = [
+  "Style",
+  "Language",
+  "Continuity",
+  "Scene",
+  "Camera",
+  "Action",
+  "Effects",
+  "Audio",
+  "Dialogue",
+  "Voice",
+  "Background",
+  "Constraints",
+] as const;
+function normalizeAgnesPrompt(value: string) {
+  let normalized = value.replace(/\r\n?/g, "\n").trim();
+  for (const section of agnesPromptSections)
+    normalized = normalized.replace(
+      new RegExp(`^${section}\\s*:?[ \\t]*$`, "gim"),
+      `${section}:`,
+    );
+  for (const section of agnesPromptSections)
+    normalized = normalized.replace(
+      new RegExp(`^${section}:[ \\t]*\\n*`, "gim"),
+      `${section}:\n`,
+    );
+  return normalized.replace(/\n{3,}/g, "\n\n");
+}
+function validateAgnesPrompt(value: string) {
+  let previous = -1;
+  for (const section of agnesPromptSections) {
+    const matches = value.match(new RegExp(`^${section}:$`, "gm")) || [];
+    if (matches.length !== 1) return `Agnes prompt requires exactly one ${section}: section`;
+    const index = value.indexOf(`${section}:`);
+    if (index < 0) return `Agnes prompt missing ${section}:`;
+    if (index <= previous) return "Agnes prompt section order is invalid";
+    previous = index;
+  }
+  if (/follows? (?:the )?.{0,24}line of sight|camera sees|feels? closer|follows? the feeling/i.test(value))
+    return "Agnes prompt contains abstract camera language";
+  const required = [
+    "No subtitles.",
+    "No captions.",
+    "No dialogue text.",
+    "No narration text.",
+    "No automatic transcription.",
+    "No speech bubbles.",
+    "No text overlays.",
+    "No logos.",
+    "No watermarks.",
+    "Only animate the specified actions.",
+    "Do not redesign characters.",
+    "Do not change clothing.",
+    "Do not change hairstyle.",
+    "Do not change environment.",
+    "No extra movement.",
+    "No idle animation.",
+    "No unnecessary camera movement.",
+  ];
+  return required.find((rule) => !value.includes(rule))
+    ? "Agnes prompt is missing required constraints"
+    : "";
 }
 
 function compactImagePrompt(value: string, limit = 100) {
