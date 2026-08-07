@@ -1,0 +1,13 @@
+services:
+  tts:
+    build:
+      args:
+        ORT_PACKAGE: onnxruntime-openvino
+    environment:
+      ONNX_PROVIDER: OpenVINOExecutionProvider
+      KOKORO_OPENVINO_DEVICE: ${KOKORO_OPENVINO_DEVICE:-GPU}
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "44"
+      - "105"

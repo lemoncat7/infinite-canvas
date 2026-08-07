@@ -96,6 +96,31 @@ GENERATION_PUBLIC_BASE_URL=
 - Agnes Video 2.0：免费模型
 - Grok Imagine Video 1.5 Preview：付费模型，每次成功生成消耗 2 点
 
+## Kokoro TTS
+
+项目通过内部容器运行 Kokoro ONNX，并提供兼容 OpenAI Speech API 的接口。默认使用标准 ONNX Runtime CPU 后端。
+
+```bash
+docker compose up -d tts
+```
+
+Intel OpenVINO 实验后端使用独立 Compose 覆盖文件；它会映射 `/dev/dri`，初始化失败时自动回退 CPU：
+
+```bash
+docker compose -f compose.yaml -f compose.openvino.yaml up -d --build tts
+```
+
+```bash
+docker compose exec tts curl http://127.0.0.1:8880/health
+docker compose exec tts curl http://127.0.0.1:8880/v1/audio/voices
+docker compose exec -T tts curl http://127.0.0.1:8880/v1/audio/speech \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"kokoro","input":"轮到林夜时，整个练武场忽然安静了一瞬。","voice":"zf_xiaoxiao","response_format":"wav","speed":0.95}' \
+  --output /tmp/narration.wav
+```
+
+TTS 不映射宿主机端口，只允许 Compose 内部网络访问；API 使用 `http://tts:8880` 调用。服务支持 WAV、MP3、Opus、FLAC、AAC、PCM，以及按句生成的 PCM 流式响应。N100 实测默认并发为 2；更多请求继续排队，避免三个以上推理任务争抢内存带宽。
+
 付费任务入队时冻结点数，成功后扣除，失败时自动退回。
 
 ## 充值码
