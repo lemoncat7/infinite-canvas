@@ -20,6 +20,8 @@ export type TtsSynthesisInput = {
   text: string;
   voiceId: string;
   speed: number;
+  pitch?: number;
+  volume?: number;
   format: "wav" | "mp3" | "opus" | "flac" | "aac";
   language?: string;
   emotion?: string;

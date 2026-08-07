@@ -1,28 +1,4 @@
 services:
-  tts:
-    build:
-      context: ./tts
-      args:
-        ORT_PACKAGE: ${KOKORO_ORT_PACKAGE:-onnxruntime}
-    image: infinite-canvas-kokoro-onnx:local
-    container_name: infinite-canvas-tts
-    restart: unless-stopped
-    environment:
-      ONNX_PROVIDER: ${KOKORO_ONNX_PROVIDER:-CPUExecutionProvider}
-      KOKORO_OPENVINO_DEVICE: ${KOKORO_OPENVINO_DEVICE:-CPU}
-      KOKORO_DEFAULT_LANGUAGE: ${KOKORO_DEFAULT_LANGUAGE:-cmn}
-      KOKORO_MAX_CONCURRENCY: ${KOKORO_MAX_CONCURRENCY:-2}
-    expose:
-      - "8880"
-    volumes:
-      - kokoro-models:/models
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "http://127.0.0.1:8880/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 20
-      start_period: 120s
-
   web:
     build: .
     container_name: infinite-canvas-web
@@ -48,7 +24,7 @@ services:
       ADMIN_API_KEY: ${ADMIN_API_KEY:-}
       IMAGE_GENERATION_PROVIDER: ${IMAGE_GENERATION_PROVIDER:-model-image}
       VIDEO_GENERATION_PROVIDER: ${VIDEO_GENERATION_PROVIDER:-model-video}
-      TTS_BASE_URL: ${TTS_BASE_URL:-http://tts:8880}
+      TTS_BASE_URL: ${TTS_BASE_URL:-http://easyvoice:3000}
       OPENAI_IMAGE_BASE_URL: ${OPENAI_IMAGE_BASE_URL:-}
       OPENAI_IMAGE_API_KEY: ${OPENAI_IMAGE_API_KEY:-}
       OPENAI_IMAGE_TIMEOUT_MS: ${OPENAI_IMAGE_TIMEOUT_MS:-180000}
@@ -100,7 +76,13 @@ services:
     volumes:
       - canvas-data:/data
       - ${VIDEO_EXPORT_HOST_DIR:-../video}:/exports
+    networks:
+      - default
+      - appnet
 
 volumes:
   canvas-data:
-  kokoro-models:
+
+networks:
+  appnet:
+    external: true
