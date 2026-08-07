@@ -24,6 +24,7 @@ import {
 import { OpenAiImageProvider } from "./providers/openai-image.js";
 import { OpenAiVideoProvider } from "./providers/openai-video.js";
 import { SdCppImageProvider } from "./providers/sdcpp-image.js";
+import { getTtsProvider, listTtsProviders } from "./providers/tts.js";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 import sharp from "sharp";
 import { execFile } from "node:child_process";
@@ -405,6 +406,96 @@ app.get("/generation/capabilities", async () => {
       },
     },
   };
+});
+
+app.get("/tts/providers", async (request, reply) => {
+  const user = requireUser(request, reply);
+  if (!user) return;
+  return Promise.all(listTtsProviders().map((provider) => provider.capabilities()));
+});
+
+app.get("/tts/providers/:providerId/voices", async (request, reply) => {
+  const user = requireUser(request, reply);
+  if (!user) return;
+  const { providerId } = request.params as { providerId: string };
+  const provider = getTtsProvider(providerId);
+  if (!provider) return reply.code(404).send({ error: "语音服务不存在" });
+  try {
+    return { provider: provider.id, voices: await provider.voices() };
+  } catch (error) {
+    return reply.code(503).send({
+      error: error instanceof Error ? error.message : "无法读取语音列表",
+    });
+  }
+});
+
+app.post("/tts/synthesize", async (request, reply) => {
+  const user = requireUser(request, reply);
+  if (!user) return;
+  const userId = String(user.id);
+  const input = request.body as {
+    projectId?: string;
+    providerId?: string;
+    text?: string;
+    voiceId?: string;
+    speed?: number;
+    format?: "wav" | "mp3" | "opus" | "flac" | "aac";
+    language?: string;
+    emotion?: string;
+    preview?: boolean;
+  };
+  const projectId = String(input.projectId || defaultProjectId);
+  if (!ownsProject(projectId, userId))
+    return reply.code(404).send({ error: "Project not found" });
+  const text = String(input.text || "").trim();
+  if (!text) return reply.code(400).send({ error: "请先填写需要生成的文本" });
+  if (text.length > 4000)
+    return reply.code(400).send({ error: "单个语音文本不能超过 4000 字" });
+  const provider = getTtsProvider(String(input.providerId || "kokoro-local"));
+  if (!provider) return reply.code(404).send({ error: "语音服务不存在" });
+  const speed = Number(input.speed ?? 1);
+  if (!Number.isFinite(speed) || speed < 0.5 || speed > 2)
+    return reply.code(400).send({ error: "语速必须在 0.5 到 2.0 之间" });
+  const format = input.format || "wav";
+  try {
+    const result = await provider.synthesize({
+      text,
+      voiceId: String(input.voiceId || "zf_xiaoxiao"),
+      speed,
+      format,
+      language: String(input.language || "zh-CN"),
+      emotion: String(input.emotion || ""),
+    });
+    if (input.preview)
+      return reply
+        .type(result.mimeType)
+        .header("cache-control", "no-store")
+        .send(result.bytes);
+    if (result.bytes.length > 100 * 1024 * 1024)
+      return reply.code(413).send({ error: "生成音频超过 100MB" });
+    const assetId = randomUUID(), storageName = `${assetId}.bin`, now = new Date().toISOString();
+    const extension = format === "aac" ? "aac" : format;
+    const name = `AI 语音-${new Date().toLocaleString("zh-CN").replace(/[/:]/g, "-")}.${extension}`;
+    writeFileSync(`${uploadDirectory}/${storageName}`, result.bytes);
+    database.run(
+      "INSERT INTO assets (id, project_id, user_id, name, mime_type, size, storage_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [assetId, projectId, userId, name, result.mimeType, result.bytes.length, storageName, now],
+    );
+    persist();
+    return {
+      provider: provider.id,
+      voiceId: String(input.voiceId || "zf_xiaoxiao"),
+      duration: result.duration,
+      mimeType: result.mimeType,
+      assetId,
+      assetUrl: namedAssetUrl(assetId, name),
+    };
+  } catch (error) {
+    request.log.error({ error, provider: provider.id }, "tts synthesis failed");
+    return reply.code(502).send({
+      error: error instanceof Error ? error.message : "语音生成失败",
+    });
+  }
 });
 app.post("/agents/prompt", async (request, reply) => {
   const user = requireUser(request, reply);
