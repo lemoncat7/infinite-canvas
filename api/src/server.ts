@@ -1939,6 +1939,13 @@ app.post("/agents/comic", async (request, reply) => {
             issues.push(`镜头${index + 1}.continuity 为空`);
           if (!String(item.storyBeat || "").trim())
             issues.push(`镜头${index + 1}.storyBeat 为空`);
+          if (typeof item.hasAnonymousCrowd !== "boolean")
+            issues.push(`镜头${index + 1}.hasAnonymousCrowd 必须为布尔值`);
+          const crowdPrompt = String(item.crowdPrompt || "").trim();
+          if (item.hasAnonymousCrowd === true && !crowdPrompt)
+            issues.push(`镜头${index + 1}.crowdPrompt 为空`);
+          if (item.hasAnonymousCrowd === false && crowdPrompt)
+            issues.push(`镜头${index + 1}无匿名人群但 crowdPrompt 非空`);
           const frames = Array.isArray(item.frames) ? item.frames : [];
           if (!frames.length) issues.push(`镜头${index + 1}.frames 为空`);
           frames.forEach((frameRaw, frameIndex) => {
@@ -2074,7 +2081,7 @@ app.post("/agents/comic", async (request, reply) => {
       phase: "人物与道具设定校验通过",
       receivedBytes: streamReceivedBytes,
     });
-    const sceneSystem = `你是漫剧场景美术。只返回合法 JSON：{"scenes":[{"sceneId":"稳定地点与时段ID","name":"场景名","description":"空间结构与剧情用途","imagePrompt":"不超过160字的无人物场景设定图提示词"}]}。合并同一地点与时段，状态变化不得重复创建场景。每条 imagePrompt 必须明确写出“无人物场景基准图，禁止出现任何人物、人体、手部、角色剪影或人形主体”，只生成可供后续分镜合成使用的空环境、空间结构、UI界面、道具陈列与光影素材。即使剧情中该场景原本有人，场景基准图也必须保持无人；人物只能在后续 frames 分镜合成阶段加入。每条 imagePrompt 不得超过160字，并继承统一风格。`;
+    const sceneSystem = `你是漫剧场景美术。只返回合法 JSON：{"scenes":[{"sceneId":"稳定地点与时段ID","name":"场景名","description":"空间结构与剧情用途","imagePrompt":"不超过160字的无人物场景设定图提示词"}]}。合并同一地点与时段，状态变化不得重复创建场景。每条 imagePrompt 必须明确写出“无人物场景基准图，禁止出现任何人物、人体、手部、角色剪影或人形主体”，只生成可供后续分镜合成使用的空环境、空间结构、UI界面、剧情明确要求的固定物体与光影素材。即使剧情中该场景原本有人，场景基准图也必须保持无人；人物只能在后续 frames 分镜合成阶段加入。未明确要求时禁止动物、车辆特写、可读文字、字幕、标牌、Logo 和水印，不能因为“无人知道、不为人知、人尽皆知”等修饰性语句生成任何人物或人群。每条 imagePrompt 不得超过160字，并继承统一风格。`;
     const sceneText = `剧情与视觉基座：\n${JSON.stringify({ ...story, ...assets })}`;
     let sceneBible = checkpoint.sceneBible
       ? checkpoint.sceneBible
@@ -2298,7 +2305,7 @@ app.post("/agents/comic", async (request, reply) => {
       receivedBytes: streamReceivedBytes,
       totalShots,
     });
-    const shotsSystem = `你是漫剧分镜导演。严格按照本批轻量镜头规划逐镜扩写，只返回合法 JSON：{"shots":[完整镜头数组]}，返回数量和 number 必须与本批规划完全一致，不得合并、删除或新增镜头。每项必须包含 number、title、duration、storyBeat、action、sceneId、scene、scenePrompt、characterIndexes、characterForms、propIndexes、hasAnonymousCrowd、crowdPrompt、dialogue、frames、imagePrompt、videoPrompt、transition、continuity、referenceIndexes。frames 每项必须包含 title、imagePrompt、keyframe、inherit、change、lock、characterIndexes、characterForms、propIndexes；这些帧级索引只列当前画面实际可见的人物、形态和关键道具，不得把下一帧才出现的素材提前列入上一帧。imagePrompt 与每个 frame.imagePrompt 不得超过100字，scenePrompt 和 crowdPrompt 不得超过160字，videoPrompt 不得超过125字；角色和道具索引严格引用视觉基座。必须沿用镜头规划中的实际对白和已计算 duration，不得在扩写阶段添加放不下的新台词。自然中文按每秒约3.6个汉字计算，每段台词或说话人切换留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；3–5秒以一句短台词为主，6–8秒最多两句。scenePrompt 只能描述无人物环境、空间、UI界面和光影素材，禁止人物、人体、手部和角色剪影。frame.imagePrompt 才是完整剧情分镜：必须明确当前出镜人物、动作、景别、构图、场景状态和必要道具，且与该帧 characterIndexes、characterForms、propIndexes 一一对应；禁止三视图、设定板、素材拼贴、重复人物和无关元素。相邻分镜必须延续人物身份、站位、视线、动作结果和场景锚点，但不能只是复制上一张：change 必须写清本帧新增动作、表情、景别、机位或焦点变化。禁止连续三个镜头使用相同景别、相同正面机位、相同人物尺寸和相同中心构图；在特写、近景、中景、全景、过肩、侧面或高低机位之间按剧情目的变化，避免为了变化而越轴。视频提示词只保留主要动作、运镜、结束状态和必要对白，让连接分镜按既定人物身份与场景演进，禁止重新设计人物、换装、换场景或切换画风。${comicProductionRules}\n${comicContinuityRules}\n${comicTransitionRules}\n${comicDialogueRules}\n${comicStyleRules}`;
+    const shotsSystem = `你是漫剧分镜导演。严格按照本批轻量镜头规划逐镜扩写，只返回合法 JSON：{"shots":[完整镜头数组]}，返回数量和 number 必须与本批规划完全一致，不得合并、删除或新增镜头。每项必须包含 number、title、duration、storyBeat、action、sceneId、scene、scenePrompt、characterIndexes、characterForms、propIndexes、hasAnonymousCrowd、crowdPrompt、dialogue、frames、imagePrompt、videoPrompt、transition、continuity、referenceIndexes。frames 每项必须包含 title、imagePrompt、keyframe、inherit、change、lock、characterIndexes、characterForms、propIndexes；这些帧级索引只列当前画面实际可见的人物、形态和关键道具，不得把下一帧才出现的素材提前列入上一帧。imagePrompt 与每个 frame.imagePrompt 不得超过100字，scenePrompt 和 crowdPrompt 不得超过160字，videoPrompt 不得超过125字；角色和道具索引严格引用视觉基座。必须沿用镜头规划中的实际对白和已计算 duration，不得在扩写阶段添加放不下的新台词。自然中文按每秒约3.6个汉字计算，每段台词或说话人切换留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；3–5秒以一句短台词为主，6–8秒最多两句。scenePrompt 只能描述无人物环境、空间、UI界面和光影素材，禁止人物、人体、手部和角色剪影。frame.imagePrompt 才是完整剧情分镜：必须明确当前出镜人物、动作、景别、构图、场景状态和必要道具，且与该帧 characterIndexes、characterForms、propIndexes 一一对应；禁止三视图、设定板、素材拼贴、重复人物和无关元素。若本帧参考上一分镜或其他图片，inherit 必须列出保持不变的可见项，change 只能列本帧相对参考图的主要变化，lock 必须列出不得改变的人物数量与身份、服饰发型、道具、场景结构、光线和空间关系。hasAnonymousCrowd 只能根据画面是否真的需要匿名人物取值；“无人知道、不为人知、人尽皆知、鲜为人知”等修饰词绝不表示有人群。仅当画面明确出现路人、群众或围观者时才设 true 并填写 crowdPrompt，否则必须为 false、crowdPrompt 为空，并禁止模型自行增加背景人物。未明确要求时禁止动物或车辆特写、可读文字、字幕、标牌、Logo、水印和无关装饰。相邻分镜必须延续人物身份、站位、视线、动作结果和场景锚点，但不能只是复制上一张：change 必须写清本帧新增动作、表情、景别、机位或焦点变化。禁止连续三个镜头使用相同景别、相同正面机位、相同人物尺寸和相同中心构图；在特写、近景、中景、全景、过肩、侧面或高低机位之间按剧情目的变化，避免为了变化而越轴。视频提示词只保留主要动作、运镜、结束状态和必要对白，让连接分镜按既定人物身份与场景演进，禁止重新设计人物、换装、换场景或切换画风。${comicProductionRules}\n${comicContinuityRules}\n${comicTransitionRules}\n${comicDialogueRules}\n${comicStyleRules}`;
     const shotBatchSize = 4,
       batchCount = Math.ceil(totalShots / shotBatchSize);
     let resumeBatch = Math.min(
