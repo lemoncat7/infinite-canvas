@@ -1508,10 +1508,13 @@ app.post("/agents/comic", async (request, reply) => {
     completedBatches?: number;
     updatedAt?: string;
   };
+  const comicPipelineVersion = "adaptive-frames-v1";
   const checkpointFingerprint = createHash("sha256")
     // Resolved visual inputs contain expiring signed URLs. Fingerprinting them
     // makes the same request look new on every retry and discards checkpoints.
-    .update(JSON.stringify({ text, model, visualSources }))
+    .update(
+      JSON.stringify({ comicPipelineVersion, text, model, visualSources }),
+    )
     .digest("hex");
   let checkpoint: ComicGenerationCheckpoint = { fingerprint: checkpointFingerprint };
   try {
@@ -1812,7 +1815,7 @@ app.post("/agents/comic", async (request, reply) => {
               lastStageProgress = progress;
               emit({
                 type: "progress",
-                progress,
+                progress: streamProgress,
                 phase: stage,
                 receivedBytes: streamReceivedBytes,
               });
@@ -1876,7 +1879,7 @@ app.post("/agents/comic", async (request, reply) => {
       streamProgress = Math.max(streamProgress, completedProgress);
       emit({
         type: "progress",
-        progress: completedProgress,
+        progress: streamProgress,
         phase: `${stage}已完成`,
         receivedBytes: streamReceivedBytes,
       });
@@ -2098,7 +2101,7 @@ app.post("/agents/comic", async (request, reply) => {
       sceneInitialPromise = checkpoint.sceneBible
         ? Promise.resolve(checkpoint.sceneBible)
         : readStage(
-            "正在生成场景设定…",
+            "正在并行生成人物、道具与场景…",
             sceneSystem,
             sceneText,
             2600,
@@ -2108,7 +2111,7 @@ app.post("/agents/comic", async (request, reply) => {
     let assets = checkpoint.assets
       ? checkpoint.assets
       : await readStage(
-          "正在生成人物与道具设定…",
+          "正在并行生成人物、道具与场景…",
           assetSystem,
           assetText,
           3800,
@@ -2178,8 +2181,9 @@ app.post("/agents/comic", async (request, reply) => {
       allShots: unknown[] = checkpoint.shotPlan && Array.isArray(checkpoint.shots)
         ? [...checkpoint.shots]
         : [];
-    const shotPlanSystem =
+    let shotPlanSystem =
       '你是漫剧镜头规划师。本阶段只确定镜头总数、实际对白草稿和连续性状态，禁止生成图片提示词、视频提示词和 frames。只返回合法 JSON：{"plannedShots":[{"number":1,"outlineIndex":1,"title":"镜头名","duration":5,"storyBeat":"承接上一镜并推动下一镜的剧情节拍","sceneId":"场景ID","characterIndexes":[1],"propIndexes":[1],"dialogue":"旁白或角色可直接配音的实际中文台词；无对白则明确写无对白","transition":"与上一镜的过渡方式","continuity":"需要继承的状态","entryState":"开镜时人物站位、姿态、视线、服饰、道具、环境与光线","exitState":"镜头结束时上述状态的准确结果","transitionAnchor":"连接前后镜头的动作、声音、视线、物体或空间锚点","cameraAxis":"人物左右关系、180度轴线和动作方向"}]}。entryState、exitState、transitionAnchor、cameraAxis 各自必须简洁且不超过80个中文字符；只写可验证状态，不重复剧情、对白或资产外观描述。镜头数由剧情节拍和真实播音时长决定，不得固定数量。按自然中文每秒约3.6个汉字计算台词时间，每段台词或说话人切换另留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；duration 必须向上取整且为3–8秒。若实际对白需要超过8秒，必须拆成多个连续镜头，不得加速朗读或删掉关键因果。必须覆盖全部大纲段落，形成完整起承转合。相邻镜头的 entryState 必须准确承接上一镜 exitState；只有明确转场才允许重置，并由 transitionAnchor 说明如何完成。sceneId 变化代表真实地点或时段切换，切换后的第一镜必须是建立镜头或由声音先行、动作匹配、道具特写等明确桥接进入，不能让角色和背景无解释瞬移；必要时新增一个短过渡镜头。sceneId 不变时必须锁定同一空间布局、建筑位置、主光方向和人物左右关系，只允许按剧情改变景别、机位、动作和局部状态。相邻镜头即使在同一场景，也必须有明确的信息、动作或情绪增量；禁止连续安排人物以相同站位、相同正面中景和相同构图重复说话。每连续 2–3 镜应有节奏明确的景别或观察角度变化，但变化必须服务剧情，不能破坏人物站位、视线、180度轴线和动作方向连续性。';
+    shotPlanSystem += ' 每个 plannedShot 必须增加 frameCount 整数：静态对白、单一反应、旁白空镜为1；简单动作或一次机位变化为2；明显走位、道具状态变化或动作转折为3；只有无法用3帧表达的关键复杂动作才为4。不得机械地让每镜都使用相同帧数。每个镜头只允许一个核心事件；复杂过程必须拆成“动作开始→动作变化→动作结果”等多个相邻简单镜头。相邻视频必须至少通过动作结果、视线、声音、道具状态或同场景不同角度中的一项明确承接。';
     const shotPlanText = `创作需求：\n${text}\n\n已校验剧情、人物、道具和场景基座：\n${JSON.stringify(foundation)}`;
     let shotPlan = checkpoint.shotPlan
       ? checkpoint.shotPlan
@@ -2250,6 +2254,22 @@ app.post("/agents/comic", async (request, reply) => {
         item.exitState = String(item.exitState || item.storyBeat || "").trim();
         item.transitionAnchor = String(item.transitionAnchor || item.transition || "").trim();
         item.cameraAxis = String(item.cameraAxis || "保持人物左右关系、180度轴线和动作方向连续").trim();
+        const requestedFrameCount = Number(item.frameCount),
+          complexityText = `${item.storyBeat} ${item.transition} ${item.entryState} ${item.exitState}`,
+          inferredFrameCount = /变身|爆发|交锋|追逐|坠落|跃起|挥|斩|击|冲|破裂|崩塌|状态变化/.test(complexityText)
+            ? 3
+            : /对白|旁白|凝视|沉默|特写|空镜|反应/.test(complexityText)
+              ? 1
+              : 2;
+        item.frameCount = Math.max(
+          1,
+          Math.min(
+            4,
+            Number.isInteger(requestedFrameCount)
+              ? requestedFrameCount
+              : inferredFrameCount,
+          ),
+        );
         if (!Array.isArray(item.characterIndexes)) item.characterIndexes = [];
         if (!Array.isArray(item.propIndexes)) item.propIndexes = [];
         return item;
@@ -2277,6 +2297,7 @@ app.post("/agents/comic", async (request, reply) => {
         const duration = Number(item.duration),dialogue=String(item.dialogue||"").trim(),speech=estimateComicSpeechDuration(dialogue);
         if(!dialogue)issues.push(`镜头${index+1}.dialogue 为空`);
         if(!Number.isInteger(duration)||duration<3||duration>8)issues.push(`镜头${index+1}.duration 必须为3–8秒整数`);
+        const frameCount=Number(item.frameCount);if(!Number.isInteger(frameCount)||frameCount<1||frameCount>4)issues.push(`镜头${index+1}.frameCount 必须为1–4整数`);
         if(speech.minimumSeconds>8)issues.push(`镜头${index+1}对白预计需${speech.minimumSeconds}秒，必须拆镜`);
         else if(duration<speech.minimumSeconds)issues.push(`镜头${index+1}时长${duration}秒不足，至少需${speech.minimumSeconds}秒`);
         if (!String(item.transition || "").trim())
@@ -2381,6 +2402,7 @@ app.post("/agents/comic", async (request, reply) => {
       totalShots,
     });
     const shotsSystem = `你是漫剧分镜导演。严格按照本批轻量镜头规划逐镜扩写，只返回合法 JSON：{"shots":[完整镜头数组]}，返回数量和 number 必须与本批规划完全一致，不得合并、删除或新增镜头。每项必须包含 number、title、duration、storyBeat、action、sceneId、scene、scenePrompt、characterIndexes、characterForms、propIndexes、hasAnonymousCrowd、crowdPrompt、dialogue、frames、imagePrompt、videoPrompt、transition、continuity、referenceIndexes。frames 每项必须包含 title、imagePrompt、keyframe、inherit、change、lock、characterIndexes、characterForms、propIndexes；这些帧级索引只列当前画面实际可见的人物、形态和关键道具，不得把下一帧才出现的素材提前列入上一帧。必须把镜头规划的 entryState 写入首帧 inherit，把 exitState 落实到末帧 change/lock，并严格遵守 transitionAnchor 与 cameraAxis；不得在扩写时重新解释或丢失这些连续性状态。imagePrompt 与每个 frame.imagePrompt 不得超过100字，scenePrompt 和 crowdPrompt 不得超过160字，videoPrompt 不得超过125字；角色和道具索引严格引用视觉基座。必须沿用镜头规划中的实际对白和已计算 duration，不得在扩写阶段添加放不下的新台词。自然中文按每秒约3.6个汉字计算，每段台词或说话人切换留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；3–5秒以一句短台词为主，6–8秒最多两句。scenePrompt 只能描述无人物环境、空间、UI界面和光影素材，禁止人物、人体、手部和角色剪影。frame.imagePrompt 才是完整剧情分镜：必须明确当前出镜人物、动作、景别、构图、场景状态和必要道具，且与该帧 characterIndexes、characterForms、propIndexes 一一对应；禁止三视图、设定板、素材拼贴、重复人物和无关元素。若本帧参考上一分镜或其他图片，inherit 必须列出保持不变的可见项，change 只能列本帧相对参考图的主要变化，lock 必须列出不得改变的人物数量与身份、服饰发型、道具、场景结构、光线和空间关系。hasAnonymousCrowd 只能根据画面是否真的需要匿名人物取值；“无人知道、不为人知、人尽皆知、鲜为人知”等修饰词绝不表示有人群。仅当画面明确出现路人、群众或围观者时才设 true 并填写 crowdPrompt，否则必须为 false、crowdPrompt 为空，并禁止模型自行增加背景人物。未明确要求时禁止动物或车辆特写、可读文字、字幕、标牌、Logo、水印和无关装饰。相邻分镜必须延续人物身份、站位、视线、动作结果和场景锚点，但不能只是复制上一张：change 必须写清本帧新增动作、表情、景别、机位或焦点变化。禁止连续三个镜头使用相同景别、相同正面机位、相同人物尺寸和相同中心构图；在特写、近景、中景、全景、过肩、侧面或高低机位之间按剧情目的变化，避免为了变化而越轴。视频提示词只保留主要动作、运镜、结束状态和必要对白，让连接分镜按既定人物身份与场景演进，禁止重新设计人物、换装、换场景或切换画风。${comicProductionRules}\n${comicContinuityRules}\n${comicTransitionRules}\n${comicDialogueRules}\n${comicStyleRules}`;
+    const adaptiveShotsSystem = `${shotsSystem}\n帧数与视频简化硬规则：每个镜头返回的 frames 数量必须严格等于镜头规划的 frameCount，不得自行统一成3帧或补帧。frameCount=1 时只给代表核心事件的单帧；frameCount=2 时给动作开始与结果；frameCount=3 时给开始、变化、结果；frameCount=4 仅用于规划明确指定的关键复杂动作。每个 videoPrompt 只执行一个核心事件，只保留完成该事件所需的一种主要运镜、必要动作和最多一个主要说话者；不得同时塞入多人对白、大量动作、复杂运镜和大型特效。相邻镜头必须让上一镜 exitState 成为下一镜 entryState，并通过动作、视线、声音、道具或同场景不同角度自然连接；换角度时保持人物左右关系、视线、动作方向和180度轴线。`;
     const shotBatchSize = 6,
       batchCount = Math.ceil(totalShots / shotBatchSize);
     let resumeBatch = Math.min(
@@ -2430,7 +2452,7 @@ app.post("/agents/comic", async (request, reply) => {
           : batchText;
       let shotPart = await readStage(
         `正在生成镜头 ${firstNumber}–${lastNumber}/${totalShots}…`,
-        shotsSystem,
+        adaptiveShotsSystem,
         batchContent,
         6200,
         batchStart,
@@ -2593,7 +2615,8 @@ app.post("/agents/comic", async (request, reply) => {
             issues.push(
               `第 ${index + 1} 项镜头编号不匹配，预期 ${planItem.number}`,
             );
-          const rawShot=returned[index]&&typeof returned[index]==="object"?returned[index] as Record<string,unknown>:null,frames=rawShot&&Array.isArray(rawShot.frames)?rawShot.frames:[];
+          const rawShot=returned[index]&&typeof returned[index]==="object"?returned[index] as Record<string,unknown>:null,frames=rawShot&&Array.isArray(rawShot.frames)?rawShot.frames:[],expectedFrameCount=Math.max(1,Math.min(4,Number((planItem as Record<string,unknown>).frameCount)||1));
+          if(frames.length!==expectedFrameCount)issues.push(`镜头 ${planItem.number} 返回 ${frames.length} 张分镜，规划要求 ${expectedFrameCount} 张`);
           frames.forEach((rawFrame,frameIndex)=>{const frame=rawFrame&&typeof rawFrame==="object"?rawFrame as Record<string,unknown>:null,label=`镜头 ${planItem.number} 分镜 ${frameIndex+1}`;if(!frame){issues.push(`${label} 数据无效`);return}for(const field of ["characterIndexes","characterForms","propIndexes"] as const)if(!Array.isArray(frame[field]))issues.push(`${label} 缺少 ${field}`);const evidence=`${String(frame.title||"")}${String(frame.imagePrompt||"")}${String(frame.inherit||"")}${String(frame.change||"")}`,characterIndexes=Array.isArray(frame.characterIndexes)?frame.characterIndexes.map(Number):[],propIndexes=Array.isArray(frame.propIndexes)?frame.propIndexes.map(Number):[];characterIndexes.forEach(characterIndex=>{const raw=foundationCharacters[characterIndex-1],name=raw&&typeof raw==="object"?String((raw as Record<string,unknown>).name||""):"";if(name&&!evidence.includes(name))issues.push(`${label} 连接角色「${name}」但帧描述未说明该角色`)});propIndexes.forEach(propIndex=>{const raw=foundationProps[propIndex-1],name=raw&&typeof raw==="object"?String((raw as Record<string,unknown>).name||""):"";if(name&&!evidence.includes(name))issues.push(`${label} 连接道具「${name}」但帧描述未说明该道具`)});foundationCharacters.forEach((raw,characterIndex)=>{const name=raw&&typeof raw==="object"?String((raw as Record<string,unknown>).name||""):"";if(name&&evidence.includes(name)&&!characterIndexes.includes(characterIndex+1))issues.push(`${label} 描述出现角色「${name}」但 characterIndexes 未连接`)});foundationProps.forEach((raw,propIndex)=>{const name=raw&&typeof raw==="object"?String((raw as Record<string,unknown>).name||""):"";if(name&&evidence.includes(name)&&!propIndexes.includes(propIndex+1))issues.push(`${label} 描述出现道具「${name}」但 propIndexes 未连接`)})});
         });
         return issues;
@@ -2628,7 +2651,7 @@ app.post("/agents/comic", async (request, reply) => {
           : expected;
         const repaired = await readStage(
           `镜头 ${[...invalidNumbers].join("、") || `${firstNumber}–${lastNumber}`} 定向重写中…`,
-          `${shotsSystem} 本次只返回指定问题镜头，shots 数组不得包含其他编号。`,
+          `${adaptiveShotsSystem} 本次只返回指定问题镜头，shots 数组不得包含其他编号。`,
           `只修复下列问题，不得改变其他已通过镜头。\n${issues.join("\n")}\n\n只需返回的镜头规划：\n${JSON.stringify(repairExpected)}\n\n当前完整批次：\n${JSON.stringify(shotPart)}\n\n上一批末镜：\n${JSON.stringify(previousTail)}`,
           Math.min(6200, 1000 + repairExpected.length * 1100),
           Math.max(batchStart, batchEnd - 1),
@@ -2756,6 +2779,12 @@ app.post("/agents/comic", async (request, reply) => {
         ])
           if (String(repair[field] || "").trim())
             target[field] = String(repair[field]);
+        for (const field of [
+          "characterIndexes",
+          "characterForms",
+          "propIndexes",
+        ])
+          if (Array.isArray(repair[field])) target[field] = repair[field];
         if (Array.isArray(repair.frames) && repair.frames.length)
           target.frames = repair.frames;
       }
