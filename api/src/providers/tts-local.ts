@@ -3,6 +3,7 @@ import type {
   TtsProvider,
   TtsSynthesisInput,
   TtsSynthesisResult,
+  TtsStreamResult,
   TtsVoice,
 } from "./tts-types.js";
 
@@ -59,7 +60,7 @@ export class LocalEasyVoiceTtsProvider implements TtsProvider {
     return voices;
   }
 
-  async synthesize(input: TtsSynthesisInput): Promise<TtsSynthesisResult> {
+  private async requestSpeech(input: TtsSynthesisInput) {
     const voiceId = legacyVoiceMap[input.voiceId] || input.voiceId;
     const emotionRate = ({ 冷静: 0.95, 温柔: 0.92, 紧张: 1.08, 激动: 1.12, 沉重: 0.88 } as Record<string, number>)[input.emotion || ""] || 1;
     const speed = Math.max(0.5, Math.min(2, input.speed * emotionRate));
@@ -83,6 +84,17 @@ export class LocalEasyVoiceTtsProvider implements TtsProvider {
       const detail = await response.text().catch(() => "");
       throw new Error(detail || `EasyVoice 语音生成失败（${response.status}）`);
     }
+    return response;
+  }
+
+  async synthesizeStream(input: TtsSynthesisInput): Promise<TtsStreamResult> {
+    const response = await this.requestSpeech(input);
+    if (!response.body) throw new Error("EasyVoice 未返回音频流");
+    return { stream: response.body, mimeType: "audio/mpeg" };
+  }
+
+  async synthesize(input: TtsSynthesisInput): Promise<TtsSynthesisResult> {
+    const response = await this.requestSpeech(input);
     const bytes = Buffer.from(await response.arrayBuffer());
     if (!bytes.length) throw new Error("EasyVoice 返回了空音频");
     return { bytes, mimeType: "audio/mpeg", duration: 0 };

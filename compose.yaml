@@ -1,4 +1,47 @@
 services:
+  gpt-sovits:
+    build:
+      context: ./services/gpt-sovits
+      args:
+        HTTP_PROXY: ${GPT_SOVITS_BUILD_PROXY:-http://192.168.2.9:7893}
+        HTTPS_PROXY: ${GPT_SOVITS_BUILD_PROXY:-http://192.168.2.9:7893}
+    container_name: gpt-sovits
+    entrypoint: ["/usr/local/bin/start-gpt-sovits"]
+    restart: unless-stopped
+    mem_limit: 6g
+    cpus: 3.0
+    shm_size: 2g
+    environment:
+      HTTP_PROXY: ${GPT_SOVITS_RUNTIME_PROXY:-http://192.168.2.9:7893}
+      HTTPS_PROXY: ${GPT_SOVITS_RUNTIME_PROXY:-http://192.168.2.9:7893}
+      NO_PROXY: localhost,127.0.0.1,api,web,easyvoice,gpt-sovits
+      is_half: "false"
+      version: v2
+    volumes:
+      - gpt-sovits-models:/opt/GPT-SoVITS/GPT_SoVITS/pretrained_models
+      - gpt-sovits-references:/models/references
+    networks:
+      - appnet
+
+  cosyvoice2:
+    build:
+      context: ./services/cosyvoice2
+      args:
+        HTTP_PROXY: ${COSYVOICE_BUILD_PROXY:-http://192.168.2.9:7893}
+        HTTPS_PROXY: ${COSYVOICE_BUILD_PROXY:-http://192.168.2.9:7893}
+    container_name: cosyvoice2
+    restart: unless-stopped
+    mem_limit: 6g
+    cpus: 3.0
+    environment:
+      HTTP_PROXY: ${COSYVOICE_RUNTIME_PROXY:-http://192.168.2.9:7893}
+      HTTPS_PROXY: ${COSYVOICE_RUNTIME_PROXY:-http://192.168.2.9:7893}
+      NO_PROXY: localhost,127.0.0.1,api,web,easyvoice,cosyvoice2
+    volumes:
+      - cosyvoice2-models:/models
+    networks:
+      - appnet
+
   web:
     build: .
     container_name: infinite-canvas-web
@@ -82,6 +125,9 @@ services:
 
 volumes:
   canvas-data:
+  cosyvoice2-models:
+  gpt-sovits-models:
+  gpt-sovits-references:
 
 networks:
   appnet:

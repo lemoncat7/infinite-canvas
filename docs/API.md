@@ -216,6 +216,17 @@ POST /api/agents/comic
 
 生成任务先写入数据库队列；图片与视频采用独立并发。任务和资产接口会校验当前用户及项目归属。
 
+## 语音与 TTS
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `GET` | `/api/tts/providers` | 获取语音 Provider 及流式能力 |
+| `GET` | `/api/tts/providers/:providerId/voices` | 获取 Provider 支持的中文音色 |
+| `GET` | `/api/tts/preview` | 流式试听；不写资产、不创建音频节点 |
+| `POST` | `/api/tts/synthesize` | 正式生成语音并写入项目资产 |
+
+`/api/tts/preview` 只用于短文本试听，最多取 120 个字符。响应使用 Provider 原始音频流，并设置 `X-Accel-Buffering: no` 与 `Cache-Control: no-store`；客户端可将该地址直接交给音频元素边接收边播放。查询参数包括 `projectId`、`providerId`、`text`、`voiceId`、`speed`、`pitch` 和 `volume`。
+
 ## 公共与诊断接口
 
 | 方法 | 路径 | 用途 |

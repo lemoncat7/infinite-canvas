@@ -33,9 +33,15 @@ export type TtsSynthesisResult = {
   duration: number;
 };
 
+export type TtsStreamResult = {
+  stream: ReadableStream<Uint8Array>;
+  mimeType: string;
+};
+
 export interface TtsProvider {
   readonly id: string;
   capabilities(): Promise<TtsCapabilities>;
   voices(): Promise<TtsVoice[]>;
   synthesize(input: TtsSynthesisInput): Promise<TtsSynthesisResult>;
+  synthesizeStream?(input: TtsSynthesisInput): Promise<TtsStreamResult>;
 }

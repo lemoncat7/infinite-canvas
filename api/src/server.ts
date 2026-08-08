@@ -30,6 +30,7 @@ import sharp from "sharp";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { isAbsolute, relative, resolve } from "node:path";
+import { Readable } from "node:stream";
 
 type CanvasPayload = {
   nodes: unknown[];
@@ -53,6 +54,44 @@ type JobInput = {
   inputUrls?: string[];
   parameters?: Record<string, unknown>;
 };
+
+function parseFirstJsonObject(raw: string, label: string) {
+  const normalized = raw
+    .replace(/^\s*```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/i, "")
+    .trim();
+  const start = normalized.indexOf("{");
+  if (start < 0) throw new SyntaxError(`${label}未返回 JSON 对象`);
+  let depth = 0,
+    inString = false,
+    escaped = false;
+  for (let index = start; index < normalized.length; index++) {
+    const character = normalized[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+      continue;
+    }
+    if (character === "{") depth++;
+    else if (character === "}") {
+      depth--;
+      if (depth === 0) {
+        const value = JSON.parse(normalized.slice(start, index + 1)) as Record<
+            string,
+            unknown
+          >,
+          trailing = normalized.slice(index + 1).replace(/^\s*```\s*/i, "").trim();
+        return { value, trailingLength: trailing.length };
+      }
+    }
+  }
+  throw new SyntaxError(`${label}返回了不完整的 JSON`);
+}
 
 const dataDirectory = process.env.DATA_DIR ?? "./data";
 const databasePath = `${dataDirectory}/flow-studio.sqlite`;
@@ -434,6 +473,60 @@ app.get("/tts/providers/:providerId/voices", async (request, reply) => {
   }
 });
 
+app.get("/tts/preview", async (request, reply) => {
+  const user = requireUser(request, reply);
+  if (!user) return;
+  const query = request.query as {
+    projectId?: string;
+    providerId?: string;
+    text?: string;
+    voiceId?: string;
+    speed?: string;
+    pitch?: string;
+    volume?: string;
+  };
+  const projectId = String(query.projectId || defaultProjectId);
+  if (!ownsProject(projectId, String(user.id)))
+    return reply.code(404).send({ error: "Project not found" });
+  const text = String(query.text || "").trim().slice(0, 120);
+  if (!text) return reply.code(400).send({ error: "试听文本不能为空" });
+  const provider = getTtsProvider(String(query.providerId || "easyvoice-local"));
+  if (!provider?.synthesizeStream)
+    return reply.code(400).send({ error: "当前语音服务不支持流式试听" });
+  const voiceId = resolveEasyVoiceId(String(query.voiceId || "zh-CN-XiaoxiaoNeural"));
+  try {
+    const supportedVoice = (await provider.voices()).some(
+      (voice) => voice.id === voiceId && voice.language === "zh-CN",
+    );
+    if (!supportedVoice)
+      return reply.code(400).send({ error: "该服务不支持所选中文音色" });
+    const speed = Math.max(0.5, Math.min(2, Number(query.speed) || 1));
+    const pitch = Math.max(-50, Math.min(50, Number(query.pitch) || 0));
+    const volume = Math.max(0, Math.min(2, Number(query.volume) || 1));
+    const result = await provider.synthesizeStream({
+      text,
+      voiceId,
+      speed,
+      pitch,
+      volume,
+      format: "mp3",
+      language: "zh-CN",
+      emotion: "中性",
+    });
+    return reply
+      .type(result.mimeType)
+      .header("cache-control", "no-store")
+      .header("x-accel-buffering", "no")
+      .header("content-disposition", "inline")
+      .send(Readable.fromWeb(result.stream as any));
+  } catch (error) {
+    request.log.error({ error, provider: provider.id }, "tts preview stream failed");
+    return reply.code(502).send({
+      error: error instanceof Error ? error.message : "流式试听失败",
+    });
+  }
+});
+
 app.post("/tts/synthesize", async (request, reply) => {
   const user = requireUser(request, reply);
   if (!user) return;
@@ -549,7 +642,7 @@ app.post("/agents/prompt", async (request, reply) => {
     },
     idea = String(input.idea ?? "").trim(),
     kind = input.kind === "video" ? "video" : "image",
-    promptMode = ["general", "agnes"].includes(String(input.promptMode))
+    promptMode = ["general", "agnes", "voice"].includes(String(input.promptMode))
       ? String(input.promptMode)
       : "create",
     complexity = input.complexity === "detailed" ? "detailed" : "simple",
@@ -583,7 +676,8 @@ app.post("/agents/prompt", async (request, reply) => {
   const creativeSystem = `你是 Viora 无限画布中的创作 Agent。理解用户需求、当前节点和上游视觉素材，规划可实际执行的完整工作流并生成底层提示词。只返回合法完整 JSON，不要 Markdown或解释。必须包含 finalPrompt、action、targetType、summary、shouldGenerate、steps。steps 是按执行顺序排列的数组，每项必须为 {"title":"简短名称","kind":"image或video","prompt":"该节点独立使用的完整提示词","referenceIndexes":[1],"dependsOn":[1]}。所有 kind=image 的步骤默认使用 gpt-image-2，每条 prompt 必须控制在 140 个中文字符以内，只保留主体/参考素材对应关系、关键修改、场景构图和一种主要风格；禁止堆砌形容词、镜头参数、材质清单和重复约束。图片需求复杂时拆为多个具有明确职责的 image 步骤，不得写成一条超长提示词。referenceIndexes 使用用户附带视觉参考的 1 开始编号；dependsOn 使用 steps 的 1 开始编号，只能引用当前步骤之前的步骤。复杂视频必须采用分层生产链：先按需要生成可复用的人物、产品和环境设定图；再为每个镜头创建独立的最终分镜 image 步骤，通过 dependsOn 组合该镜头所需的设定素材；最后每个 video 步骤只依赖自己对应的最终分镜图，不要再次直接依赖已经被该分镜使用的人物或场景祖先素材。每个含人物或产品的 video 提示词都要明确要求严格保持输入分镜中的身份、脸型、发型、服装、产品外形和配色，禁止换脸、改变年龄性别、重设计服装或产品；只描述必要动作、环境运动和镜头运动。若最终视频需要先创造场景、人物或分镜参考图，必须先规划 image 步骤，再让 video 步骤通过 dependsOn 引用对应图片步骤。不同镜头需要不同场景时分别生成并正确复用；需要保持角色、产品或美术一致性时复用统一设定图。最终交付物必须出现在 steps 中：用户要视频时不能只返回准备图片，必须包含至少一个 video 步骤；用户明确不要视频时禁止添加 video。若用户已有合适图片，应优先直接引用素材，不重复生成。需要多个方案、场景或分镜时拆成多个步骤，每个视频镜头独立一个 video 步骤，最多 16 步。用户明确指定数量时必须准确提供相应数量的最终交付步骤；若还需要角色设定等中间步骤，应在 16 步内一并规划。禁止循环依赖，video 步骤通常作为末端。需求非常模糊且未指定媒体类型时，采用最小可行方案，只创建一个 image 步骤，不擅自扩展视频。action 只能是 update_current、create_child、create_new；targetType 只能是 image、video；summary 用一句简短中文说明完整执行链。没有当前节点时 create_new；有素材并继续创作时 create_child。用户点击开始创作即视为授权执行，shouldGenerate 默认 true，除非用户明确只要求规划或提示词。${detailRule} 当前节点信息：${JSON.stringify(input.target ?? null)}。不要声称媒体已经生成。`;
   const generalPromptSystem = `你是专业 AI 视觉提示词工程师。根据用户的中文画面需求、当前节点上下文和视觉参考，只生成一条可直接使用的${kind === "video" ? "视频" : "图片"}提示词，不创建工作流，不规划节点，不扩写用户未提供的剧情。保持已有角色、服装、道具、场景和风格一致。只返回合法 JSON：{"finalPrompt":"最终提示词","summary":"通用提示词已生成"}。finalPrompt 使用清晰自然的中文，控制在 ${kind === "video" ? 280 : 180} 字以内。`;
   const agnesPromptSystem = `你是专业动画导演和 Agnes Video v2.0 Prompt 工程师。把用户提供的中文剧情分镜转换成连续动漫视频的英文 Prompt，像动画分镜脚本而不是小说。不得扩写剧情、创造角色、改变设定、增加对白或把多个复杂事件塞入同一镜头。只返回合法 JSON：{"finalPrompt":"完整 Agnes Prompt","summary":"Agnes Video v2.0 提示词已生成"}，不要返回 steps 或解释。finalPrompt 必须严格按以下带英文冒号的标题顺序输出：Style:, Language:, Continuity:, Scene:, Camera:, Action:, Effects:, Audio:, Dialogue:, Voice:, Background:, Constraints:。每个一级标题必须独占一行、只出现一次，正文从下一行开始；多个动作放在同一个 Action: 区块中，每个动作单独一行，绝不能重复输出 Action: 标题。Style 固定为 Anime, cinematic.；Language 固定为 Chinese.。Continuity 说明 Continue seamlessly from the previous shot，并锁定人物身份、服装、发型、建筑、场景与光照，禁止重新设计；同一场景增加 Environment Lock: Keep the same background environment and spatial layout. Do not move, rebuild, or redesign architecture. Scene 只描述当前画面的环境与主体。Camera 只能使用 Wide shot, Medium shot, Medium close-up, Close-up, Slow dolly in, Slow dolly out, Slow pan, Tracking shot, Aerial shot, Reframe toward character 等明确电影语言，禁止抽象镜头描述。输入中的“顺视线切到”必须翻译成 Slow pan 或 Reframe toward character，绝不能在 Camera 或 Action 中出现 follows the line of sight、camera sees、feels closer 等抽象措辞。Action 一句话一个可见动作，不写心理，不增加输入中没有的动作。Effects 只写可见光效、能量、UI、天气或粒子。Audio 中旁白必须写 Narration: "中文旁白"，系统声音必须写 System Announcement: "中文系统声音"，不得放入 Dialogue。Dialogue 只放真实人物台词，格式 Character Name: "中文台词"；已有角色必须始终使用角色名，禁止用 boy、teenager、young man 等模糊称呼替代。一个镜头最多一个主要说话角色。人物讲话时加入 Only the speaking character moves their lips. Everyone else keeps their mouths closed.；无人镜头不得生成 lip sync。Voice 写年龄、性别、音色、情绪、语速和说话方式。Background 写环境声音。Constraints 每次原样包含：No subtitles. No captions. No dialogue text. No narration text. No automatic transcription. No speech bubbles. No text overlays. No logos. No watermarks. Only animate the specified actions. Do not redesign characters. Do not change clothing. Do not change hairstyle. Do not change environment. No extra movement. No idle animation. No unnecessary camera movement. 最终 Prompt 除中文台词、中文旁白和中文系统播报外，其余全部使用英文。`;
-  const system = promptMode === "agnes" ? agnesPromptSystem : promptMode === "general" ? generalPromptSystem : creativeSystem;
+  const voicePromptSystem = `你是中文角色选角与声音设计助手。根据用户描述，从固定 EasyVoice 中文音色中选择最匹配的一项，并同时设计音量、音调和语速，尽可能还原用户要求。只返回合法 JSON，不要解释：{"finalPrompt":"一句简洁的中文声音说明，明确所选音色及参数为何符合需求","summary":"已为角色生成音色配置","voiceConfig":{"roleName":"角色名，未提供则写新角色","voiceId":"必须从允许值中选择","tone":"不超过20字的声音气质","speed":1.0,"pitch":0,"volume":1.0}}。允许的 voiceId：zh-CN-XiaoxiaoNeural（温暖女声）、zh-CN-XiaoyiNeural（活泼女声）、zh-CN-YunjianNeural（激昂男声）、zh-CN-YunxiNeural（阳光男声）、zh-CN-YunxiaNeural（少年男声）、zh-CN-YunyangNeural（稳重男声）、zh-CN-liaoning-XiaobeiNeural（辽宁女声）、zh-CN-shaanxi-XiaoniNeural（陕西女声）。必须综合判断年龄、性别、地域口音、音色明暗、厚薄、情绪强度和说话节奏，而非只匹配单个关键词。低沉、成熟、威严通常降低 pitch；清亮、稚嫩可提高 pitch；舒缓、沉稳降低 speed；急促、活泼提高 speed；轻声降低 volume；洪亮、有力提高 volume。speed 范围 0.5–2，通常保持 0.85–1.15；pitch 范围 -50–50，通常保持 -8–8；volume 范围 0–2，通常保持 0.8–1.2。用户明确给出参数时优先采用并限制在合法范围；要求超出可用音色能力时选择整体最接近的一项，不得虚构 voiceId 或角色背景。`;
+  const system = promptMode === "agnes" ? agnesPromptSystem : promptMode === "general" ? generalPromptSystem : promptMode === "voice" ? voicePromptSystem : creativeSystem;
   const visualSources = (input.visuals ?? [])
     .map(String)
     .filter((source) => /^\/api\/assets\/[^/]+\/content(?:\/|$)/.test(source))
@@ -723,6 +817,8 @@ app.post("/agents/prompt", async (request, reply) => {
     const rawFinalPrompt = field("finalPrompt");
     if (!rawFinalPrompt) throw new Error("Agent 未返回 finalPrompt");
     if (promptMode !== "create") {
+      const voiceConfig=promptMode==="voice"&&result.voiceConfig&&typeof result.voiceConfig==="object"?result.voiceConfig as Record<string,unknown>:undefined;
+      const allowedVoiceIds=new Set(["zh-CN-XiaoxiaoNeural","zh-CN-XiaoyiNeural","zh-CN-YunjianNeural","zh-CN-YunxiNeural","zh-CN-YunxiaNeural","zh-CN-YunyangNeural","zh-CN-liaoning-XiaobeiNeural","zh-CN-shaanxi-XiaoniNeural"]);
       return {
         model,
         kind,
@@ -737,6 +833,7 @@ app.post("/agents/prompt", async (request, reply) => {
         steps: [],
         finalPrompt: rawFinalPrompt,
         promptMode,
+        ...(voiceConfig?{voiceConfig:{roleName:String(voiceConfig.roleName||"新角色").slice(0,40),voiceId:allowedVoiceIds.has(String(voiceConfig.voiceId))?String(voiceConfig.voiceId):"zh-CN-XiaoxiaoNeural",tone:String(voiceConfig.tone||"自然").slice(0,40),speed:Math.max(.5,Math.min(2,Number(voiceConfig.speed)||1)),pitch:Math.max(-50,Math.min(50,Number(voiceConfig.pitch)||0)),volume:Math.max(0,Math.min(2,Number(voiceConfig.volume)||1))}}:{}),
       };
     }
     const action = ["update_current", "create_child", "create_new"].includes(
@@ -1168,10 +1265,13 @@ app.post("/agents/comic/chat", async (request, reply) => {
             }
           }
         }
-        const jsonText = raw.trim().startsWith("{")
-          ? raw.trim()
-          : raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1);
-        parsed = JSON.parse(jsonText) as typeof parsed;
+        const extracted = parseFirstJsonObject(raw, "漫剧对话");
+        if (extracted.trailingLength)
+          request.log.warn(
+            { projectId, sessionId, trailingLength: extracted.trailingLength },
+            "comic dialogue ignored trailing model output",
+          );
+        parsed = extracted.value as typeof parsed;
         break;
       } catch (error) {
         lastError = error instanceof Error ? error.message : String(error);
@@ -1522,7 +1622,8 @@ app.post("/agents/comic", async (request, reply) => {
       progressStart: number,
       progressEnd: number,
       holdProgress = false,
-    ) => {
+      formatRetry = false,
+    ): Promise<Record<string, unknown>> => {
       let responseBody: ReadableStream<Uint8Array> | undefined,
         upstreamController: AbortController | undefined,
         lastUpstreamError = "";
@@ -1680,21 +1781,56 @@ app.post("/agents/comic", async (request, reply) => {
           }
         }
       }
-      const normalized = raw
-        .replace(/^```(?:json)?\s*/i, "")
-        .replace(/\s*```$/, "")
-        .trim();
-      if (!normalized) throw new SyntaxError(`${stage}返回为空`);
+      if (!raw.trim()) throw new SyntaxError(`${stage}返回为空`);
+      let extracted: ReturnType<typeof parseFirstJsonObject>;
+      try {
+        extracted = parseFirstJsonObject(raw, stage);
+      } catch (error) {
+        if (error instanceof SyntaxError && !formatRetry) {
+          request.log.warn(
+            {
+              stage,
+              model: usedModel,
+              responseLength: raw.length,
+              message: error.message,
+            },
+            "comic stage invalid json retry",
+          );
+          emit({
+            type: "progress",
+            progress: progressStart,
+            phase: `${stage}格式异常，正在重新生成本阶段…`,
+            receivedBytes: streamReceivedBytes,
+          });
+          return readStage(
+            stage,
+            stageSystem,
+            stageContent,
+            maxTokens,
+            progressStart,
+            progressEnd,
+            holdProgress,
+            true,
+          );
+        }
+        throw error;
+      }
       request.log.info(
         {
           stage,
           model: usedModel,
           elapsedMs: Date.now() - startedAt,
-          responseLength: normalized.length,
+          responseLength: raw.length,
+          trailingLength: extracted.trailingLength,
           holdProgress,
         },
         "comic stage received",
       );
+      if (extracted.trailingLength)
+        request.log.warn(
+          { stage, model: usedModel, trailingLength: extracted.trailingLength },
+          "comic stage ignored trailing model output",
+        );
       const completedProgress = holdProgress ? progressStart : progressEnd;
       streamProgress = Math.max(streamProgress, completedProgress);
       emit({
@@ -1703,7 +1839,7 @@ app.post("/agents/comic", async (request, reply) => {
         phase: `${stage}已完成`,
         receivedBytes: streamReceivedBytes,
       });
-      return JSON.parse(normalized) as Record<string, unknown>;
+      return extracted.value;
     };
     const validatePromptLengths = (
       value: Record<string, unknown>,
@@ -2255,7 +2391,57 @@ app.post("/agents/comic", async (request, reply) => {
         });
         return value;
       };
-      shotPart = normalizeShotBatch(shotPart);
+      const normalizeFrameReferences = (value: Record<string, unknown>) => {
+        const returned = Array.isArray(value.shots) ? value.shots : [],
+          foundationCharacters = Array.isArray(foundation.characters)
+            ? foundation.characters
+            : [],
+          foundationProps = Array.isArray(foundation.props)
+            ? foundation.props
+            : [];
+        returned.forEach((rawShot) => {
+          if (!rawShot || typeof rawShot !== "object") return;
+          const shot = rawShot as Record<string, unknown>,
+            frames = Array.isArray(shot.frames) ? shot.frames : [];
+          frames.forEach((rawFrame) => {
+            if (!rawFrame || typeof rawFrame !== "object") return;
+            const frame = rawFrame as Record<string, unknown>,
+              evidence = `${String(frame.title || "")} ${String(frame.imagePrompt || "")} ${String(frame.inherit || "")} ${String(frame.change || "")}`,
+              characterIndexes = foundationCharacters
+                .map((raw, index) => {
+                  const name =
+                    raw && typeof raw === "object"
+                      ? String((raw as Record<string, unknown>).name || "").trim()
+                      : "";
+                  return name && evidence.includes(name) ? index + 1 : 0;
+                })
+                .filter(Boolean),
+              propIndexes = foundationProps
+                .map((raw, index) => {
+                  const name =
+                    raw && typeof raw === "object"
+                      ? String((raw as Record<string, unknown>).name || "").trim()
+                      : "";
+                  return name && evidence.includes(name) ? index + 1 : 0;
+                })
+                .filter(Boolean),
+              allowedCharacters = new Set(characterIndexes);
+            frame.characterIndexes = characterIndexes;
+            frame.propIndexes = propIndexes;
+            frame.characterForms = (Array.isArray(frame.characterForms)
+              ? frame.characterForms
+              : []
+            ).filter((raw) => {
+              if (!raw || typeof raw !== "object") return false;
+              return allowedCharacters.has(
+                Number((raw as Record<string, unknown>).characterIndex),
+              );
+            });
+          });
+        });
+        return value;
+      };
+      shotPart = normalizeFrameReferences(normalizeShotBatch(shotPart));
       const batchIssues = (value: Record<string, unknown>) => {
         const issues = validatePromptLengths(value, "shots"),
           returned = Array.isArray(value.shots) ? value.shots : [],
@@ -2302,7 +2488,7 @@ app.post("/agents/comic", async (request, reply) => {
           Math.max(batchStart, batchEnd - 1),
           true,
         );
-        shotPart = normalizeShotBatch(shotPart);
+        shotPart = normalizeFrameReferences(normalizeShotBatch(shotPart));
       }
       const remaining = batchIssues(shotPart);
       if (remaining.length)
@@ -3800,13 +3986,61 @@ app.get("/projects/:projectId/canvas", async (request, reply) => {
     projectId,
   ]);
   persist();
+  const document = reconcileCanvasJobs(
+    JSON.parse(String(row.document)),
+    projectId,
+    String(user.id),
+  );
   return {
     projectId,
-    ...JSON.parse(String(row.document)),
+    ...document,
     version: Number(row.version) || 1,
     updatedAt: row.updated_at,
   };
 });
+
+function reconcileCanvasJobs(
+  document: Record<string, unknown>,
+  projectId: string,
+  userId: string,
+) {
+  const nodes = Array.isArray(document.nodes) ? document.nodes : [];
+  const pending = nodes.filter((value) => {
+    if (!value || typeof value !== "object") return false;
+    const node = value as Record<string, unknown>;
+    return (
+      (node.kind === "image" || node.kind === "video") &&
+      ["queued", "running", "waiting"].includes(String(node.status || ""))
+    );
+  }) as Record<string, unknown>[];
+  if (!pending.length) return document;
+
+  const jobs = getAll(
+    "SELECT id,node_id,kind,status,progress,result_url,error,updated_at FROM jobs WHERE project_id=? AND user_id=? ORDER BY updated_at DESC,rowid DESC",
+    [projectId, userId],
+  );
+  const byId = new Map(jobs.map((job) => [String(job.id), job]));
+  const latestByNode = new Map<number, Record<string, unknown>>();
+  for (const job of jobs) {
+    const nodeId = Number(job.node_id);
+    if (Number.isSafeInteger(nodeId) && !latestByNode.has(nodeId))
+      latestByNode.set(nodeId, job);
+  }
+
+  for (const node of pending) {
+    const explicit = node.jobId ? byId.get(String(node.jobId)) : undefined;
+    const fallback = latestByNode.get(Number(node.id));
+    const job = explicit || fallback;
+    if (!job || String(job.kind) !== String(node.kind)) continue;
+    node.jobId = String(job.id);
+    node.status = String(job.status);
+    node.progress = Number(job.progress) || 0;
+    if (job.result_url) node.mediaUrl = String(job.result_url);
+    if (job.error) node.error = String(job.error);
+    else delete node.error;
+  }
+  return document;
+}
 app.post("/projects/:projectId/canvas/id-block", async (request, reply) => {
   const user = requireUser(request, reply);
   if (!user) return;
