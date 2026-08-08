@@ -2286,13 +2286,20 @@ app.post("/agents/comic", async (request, reply) => {
           hasVisibleChange = /走向|走近|移动|起身|站起|坐下|跪下|落地|转身|抬起|抬手|拾起|推开|打开|关闭|拔出|递出|交给|击中|斩下|冲向|俯冲|切换地点|时间跳转|由.+变为/.test(complexityText),
           requestedMotionLevel = String(item.motionLevel || "").trim(),
           fallbackMotionLevel = hasComplexAction ? "complex" : hasVisibleChange ? "simple" : "static",
-          motionLevel = ["static", "simple", "complex"].includes(requestedMotionLevel)
+          rawMotionLevel = ["static", "simple", "complex"].includes(requestedMotionLevel)
             ? requestedMotionLevel
             : fallbackMotionLevel,
           stateChanges = (Array.isArray(item.stateChanges) ? item.stateChanges : [])
             .map((change) => compactText(change, 18))
             .filter(Boolean)
             .slice(0, 3),
+          motionLevel = stateChanges.length === 0
+            ? "static"
+            : rawMotionLevel === "complex" && stateChanges.length >= 2
+              ? "complex"
+              : stateChanges.length >= 2 || rawMotionLevel === "simple"
+                ? "simple"
+                : "static",
           // Structured visible-state changes are authoritative. Keywords only
           // provide compatibility when an upstream model omits the new fields.
           inferredFrameCount = motionLevel === "complex"
@@ -2780,6 +2787,7 @@ app.post("/agents/comic", async (request, reply) => {
     let auditSystem =
       '你是漫剧连续性审校。只返回合法 JSON：{"valid":true,"issues":[],"repairs":[{"shotNumber":1,"sceneId":"修正后场景ID","scene":"修正后地点","scenePrompt":"修正后无人场景","imagePrompt":"修正后主画面","storyBeat":"修正后剧情承接","action":"修正后动作","dialogue":"修正后完整对白","videoPrompt":"修正后视频提示","transition":"修正后过渡","continuity":"修正后连续性","exitState":"修正后出口状态","transitionAnchor":"修正后过渡锚点","cameraAxis":"修正后轴线","frames":[{"title":"原标题","imagePrompt":"不超过100字的修正分镜","keyframe":"start","inherit":"明确继承项","change":"本帧唯一变化","lock":"不可改变项","characterIndexes":[],"characterForms":[],"propIndexes":[]}]}]}。检查相邻镜头和分段边界的因果、人物形态、道具状态、地点时段、场景结构、建筑位置、主光方向、人物左右站位、视线、180度轴线、动作方向、景别变化、对白与悬念是否承接。sceneId 相同时画面必须像同一空间的连续拍摄；sceneId 变化时必须有建立镜头或明确视听桥接，禁止无解释瞬移。只给确有问题的镜头 repairs，不重写整个方案。修复地点冲突时必须同时返回 sceneId、scene、scenePrompt、imagePrompt、exitState、transitionAnchor 和 cameraAxis；若错误存在于分镜画面，必须返回完整 frames 定向修正 imagePrompt、inherit、change、lock，不能只改旁边的 continuity 文本来掩盖；若原 frames 无错则不要返回 frames。对白事实错误必须返回 dialogue，动作错误必须返回 action，视频演出与对白不一致必须返回 videoPrompt。修改 dialogue 时保持原 duration 可自然说完，修改 videoPrompt 时不超过125字并明确无字幕。';
     auditSystem += " 修复 frames.imagePrompt 时必须保持100–320个中文字符，并保留主体、静态镜头设计、参考继承、本帧变化、连续性和排除项，不得压缩回简略描述。";
+    auditSystem += " 若修复 frames，repairs 必须同时返回由修正后各帧实际可见素材汇总得到的镜头级 characterIndexes、characterForms 和 propIndexes；不得保留已经从 frames 中移除的人物或道具。修复帧还必须保留正确的 stateChangeIndexes。";
     let audit = await readStage(
       "正在审校跨段过渡…",
       auditSystem,
