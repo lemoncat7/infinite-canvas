@@ -2235,7 +2235,7 @@ body[data-theme="dark"] .kind-audio.node-result>.image-empty-state{background:#2
 .kind-audio.node-result .audio-player-slot,body[data-theme="dark"] .kind-audio.node-result .audio-player-slot{min-height:68px!important;padding:0 16px!important;background:transparent!important;border:0!important;border-radius:0!important;box-shadow:none!important}
 .kind-audio.node-result .audio-player-slot::before{display:none!important}.kind-audio.node-result .audio-player-slot::after{right:18px!important;left:18px!important;background:color-mix(in srgb,var(--ws-muted) 34%,transparent)!important;box-shadow:none!important}
 .kind-audio.node-result .audio-track-wave{height:48px!important;gap:6px!important;opacity:.72!important;filter:none!important}.kind-audio.node-result .audio-track-wave>i,body[data-theme="dark"] .kind-audio.node-result .audio-track-wave>i{width:2px!important;flex-basis:2px!important;background:var(--ws-muted)!important;box-shadow:none!important}
-.kind-audio.node-result,.kind-audio.node-result.dragging{will-change:auto!important;transform-style:flat!important;backface-visibility:visible!important}
+.kind-audio.node-result{transform-style:flat!important;backface-visibility:visible!important}.kind-audio.node-result.dragging{transition:none!important;will-change:transform!important}
 
 /* Audio result reuses the generated-video media shell. */
 .kind-audio.node-result{overflow:visible!important;background:#111!important}

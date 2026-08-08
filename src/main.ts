@@ -946,7 +946,7 @@ function createDomNode(node: FlowNode) {
     event.preventDefault(); event.stopPropagation()
     if ((current.status === 'queued' || current.status === 'running')&&!batchSelectedIds.has(current.id)) { selectedId=current.id;updateEditor();draw(); return }
     const groupInitial=batchSelectedIds.has(current.id)?new Map(nodes.filter(item=>batchSelectedIds.has(item.id)).map(item=>[item.id,{x:item.x,y:item.y}])):undefined
-    element.setPointerCapture(event.pointerId); domDrag = { id: current.id, pointerId:event.pointerId, startX: event.clientX, startY:event.clientY, initialX: current.x, initialY: current.y, element, moved: false, groupInitial }; if(current.kind!=='audio')element.classList.add('dragging'); draw()
+  element.setPointerCapture(event.pointerId); domDrag = { id: current.id, pointerId:event.pointerId, startX: event.clientX, startY:event.clientY, initialX: current.x, initialY: current.y, element, moved: false, groupInitial }; element.classList.add('dragging'); draw()
   })
   element.addEventListener('dblclick', event => {
     if (performance.now() < suppressNodeReleaseUntil) { event.preventDefault(); event.stopPropagation(); return }
@@ -1106,7 +1106,7 @@ window.addEventListener('pointermove', event => {
     if(groupMoved)refreshBatchSelection();scheduleSave();draw();return
   }
   const drag = domDrag, dx = (event.clientX - drag.startX) / camera.zoom, dy = (event.clientY - drag.startY) / camera.zoom
-  if (!drag.moved&&(Math.abs(event.clientX - drag.startX) > 3 || Math.abs(event.clientY - drag.startY) > 3)){drag.moved=true;if(drag.nativeControl){drag.element.setPointerCapture(event.pointerId);event.preventDefault()}const draggedNode=nodes.find(item=>item.id===drag.id);if(draggedNode?.kind!=='audio')drag.element.classList.add('dragging');if(drag.groupInitial?.size)batchToolbar.classList.add('group-moving');if(!drag.agentSelect&&selectedId===drag.id&&draggedNode?.kind!=='audio'){selectedId=0;updateEditor();draw()}}
+  if (!drag.moved&&(Math.abs(event.clientX - drag.startX) > 3 || Math.abs(event.clientY - drag.startY) > 3)){drag.moved=true;if(drag.nativeControl){drag.element.setPointerCapture(event.pointerId);event.preventDefault()}drag.element.classList.add('dragging');if(drag.groupInitial?.size)batchToolbar.classList.add('group-moving');if(!drag.agentSelect&&selectedId===drag.id){selectedId=0;updateEditor();draw()}}
   if (domDragFrame !== null) cancelAnimationFrame(domDragFrame)
   domDragFrame = requestAnimationFrame(() => { if(drag.groupInitial?.size){for(const [id,origin] of drag.groupInitial){const item=nodes.find(node=>node.id===id);if(item){item.x=origin.x+dx;item.y=origin.y+dy}}}else{const node=nodes.find(item=>item.id===drag.id);if(node){node.x=drag.initialX+dx;node.y=drag.initialY+dy}}setSaveState('editing','编辑中…');draw();domDragFrame=null })
 })
