@@ -2891,12 +2891,28 @@ app.post("/agents/comic", async (request, reply) => {
                   ? frame.characterIndexes.map(Number).filter((number) => Number.isInteger(number) && validatedCharacters.includes(number))
                   : [],
                 inferredFrameCharacters = validatedCharacters.filter((number) => frameEvidence.includes(characters[number - 1]?.name || "\u0000")),
-                frameCharacterIndexes = [...new Set(explicitFrameCharacters.length ? explicitFrameCharacters : inferredFrameCharacters.length ? inferredFrameCharacters : rawFrames.length <= 1 ? validatedCharacters : [])],
+                frameCharacterIndexes = [
+                  ...new Set(
+                    inferredFrameCharacters.length
+                      ? inferredFrameCharacters
+                      : rawFrames.length <= 1
+                        ? explicitFrameCharacters
+                        : [],
+                  ),
+                ],
                 explicitFrameProps = Array.isArray(frame.propIndexes)
                   ? frame.propIndexes.map(Number).filter((number) => Number.isInteger(number) && propIndexes.includes(number))
                   : [],
                 inferredFrameProps = propIndexes.filter((number) => frameEvidence.includes(props[number - 1]?.name || "\u0000")),
-                framePropIndexes = [...new Set(explicitFrameProps.length ? explicitFrameProps : inferredFrameProps.length ? inferredFrameProps : rawFrames.length <= 1 ? propIndexes : [])],
+                framePropIndexes = [
+                  ...new Set(
+                    inferredFrameProps.length
+                      ? inferredFrameProps
+                      : rawFrames.length <= 1
+                        ? explicitFrameProps
+                        : [],
+                  ),
+                ],
                 frameCharacterForms = (Array.isArray(frame.characterForms) ? frame.characterForms : []).map((value) => {
                   const selection = value && typeof value === "object" ? value as Record<string, unknown> : {}, characterIndex = Number(selection.characterIndex), requestedForm = String(selection.form || "").trim(), form = characters[characterIndex - 1]?.forms.find((item) => item.name === requestedForm);
                   return form && frameCharacterIndexes.includes(characterIndex) ? { characterIndex, form: form.name } : null;
@@ -2938,7 +2954,13 @@ app.post("/agents/comic", async (request, reply) => {
                 ),
                 160,
               )
-            : "";
+            : "",
+          visibleCharacterIndexes = [
+            ...new Set(frames.flatMap((frame) => frame.characterIndexes)),
+          ],
+          visiblePropIndexes = [
+            ...new Set(frames.flatMap((frame) => frame.propIndexes)),
+          ];
         return {
           number: index + 1,
           title: String(shot.title || `镜头 ${index + 1}`).slice(0, 50),
@@ -2954,8 +2976,8 @@ app.post("/agents/comic", async (request, reply) => {
             ),
             160,
           ),
-          characterIndexes: [...new Set(validatedCharacters)],
-          propIndexes,
+          characterIndexes: visibleCharacterIndexes,
+          propIndexes: visiblePropIndexes,
           hasAnonymousCrowd,
           crowdPrompt,
           dialogue,
@@ -3004,14 +3026,13 @@ app.post("/agents/comic", async (request, reply) => {
               form = character?.forms.find(
                 (item) => item.name === requestedForm,
               );
-            return form ? { characterIndex, form: form.name } : null;
+            return form && shot.characterIndexes.includes(characterIndex)
+              ? { characterIndex, form: form.name }
+              : null;
           })
           .filter((value): value is { characterIndex: number; form: string } =>
             Boolean(value),
           );
-      for (const selection of characterForms)
-        if (!shot.characterIndexes.includes(selection.characterIndex))
-          shot.characterIndexes.push(selection.characterIndex);
       (
         shot as typeof shot & {
           characterForms: Array<{ characterIndex: number; form: string }>;
