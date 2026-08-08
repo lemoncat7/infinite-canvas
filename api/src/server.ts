@@ -1491,7 +1491,9 @@ app.post("/agents/comic", async (request, reply) => {
     updatedAt?: string;
   };
   const checkpointFingerprint = createHash("sha256")
-    .update(JSON.stringify({ text, model, visualInputs }))
+    // Resolved visual inputs contain expiring signed URLs. Fingerprinting them
+    // makes the same request look new on every retry and discards checkpoints.
+    .update(JSON.stringify({ text, model, visualSources }))
     .digest("hex");
   let checkpoint: ComicGenerationCheckpoint = { fingerprint: checkpointFingerprint };
   try {
@@ -2639,7 +2641,7 @@ app.post("/agents/comic", async (request, reply) => {
       receivedBytes: streamReceivedBytes,
     });
     const auditSystem =
-      '你是漫剧连续性审校。只返回合法 JSON：{"valid":true,"issues":[],"repairs":[{"shotNumber":1,"storyBeat":"修正后剧情承接","action":"修正后动作","dialogue":"修正后完整对白","videoPrompt":"修正后视频提示","transition":"修正后过渡","continuity":"修正后连续性","frames":[{"title":"原标题","imagePrompt":"不超过100字的修正分镜","keyframe":"start","inherit":"明确继承项","change":"本帧唯一变化","lock":"不可改变项","characterIndexes":[],"characterForms":[],"propIndexes":[]}]}]}。检查相邻镜头和分段边界的因果、人物形态、道具状态、地点时段、场景结构、建筑位置、主光方向、人物左右站位、视线、180度轴线、动作方向、景别变化、对白与悬念是否承接。sceneId 相同时画面必须像同一空间的连续拍摄；sceneId 变化时必须有建立镜头或明确视听桥接，禁止无解释瞬移。只给确有问题的镜头 repairs，不重写整个方案。若错误存在于分镜画面，必须返回完整 frames 定向修正 imagePrompt、inherit、change、lock，不能只改旁边的 continuity 文本来掩盖；若原 frames 无错则不要返回 frames。对白事实错误必须返回 dialogue，动作错误必须返回 action，视频演出与对白不一致必须返回 videoPrompt。修改 dialogue 时保持原 duration 可自然说完，修改 videoPrompt 时不超过125字并明确无字幕。';
+      '你是漫剧连续性审校。只返回合法 JSON：{"valid":true,"issues":[],"repairs":[{"shotNumber":1,"sceneId":"修正后场景ID","scene":"修正后地点","scenePrompt":"修正后无人场景","imagePrompt":"修正后主画面","storyBeat":"修正后剧情承接","action":"修正后动作","dialogue":"修正后完整对白","videoPrompt":"修正后视频提示","transition":"修正后过渡","continuity":"修正后连续性","exitState":"修正后出口状态","transitionAnchor":"修正后过渡锚点","cameraAxis":"修正后轴线","frames":[{"title":"原标题","imagePrompt":"不超过100字的修正分镜","keyframe":"start","inherit":"明确继承项","change":"本帧唯一变化","lock":"不可改变项","characterIndexes":[],"characterForms":[],"propIndexes":[]}]}]}。检查相邻镜头和分段边界的因果、人物形态、道具状态、地点时段、场景结构、建筑位置、主光方向、人物左右站位、视线、180度轴线、动作方向、景别变化、对白与悬念是否承接。sceneId 相同时画面必须像同一空间的连续拍摄；sceneId 变化时必须有建立镜头或明确视听桥接，禁止无解释瞬移。只给确有问题的镜头 repairs，不重写整个方案。修复地点冲突时必须同时返回 sceneId、scene、scenePrompt、imagePrompt、exitState、transitionAnchor 和 cameraAxis；若错误存在于分镜画面，必须返回完整 frames 定向修正 imagePrompt、inherit、change、lock，不能只改旁边的 continuity 文本来掩盖；若原 frames 无错则不要返回 frames。对白事实错误必须返回 dialogue，动作错误必须返回 action，视频演出与对白不一致必须返回 videoPrompt。修改 dialogue 时保持原 duration 可自然说完，修改 videoPrompt 时不超过125字并明确无字幕。';
     let audit = await readStage(
       "正在审校跨段过渡…",
       auditSystem,
@@ -2648,7 +2650,9 @@ app.post("/agents/comic", async (request, reply) => {
       94,
       97,
     );
-    for (let auditAttempt = 1; auditAttempt <= 4; auditAttempt++) {
+    // Global issues are usually isolated to one boundary. Give targeted repair
+    // enough room to converge instead of discarding an otherwise valid plan.
+    for (let auditAttempt = 1; auditAttempt <= 6; auditAttempt++) {
       const repairs = Array.isArray(audit.repairs) ? audit.repairs : [],
         issues = Array.isArray(audit.issues) ? audit.issues : [];
       if (audit.valid === true && !issues.length) break;
@@ -2674,12 +2678,19 @@ app.post("/agents/comic", async (request, reply) => {
         if (!shot || typeof shot !== "object") continue;
         const target = shot as Record<string, unknown>;
         for (const field of [
+          "sceneId",
+          "scene",
+          "scenePrompt",
+          "imagePrompt",
           "storyBeat",
           "action",
           "dialogue",
           "videoPrompt",
           "transition",
           "continuity",
+          "exitState",
+          "transitionAnchor",
+          "cameraAxis",
         ])
           if (String(repair[field] || "").trim())
             target[field] = String(repair[field]);
