@@ -2152,7 +2152,7 @@ app.post("/agents/comic", async (request, reply) => {
         ? [...checkpoint.shots]
         : [];
     const shotPlanSystem =
-      '你是漫剧镜头规划师。本阶段只确定镜头总数、实际对白草稿和连续性状态，禁止生成图片提示词、视频提示词和 frames。只返回合法 JSON：{"plannedShots":[{"number":1,"outlineIndex":1,"title":"镜头名","duration":5,"storyBeat":"承接上一镜并推动下一镜的剧情节拍","sceneId":"场景ID","characterIndexes":[1],"propIndexes":[1],"dialogue":"旁白或角色可直接配音的实际中文台词；无对白则明确写无对白","transition":"与上一镜的过渡方式","continuity":"需要继承的状态","entryState":"开镜时人物站位、姿态、视线、服饰、道具、环境与光线","exitState":"镜头结束时上述状态的准确结果","transitionAnchor":"连接前后镜头的动作、声音、视线、物体或空间锚点","cameraAxis":"人物左右关系、180度轴线和动作方向"}]}。镜头数由剧情节拍和真实播音时长决定，不得固定数量。按自然中文每秒约3.6个汉字计算台词时间，每段台词或说话人切换另留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；duration 必须向上取整且为3–8秒。若实际对白需要超过8秒，必须拆成多个连续镜头，不得加速朗读或删掉关键因果。必须覆盖全部大纲段落，形成完整起承转合。相邻镜头的 entryState 必须准确承接上一镜 exitState；只有明确转场才允许重置，并由 transitionAnchor 说明如何完成。sceneId 变化代表真实地点或时段切换，切换后的第一镜必须是建立镜头或由声音先行、动作匹配、道具特写等明确桥接进入，不能让角色和背景无解释瞬移；必要时新增一个短过渡镜头。sceneId 不变时必须锁定同一空间布局、建筑位置、主光方向和人物左右关系，只允许按剧情改变景别、机位、动作和局部状态。相邻镜头即使在同一场景，也必须有明确的信息、动作或情绪增量；禁止连续安排人物以相同站位、相同正面中景和相同构图重复说话。每连续 2–3 镜应有节奏明确的景别或观察角度变化，但变化必须服务剧情，不能破坏人物站位、视线、180度轴线和动作方向连续性。';
+      '你是漫剧镜头规划师。本阶段只确定镜头总数、实际对白草稿和连续性状态，禁止生成图片提示词、视频提示词和 frames。只返回合法 JSON：{"plannedShots":[{"number":1,"outlineIndex":1,"title":"镜头名","duration":5,"storyBeat":"承接上一镜并推动下一镜的剧情节拍","sceneId":"场景ID","characterIndexes":[1],"propIndexes":[1],"dialogue":"旁白或角色可直接配音的实际中文台词；无对白则明确写无对白","transition":"与上一镜的过渡方式","continuity":"需要继承的状态","entryState":"开镜时人物站位、姿态、视线、服饰、道具、环境与光线","exitState":"镜头结束时上述状态的准确结果","transitionAnchor":"连接前后镜头的动作、声音、视线、物体或空间锚点","cameraAxis":"人物左右关系、180度轴线和动作方向"}]}。entryState、exitState、transitionAnchor、cameraAxis 各自必须简洁且不超过80个中文字符；只写可验证状态，不重复剧情、对白或资产外观描述。镜头数由剧情节拍和真实播音时长决定，不得固定数量。按自然中文每秒约3.6个汉字计算台词时间，每段台词或说话人切换另留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；duration 必须向上取整且为3–8秒。若实际对白需要超过8秒，必须拆成多个连续镜头，不得加速朗读或删掉关键因果。必须覆盖全部大纲段落，形成完整起承转合。相邻镜头的 entryState 必须准确承接上一镜 exitState；只有明确转场才允许重置，并由 transitionAnchor 说明如何完成。sceneId 变化代表真实地点或时段切换，切换后的第一镜必须是建立镜头或由声音先行、动作匹配、道具特写等明确桥接进入，不能让角色和背景无解释瞬移；必要时新增一个短过渡镜头。sceneId 不变时必须锁定同一空间布局、建筑位置、主光方向和人物左右关系，只允许按剧情改变景别、机位、动作和局部状态。相邻镜头即使在同一场景，也必须有明确的信息、动作或情绪增量；禁止连续安排人物以相同站位、相同正面中景和相同构图重复说话。每连续 2–3 镜应有节奏明确的景别或观察角度变化，但变化必须服务剧情，不能破坏人物站位、视线、180度轴线和动作方向连续性。';
     const shotPlanText = `创作需求：\n${text}\n\n已校验剧情、人物、道具和场景基座：\n${JSON.stringify(foundation)}`;
     let shotPlan = checkpoint.shotPlan
       ? checkpoint.shotPlan
@@ -2460,7 +2460,9 @@ app.post("/agents/comic", async (request, reply) => {
           frames.forEach((rawFrame) => {
             if (!rawFrame || typeof rawFrame !== "object") return;
             const frame = rawFrame as Record<string, unknown>,
-              evidence = `${String(frame.title || "")} ${String(frame.imagePrompt || "")} ${String(frame.inherit || "")} ${String(frame.change || "")} ${String(frame.lock || "")}`,
+              // `lock` may mention off-screen assets merely to forbid changes;
+              // it is not evidence that an asset is visible in this frame.
+              evidence = `${String(frame.title || "")} ${String(frame.imagePrompt || "")} ${String(frame.inherit || "")} ${String(frame.change || "")}`,
               characterIndexes = foundationCharacters
                 .map((raw, index) => {
                   const name =
