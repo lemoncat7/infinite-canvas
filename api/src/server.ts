@@ -1437,9 +1437,10 @@ app.post("/agents/comic", async (request, reply) => {
     "人物资产规则：characters.imagePrompt 与 forms.imagePrompt 不受分镜 100 字限制，应提供 180–350 个中文字符的专业角色设定板说明。Base 人物必须是 16:9 横向 Character Design Sheet，同一人物同一比例排列正面、严格侧面、背面三视图，并包含头部/五官/发型近景、服装内外层结构、鞋靴、关键装备、武器、饰品、徽记和材质纹理的独立局部放大；写清年龄感、身高体型、肤色、发色瞳色、轮廓、主辅色和不可变化的身份锚点。不要生成三种不同人物、动作海报或复杂场景。特殊形态也使用三视图设定板，严格继承 Base 的脸、发型、体型和身份锚点，只展示该形态发生变化的服饰、伤势、装备或身体状态。";
   const comicStyleRules =
     "全局视觉风格规则：tone 必须以“风格类型：动漫风 / 拟人风 / 写实风 / 三维卡通风 / 插画风”中的一个明确类别开头，再给出可直接用于生成的统一规范，包括线条、上色、材质、光影、色彩与镜头质感。根据用户需求选择类别，不得擅自把一种风格转换成另一种。characters、forms、props、scenePrompt、frames.imagePrompt 与 videoPrompt 必须全部继承该风格类型和 tone；每一个提示词都必须明确写出同一个“风格类型：××风”，场景、人物、分镜与视频不得依靠模型自行猜测风格。";
-  let storedBrief = String(comicSession.brief || "{}");
+  let storedBrief = String(comicSession.brief || "{}"), confirmedBriefTitle = "";
   try {
     const value = JSON.parse(storedBrief) as { constraints?: unknown };
+    confirmedBriefTitle = String((value as Record<string, unknown>).title || "").trim().slice(0, 100);
     if (Array.isArray(value.constraints))
       value.constraints = value.constraints.filter(
         (item) =>
@@ -2916,7 +2917,7 @@ app.post("/agents/comic", async (request, reply) => {
         };
       });
     const result = {
-      title: String(plan.title || "未命名漫剧").slice(0, 100),
+      title: String(confirmedBriefTitle || plan.title || "未命名漫剧").slice(0, 100),
       logline: String(plan.logline || "").slice(0, 600),
       tone: String(plan.tone || "").slice(0, 300),
       duration:
