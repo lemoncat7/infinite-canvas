@@ -1635,7 +1635,11 @@ app.post("/agents/comic", async (request, reply) => {
     }, 10000);
     const candidateModels = [
         model,
-        ...(model === "gpt-5.4-mini" ? [] : ["gpt-5.4-mini"]),
+        model,
+        model,
+        ...(model === "gpt-5.4-mini"
+          ? []
+          : ["gpt-5.4-mini", "gpt-5.4-mini"]),
       ],
       headerTimeout = Math.max(
         20000,
@@ -1669,12 +1673,17 @@ app.post("/agents/comic", async (request, reply) => {
       lastStreamContentAt = stageLastContentAt;
       for (let attempt = 0; attempt < candidateModels.length; attempt++) {
         usedModel = candidateModels[attempt];
-        if (attempt > 0)
+        if (attempt > 0) {
           emit({
             type: "progress",
             progress: progressStart,
-            phase: `${stage}响应较慢，正在切换备用线路…`,
+            phase:
+              usedModel === candidateModels[attempt - 1]
+                ? `${stage}上游暂时异常，正在自动重试…`
+                : `${stage}正在切换备用线路…`,
           });
+          await new Promise((resolve) => setTimeout(resolve, 700 * attempt));
+        }
         const controller = new AbortController(),
           headerTimer = setTimeout(
             () =>
