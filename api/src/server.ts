@@ -1508,7 +1508,7 @@ app.post("/agents/comic", async (request, reply) => {
     completedBatches?: number;
     updatedAt?: string;
   };
-  const comicPipelineVersion = "compact-shot-plan-v1";
+  const comicPipelineVersion = "compact-shot-plan-v2";
   const checkpointFingerprint = createHash("sha256")
     // Resolved visual inputs contain expiring signed URLs. Fingerprinting them
     // makes the same request look new on every retry and discards checkpoints.
@@ -2191,7 +2191,7 @@ app.post("/agents/comic", async (request, reply) => {
         ? [...checkpoint.shots]
         : [];
     let shotPlanSystem =
-      '你是漫剧镜头规划师。本阶段只输出“紧凑镜头状态表”，确定镜头数、真实对白和连续性状态；禁止生成图片提示词、视频提示词、frames，也不要重述资产外观。只返回合法 JSON：{"plannedShots":[{"number":1,"outlineIndex":1,"title":"镜头名","duration":5,"frameCount":1,"storyBeat":"因果与结果","sceneId":"场景ID","characterIndexes":[1],"propIndexes":[1],"dialogue":"可直接配音的台词或无对白","transition":"过渡方式","entryState":"开镜可见状态","exitState":"结束可见状态","transitionAnchor":"前后镜锚点","cameraAxis":"左右关系与动作方向"}]}。严格限长：title≤18字，storyBeat≤55字，transition≤20字，entryState/exitState各≤45字，transitionAnchor/cameraAxis各≤30字。状态只写可验证的差异，不重复剧情、对白和资产设定。镜头数由剧情节拍和真实播音时长决定，不得固定数量。按自然中文每秒约3.6个汉字计算，说话人切换留0.35秒，并至少留1.2秒给动作；duration 为3–8秒整数，超时对白必须拆镜且不得删减因果。必须覆盖所有大纲并完成起承转合。相邻镜头 entryState 必须承接上一镜 exitState；转场必须用建立镜头、声音先行、动作匹配或道具特写桥接。sceneId 不变时锁定空间布局、主光、人物左右关系和180度轴线；相邻镜头必须有动作、信息、情绪或观察角度增量，禁止重复正面中景。';
+      '你是漫剧镜头规划师。本阶段只输出“紧凑镜头状态表”，确定镜头数、真实对白和连续性状态；禁止生成图片提示词、视频提示词、frames，也不要重述资产外观。只返回合法 JSON：{"plannedShots":[{"number":1,"outlineIndex":1,"title":"镜头名","duration":5,"motionLevel":"static|simple|complex","stateChanges":["可见变化"],"frameCount":1,"storyBeat":"因果与结果","sceneId":"场景ID","characterIndexes":[1],"propIndexes":[1],"dialogue":"可直接配音的台词或无对白","transition":"过渡方式","entryState":"开镜可见状态","exitState":"结束可见状态","transitionAnchor":"前后镜锚点","cameraAxis":"左右关系与动作方向"}]}。motionLevel 严格分级：static=对白、旁白、反应、空镜或单一结果；simple=一次明确动作或机位变化；complex=必须表达开始、转折、结果的连续复杂动作。stateChanges 只列实际可见的状态变化，最多3项、每项≤18字；台词、情绪、镜头目的不算状态变化。严格限长：title≤18字，storyBeat≤55字，transition≤20字，entryState/exitState各≤45字，transitionAnchor/cameraAxis各≤30字。状态只写可验证的差异，不重复剧情、对白和资产设定。镜头数由剧情节拍和真实播音时长决定，不得固定数量。按自然中文每秒约3.6个汉字计算，说话人切换留0.35秒，并至少留1.2秒给动作；duration 为3–8秒整数，超时对白必须拆镜且不得删减因果。必须覆盖所有大纲并完成起承转合。相邻镜头 entryState 必须承接上一镜 exitState；转场必须用建立镜头、声音先行、动作匹配或道具特写桥接。sceneId 不变时锁定空间布局、主光、人物左右关系和180度轴线；相邻镜头必须有动作、信息、情绪或观察角度增量，禁止重复正面中景。';
     shotPlanSystem += ' 每个 plannedShot 必须增加 frameCount 整数：静态对白、单一反应、旁白空镜为1；简单动作或一次机位变化为2；明显走位、道具状态变化或动作转折为3；只有无法用3帧表达的关键复杂动作才为4。不得机械地让每镜都使用相同帧数。每个镜头只允许一个核心事件；复杂过程必须拆成“动作开始→动作变化→动作结果”等多个相邻简单镜头。相邻视频必须至少通过动作结果、视线、声音、道具状态或同场景不同角度中的一项明确承接。';
     const compactFoundation = {
       title: foundation.title,
@@ -2282,11 +2282,26 @@ app.post("/agents/comic", async (request, reply) => {
         item.continuity = `入：${item.entryState}；出：${item.exitState}`;
         const requestedFrameCount = Number(item.frameCount),
           complexityText = `${item.storyBeat} ${item.transition} ${item.entryState} ${item.exitState}`,
-          inferredFrameCount = /变身|爆发|交锋|追逐|坠落|跃起|挥|斩|击|冲|破裂|崩塌|状态变化/.test(complexityText)
-            ? 3
-            : /对白|旁白|凝视|沉默|特写|空镜|反应/.test(complexityText)
-              ? 1
-              : 2;
+          hasComplexAction = /变身|爆发|交锋|追逐|坠落|跃起|连续攻击|挥斩|对决|破裂|崩塌|建筑倒塌|状态连续变化/.test(complexityText),
+          hasVisibleChange = /走向|走近|移动|起身|站起|坐下|跪下|落地|转身|抬起|抬手|拾起|推开|打开|关闭|拔出|递出|交给|击中|斩下|冲向|俯冲|切换地点|时间跳转|由.+变为/.test(complexityText),
+          requestedMotionLevel = String(item.motionLevel || "").trim(),
+          fallbackMotionLevel = hasComplexAction ? "complex" : hasVisibleChange ? "simple" : "static",
+          motionLevel = ["static", "simple", "complex"].includes(requestedMotionLevel)
+            ? requestedMotionLevel
+            : fallbackMotionLevel,
+          stateChanges = (Array.isArray(item.stateChanges) ? item.stateChanges : [])
+            .map((change) => compactText(change, 18))
+            .filter(Boolean)
+            .slice(0, 3),
+          // Structured visible-state changes are authoritative. Keywords only
+          // provide compatibility when an upstream model omits the new fields.
+          inferredFrameCount = motionLevel === "complex"
+            ? requestedFrameCount === 4 && stateChanges.length >= 3 ? 4 : 3
+            : motionLevel === "simple"
+              ? 2
+              : 1;
+        item.motionLevel = motionLevel;
+        item.stateChanges = stateChanges;
         item.frameCount = Math.max(
           1,
           Math.min(
@@ -2466,7 +2481,11 @@ app.post("/agents/comic", async (request, reply) => {
         batchStart = 59 + Math.floor((batchIndex * 34) / batchCount),
         batchEnd = 59 + Math.floor(((batchIndex + 1) * 34) / batchCount),
         previousTail = allShots.slice(-2),
-        batchText = `完整镜头规划：\n${JSON.stringify(plannedShots)}\n\n本批必须详细生成镜头 ${firstNumber}–${lastNumber}/${totalShots}：\n${JSON.stringify(expected)}\n\n上一批最后镜头状态：\n${JSON.stringify(previousTail)}\n\n已校验视觉基座：\n${JSON.stringify(foundation)}`,
+        neighborPlan = plannedShots.slice(
+          Math.max(0, batchIndex * shotBatchSize - 1),
+          Math.min(totalShots, (batchIndex + 1) * shotBatchSize + 1),
+        ),
+        batchText = `本批及相邻镜头规划：\n${JSON.stringify(neighborPlan)}\n\n本批必须详细生成镜头 ${firstNumber}–${lastNumber}/${totalShots}：\n${JSON.stringify(expected)}\n\n上一批最后镜头状态：\n${JSON.stringify(previousTail)}\n\n已校验视觉基座：\n${JSON.stringify(foundation)}`,
         batchContent: unknown = visualInputs.length
           ? [
               { type: "text", text: batchText },
@@ -2536,6 +2555,15 @@ app.post("/agents/comic", async (request, reply) => {
           foundationProps = Array.isArray(foundation.props)
             ? foundation.props
             : [];
+        const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+          isCharacterVisible = (evidence: string, name: string) => {
+            if (!name || !evidence.includes(name)) return false;
+            const escaped = escapeRegExp(name),
+              negative = new RegExp(
+                `(?:不出现|禁止|不得|不可|没有|只有|不包含)[^\u3002；；,，]{0,16}${escaped}|${escaped}[^\u3002；；,，]{0,20}(?:不入画|不出现|不可见|尚未可见|尚未落地|留在画外|仅为画外|不在画面)`
+              );
+            return !negative.test(evidence);
+          };
         returned.forEach((rawShot) => {
           if (!rawShot || typeof rawShot !== "object") return;
           const shot = rawShot as Record<string, unknown>,
@@ -2552,7 +2580,7 @@ app.post("/agents/comic", async (request, reply) => {
                     raw && typeof raw === "object"
                       ? String((raw as Record<string, unknown>).name || "").trim()
                       : "";
-                  return name && evidence.includes(name) ? index + 1 : 0;
+                  return isCharacterVisible(evidence, name) ? index + 1 : 0;
                 })
                 .filter(Boolean),
               propIndexes = foundationProps
