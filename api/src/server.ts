@@ -31,6 +31,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { isAbsolute, relative, resolve } from "node:path";
 import { Readable } from "node:stream";
+import { gzipSync, gunzipSync } from "node:zlib";
 
 type CanvasPayload = {
   nodes: unknown[];
@@ -370,14 +371,12 @@ for (const user of getAll(
     newInviteCode(),
     String(user.id),
   ]);
-database.run(`UPDATE canvas_operation_batches SET response='{"expired":true}' WHERE rowid IN (
-  SELECT rowid FROM (
-    SELECT rowid,ROW_NUMBER() OVER(PARTITION BY project_id ORDER BY created_at DESC) AS position
-    FROM canvas_operation_batches
-  ) WHERE position>40
-) AND length(response)>40`);
-const compactedCanvasBatches=database.getRowsModified();
-if(compactedCanvasBatches>0)database.run("VACUUM");
+let compactedCanvasHistory=compactCanvasSyncHistory();
+for(const row of getAll("SELECT rowid AS rowId,response FROM canvas_operation_batches WHERE length(response)>1024 AND response NOT LIKE 'gz:%'",[])){
+  const encoded=encodeCanvasBatchResponse(String(row.response));
+  if(encoded!==String(row.response)){database.run("UPDATE canvas_operation_batches SET response=? WHERE rowid=?",[encoded,Number(row.rowId)]);compactedCanvasHistory++}
+}
+if(compactedCanvasHistory>0)database.run("VACUUM");
 persist();
 
 const app = Fastify({ logger: true, bodyLimit: 150 * 1024 * 1024 });
@@ -4273,7 +4272,7 @@ app.post("/projects/:projectId/canvas/sync", async (request, reply) => {
     [projectId, batchId],
   );
   if (existingBatch) {
-    const cached=JSON.parse(String(existingBatch.response));
+    const cached=decodeCanvasBatchResponse(String(existingBatch.response));
     if(cached?.expired)return reply.code(409).send({error:"canvas_batch_expired",message:"同步批次已过期，请重新载入画布"});
     return cached;
   }
@@ -4506,16 +4505,11 @@ app.post("/projects/:projectId/canvas/sync", async (request, reply) => {
         clientId,
         baseVersion,
         resultVersion,
-        JSON.stringify(response),
+        encodeCanvasBatchResponse(response),
         now,
       ],
     );
-    database.run(`UPDATE canvas_operation_batches SET response='{"expired":true}' WHERE rowid IN (
-      SELECT rowid FROM (
-        SELECT rowid,ROW_NUMBER() OVER(PARTITION BY project_id ORDER BY created_at DESC) AS position
-        FROM canvas_operation_batches WHERE project_id=?
-      ) WHERE position>40
-    ) AND length(response)>40`,[projectId]);
+    compactCanvasSyncHistory(projectId);
     database.run("COMMIT");
   } catch (error) {
     database.run("ROLLBACK");
@@ -5470,6 +5464,39 @@ function persist() {
   const temporaryPath = `${databasePath}.tmp`;
   writeFileSync(temporaryPath, Buffer.from(database.export()));
   renameSync(temporaryPath, databasePath);
+}
+
+function encodeCanvasBatchResponse(value: unknown) {
+  const json=typeof value==="string"?value:JSON.stringify(value);
+  if(json.length<1024||json.startsWith("gz:"))return json;
+  return `gz:${gzipSync(Buffer.from(json),{level:6}).toString("base64")}`;
+}
+
+function decodeCanvasBatchResponse(value: string) {
+  const json=value.startsWith("gz:")?gunzipSync(Buffer.from(value.slice(3),"base64")).toString("utf8"):value;
+  return JSON.parse(json);
+}
+
+function compactCanvasSyncHistory(onlyProjectId?: string) {
+  let changed=0;
+  const projects=onlyProjectId
+    ? getAll("SELECT project_id AS projectId,version FROM project_canvases WHERE project_id=?",[onlyProjectId])
+    : getAll("SELECT project_id AS projectId,version FROM project_canvases",[]);
+  for(const row of projects){
+    const projectId=String(row.projectId),cutoff=Math.max(1,(Number(row.version)||1)-200);
+    database.run("UPDATE project_canvases SET reset_version=MAX(reset_version,?) WHERE project_id=? AND reset_version<?",[cutoff,projectId,cutoff]);
+    changed+=database.getRowsModified();
+    database.run("DELETE FROM canvas_operations WHERE project_id=? AND version<?",[projectId,cutoff]);
+    changed+=database.getRowsModified();
+    database.run(`DELETE FROM canvas_operation_batches WHERE rowid IN (
+      SELECT rowid FROM (
+        SELECT rowid,ROW_NUMBER() OVER(PARTITION BY project_id ORDER BY created_at DESC,rowid DESC) AS position
+        FROM canvas_operation_batches WHERE project_id=?
+      ) WHERE position>40
+    )`,[projectId]);
+    changed+=database.getRowsModified();
+  }
+  return changed;
 }
 
 const configuredImageConcurrency = Number(
