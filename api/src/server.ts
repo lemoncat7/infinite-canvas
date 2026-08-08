@@ -1508,7 +1508,7 @@ app.post("/agents/comic", async (request, reply) => {
     completedBatches?: number;
     updatedAt?: string;
   };
-  const comicPipelineVersion = "adaptive-frames-v1";
+  const comicPipelineVersion = "compact-shot-plan-v1";
   const checkpointFingerprint = createHash("sha256")
     // Resolved visual inputs contain expiring signed URLs. Fingerprinting them
     // makes the same request look new on every retry and discards checkpoints.
@@ -2191,16 +2191,35 @@ app.post("/agents/comic", async (request, reply) => {
         ? [...checkpoint.shots]
         : [];
     let shotPlanSystem =
-      '你是漫剧镜头规划师。本阶段只确定镜头总数、实际对白草稿和连续性状态，禁止生成图片提示词、视频提示词和 frames。只返回合法 JSON：{"plannedShots":[{"number":1,"outlineIndex":1,"title":"镜头名","duration":5,"storyBeat":"承接上一镜并推动下一镜的剧情节拍","sceneId":"场景ID","characterIndexes":[1],"propIndexes":[1],"dialogue":"旁白或角色可直接配音的实际中文台词；无对白则明确写无对白","transition":"与上一镜的过渡方式","continuity":"需要继承的状态","entryState":"开镜时人物站位、姿态、视线、服饰、道具、环境与光线","exitState":"镜头结束时上述状态的准确结果","transitionAnchor":"连接前后镜头的动作、声音、视线、物体或空间锚点","cameraAxis":"人物左右关系、180度轴线和动作方向"}]}。entryState、exitState、transitionAnchor、cameraAxis 各自必须简洁且不超过80个中文字符；只写可验证状态，不重复剧情、对白或资产外观描述。镜头数由剧情节拍和真实播音时长决定，不得固定数量。按自然中文每秒约3.6个汉字计算台词时间，每段台词或说话人切换另留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；duration 必须向上取整且为3–8秒。若实际对白需要超过8秒，必须拆成多个连续镜头，不得加速朗读或删掉关键因果。必须覆盖全部大纲段落，形成完整起承转合。相邻镜头的 entryState 必须准确承接上一镜 exitState；只有明确转场才允许重置，并由 transitionAnchor 说明如何完成。sceneId 变化代表真实地点或时段切换，切换后的第一镜必须是建立镜头或由声音先行、动作匹配、道具特写等明确桥接进入，不能让角色和背景无解释瞬移；必要时新增一个短过渡镜头。sceneId 不变时必须锁定同一空间布局、建筑位置、主光方向和人物左右关系，只允许按剧情改变景别、机位、动作和局部状态。相邻镜头即使在同一场景，也必须有明确的信息、动作或情绪增量；禁止连续安排人物以相同站位、相同正面中景和相同构图重复说话。每连续 2–3 镜应有节奏明确的景别或观察角度变化，但变化必须服务剧情，不能破坏人物站位、视线、180度轴线和动作方向连续性。';
+      '你是漫剧镜头规划师。本阶段只输出“紧凑镜头状态表”，确定镜头数、真实对白和连续性状态；禁止生成图片提示词、视频提示词、frames，也不要重述资产外观。只返回合法 JSON：{"plannedShots":[{"number":1,"outlineIndex":1,"title":"镜头名","duration":5,"frameCount":1,"storyBeat":"因果与结果","sceneId":"场景ID","characterIndexes":[1],"propIndexes":[1],"dialogue":"可直接配音的台词或无对白","transition":"过渡方式","entryState":"开镜可见状态","exitState":"结束可见状态","transitionAnchor":"前后镜锚点","cameraAxis":"左右关系与动作方向"}]}。严格限长：title≤18字，storyBeat≤55字，transition≤20字，entryState/exitState各≤45字，transitionAnchor/cameraAxis各≤30字。状态只写可验证的差异，不重复剧情、对白和资产设定。镜头数由剧情节拍和真实播音时长决定，不得固定数量。按自然中文每秒约3.6个汉字计算，说话人切换留0.35秒，并至少留1.2秒给动作；duration 为3–8秒整数，超时对白必须拆镜且不得删减因果。必须覆盖所有大纲并完成起承转合。相邻镜头 entryState 必须承接上一镜 exitState；转场必须用建立镜头、声音先行、动作匹配或道具特写桥接。sceneId 不变时锁定空间布局、主光、人物左右关系和180度轴线；相邻镜头必须有动作、信息、情绪或观察角度增量，禁止重复正面中景。';
     shotPlanSystem += ' 每个 plannedShot 必须增加 frameCount 整数：静态对白、单一反应、旁白空镜为1；简单动作或一次机位变化为2；明显走位、道具状态变化或动作转折为3；只有无法用3帧表达的关键复杂动作才为4。不得机械地让每镜都使用相同帧数。每个镜头只允许一个核心事件；复杂过程必须拆成“动作开始→动作变化→动作结果”等多个相邻简单镜头。相邻视频必须至少通过动作结果、视线、声音、道具状态或同场景不同角度中的一项明确承接。';
-    const shotPlanText = `创作需求：\n${text}\n\n已校验剧情、人物、道具和场景基座：\n${JSON.stringify(foundation)}`;
+    const compactFoundation = {
+      title: foundation.title,
+      logline: foundation.logline,
+      duration: foundation.duration,
+      aspectRatio: foundation.aspectRatio,
+      outline: foundation.outline,
+      characters: (Array.isArray(foundation.characters) ? foundation.characters : []).map((raw, index) => {
+        const item = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+        return { index: index + 1, name: item.name, description: item.description, voiceProfile: item.voiceProfile };
+      }),
+      props: (Array.isArray(foundation.props) ? foundation.props : []).map((raw, index) => {
+        const item = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+        return { index: index + 1, name: item.name, description: item.description };
+      }),
+      scenes: (Array.isArray(foundation.scenes) ? foundation.scenes : []).map((raw) => {
+        const item = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+        return { sceneId: item.sceneId || item.id, name: item.name, description: item.description || item.scene };
+      }),
+    };
+    const shotPlanText = `创作需求：\n${text}\n\n已校验的紧凑剧情与资产索引：\n${JSON.stringify(compactFoundation)}`;
     let shotPlan = checkpoint.shotPlan
       ? checkpoint.shotPlan
       : await readStage(
           "正在规划完整镜头列表…",
           shotPlanSystem,
           shotPlanText,
-          3200,
+          2800,
           50,
           57,
         );
@@ -2239,9 +2258,8 @@ app.post("/agents/comic", async (request, reply) => {
         item.outlineIndex = outlineIndex;
         item.title =
           String(item.title || "").trim() || `镜头 ${index + 1}`;
-        item.storyBeat =
-          String(item.storyBeat || "").trim() ||
-          String(outline?.content || "").trim();
+        const compactText = (input: unknown, max: number) => String(input || "").trim().slice(0, max);
+        item.storyBeat = compactText(item.storyBeat, 55) || compactText(outline?.content, 55);
         item.dialogue = dialogue;
         item.duration = Math.max(
           3,
@@ -2255,14 +2273,13 @@ app.post("/agents/comic", async (request, reply) => {
             ),
           ),
         );
-        item.transition =
-          String(item.transition || "").trim() ||
+        item.transition = compactText(item.transition, 20) ||
           (index === 0 ? "黑场淡入" : "承接上一镜连续切入");
-        item.continuity = String(item.continuity || "").trim() || "承接上一镜人物、场景与道具状态";
-        item.entryState = String(item.entryState || item.continuity || "").trim();
-        item.exitState = String(item.exitState || item.storyBeat || "").trim();
-        item.transitionAnchor = String(item.transitionAnchor || item.transition || "").trim();
-        item.cameraAxis = String(item.cameraAxis || "保持人物左右关系、180度轴线和动作方向连续").trim();
+        item.entryState = compactText(item.entryState || item.continuity, 45) || "承接上一镜结束状态";
+        item.exitState = compactText(item.exitState || item.storyBeat, 45);
+        item.transitionAnchor = compactText(item.transitionAnchor || item.transition, 30);
+        item.cameraAxis = compactText(item.cameraAxis, 30) || "保持左右关系、轴线与动作方向";
+        item.continuity = `入：${item.entryState}；出：${item.exitState}`;
         const requestedFrameCount = Number(item.frameCount),
           complexityText = `${item.storyBeat} ${item.transition} ${item.entryState} ${item.exitState}`,
           inferredFrameCount = /变身|爆发|交锋|追逐|坠落|跃起|挥|斩|击|冲|破裂|崩塌|状态变化/.test(complexityText)
