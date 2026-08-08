@@ -1544,7 +1544,10 @@ app.post("/agents/comic", async (request, reply) => {
     streamReceivedBytes = 0,
     streamProgress = 0,
     lastStreamContentAt = Date.now(),
-    startedAt = Date.now();
+    startedAt = Date.now(),
+    lastProgressPersistAt = 0,
+    lastPersistedStage = "",
+    lastPersistedProgress = -1;
   try {
     const proxyUrl = String(
       process.env.PROMPT_AGENT_HTTPS_PROXY ||
@@ -1567,17 +1570,29 @@ app.post("/agents/comic", async (request, reply) => {
           ? (value as Record<string, unknown>)
           : {};
       if (event.type === "progress") {
+        const stage = String(event.phase || ""),
+          progress = Math.max(0, Math.min(99, Number(event.progress) || 0)),
+          nowMs = Date.now(),
+          shouldPersist =
+            stage !== lastPersistedStage ||
+            progress >= lastPersistedProgress + 2 ||
+            nowMs - lastProgressPersistAt >= 2500;
         database.run(
           "UPDATE comic_sessions SET generation_status='running',generation_stage=?,generation_progress=?,generation_received_bytes=?,updated_at=? WHERE id=?",
           [
-            String(event.phase || ""),
-            Math.max(0, Math.min(99, Number(event.progress) || 0)),
+            stage,
+            progress,
             Number(event.receivedBytes) || streamReceivedBytes,
             new Date().toISOString(),
             sessionId,
           ],
         );
-        persist();
+        if (shouldPersist) {
+          persist();
+          lastProgressPersistAt = nowMs;
+          lastPersistedStage = stage;
+          lastPersistedProgress = progress;
+        }
       }
       if (!reply.raw.destroyed) reply.raw.write(`${JSON.stringify(value)}\n`);
     };
@@ -1626,8 +1641,9 @@ app.post("/agents/comic", async (request, reply) => {
     ): Promise<Record<string, unknown>> => {
       let responseBody: ReadableStream<Uint8Array> | undefined,
         upstreamController: AbortController | undefined,
-        lastUpstreamError = "";
-      lastStreamContentAt = Date.now();
+        lastUpstreamError = "",
+        stageLastContentAt = Date.now();
+      lastStreamContentAt = stageLastContentAt;
       for (let attempt = 0; attempt < candidateModels.length; attempt++) {
         usedModel = candidateModels[attempt];
         if (attempt > 0)
@@ -1676,7 +1692,8 @@ app.post("/agents/comic", async (request, reply) => {
           if (candidate.ok && candidate.body) {
             responseBody = candidate.body as ReadableStream<Uint8Array>;
             upstreamController = controller;
-            lastStreamContentAt = Date.now();
+            stageLastContentAt = Date.now();
+            lastStreamContentAt = stageLastContentAt;
             break;
           }
           const failure = await candidate.text();
@@ -1715,7 +1732,7 @@ app.post("/agents/comic", async (request, reply) => {
       while (true) {
         const idleRemaining = Math.max(
           1000,
-          idleTimeout - (Date.now() - lastStreamContentAt),
+          idleTimeout - (Date.now() - stageLastContentAt),
         );
         let idleTimer: ReturnType<typeof setTimeout> | undefined;
         const chunk = await Promise.race([
@@ -1754,10 +1771,14 @@ app.post("/agents/comic", async (request, reply) => {
               reasoningDelta = String(
                 packetDelta?.reasoning_content || packetDelta?.reasoning || "",
               );
-            if (reasoningDelta) lastStreamContentAt = Date.now();
+            if (reasoningDelta) {
+              stageLastContentAt = Date.now();
+              lastStreamContentAt = stageLastContentAt;
+            }
             if (!delta) continue;
             raw += delta;
-            lastStreamContentAt = Date.now();
+            stageLastContentAt = Date.now();
+            lastStreamContentAt = stageLastContentAt;
             streamReceivedBytes += Buffer.byteLength(delta, "utf8");
             const progress = holdProgress
               ? progressStart
@@ -2131,7 +2152,7 @@ app.post("/agents/comic", async (request, reply) => {
         ? [...checkpoint.shots]
         : [];
     const shotPlanSystem =
-      '你是漫剧镜头规划师。本阶段只确定镜头总数、实际对白草稿和轻量结构，禁止生成图片提示词、视频提示词和 frames。只返回合法 JSON：{"plannedShots":[{"number":1,"outlineIndex":1,"title":"镜头名","duration":5,"storyBeat":"承接上一镜并推动下一镜的剧情节拍","sceneId":"场景ID","characterIndexes":[1],"propIndexes":[1],"dialogue":"旁白或角色可直接配音的实际中文台词；无对白则明确写无对白","transition":"与上一镜的过渡方式","continuity":"需要继承的状态"}]}。镜头数由剧情节拍和真实播音时长决定，不得固定数量。按自然中文每秒约3.6个汉字计算台词时间，每段台词或说话人切换另留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；duration 必须向上取整且为3–8秒。若实际对白需要超过8秒，必须拆成多个连续镜头，不得加速朗读或删掉关键因果。必须覆盖全部大纲段落，形成完整起承转合。sceneId 变化代表真实地点或时段切换，切换后的第一镜必须是建立镜头或由声音先行、动作匹配、道具特写等明确桥接进入，不能让角色和背景无解释瞬移；必要时新增一个短过渡镜头。sceneId 不变时必须锁定同一空间布局、建筑位置、主光方向和人物左右关系，只允许按剧情改变景别、机位、动作和局部状态。相邻镜头即使在同一场景，也必须有明确的信息、动作或情绪增量；禁止连续安排人物以相同站位、相同正面中景和相同构图重复说话。每连续 2–3 镜应有节奏明确的景别或观察角度变化，但变化必须服务剧情，不能破坏人物站位、视线、180度轴线和动作方向连续性。';
+      '你是漫剧镜头规划师。本阶段只确定镜头总数、实际对白草稿和连续性状态，禁止生成图片提示词、视频提示词和 frames。只返回合法 JSON：{"plannedShots":[{"number":1,"outlineIndex":1,"title":"镜头名","duration":5,"storyBeat":"承接上一镜并推动下一镜的剧情节拍","sceneId":"场景ID","characterIndexes":[1],"propIndexes":[1],"dialogue":"旁白或角色可直接配音的实际中文台词；无对白则明确写无对白","transition":"与上一镜的过渡方式","continuity":"需要继承的状态","entryState":"开镜时人物站位、姿态、视线、服饰、道具、环境与光线","exitState":"镜头结束时上述状态的准确结果","transitionAnchor":"连接前后镜头的动作、声音、视线、物体或空间锚点","cameraAxis":"人物左右关系、180度轴线和动作方向"}]}。镜头数由剧情节拍和真实播音时长决定，不得固定数量。按自然中文每秒约3.6个汉字计算台词时间，每段台词或说话人切换另留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；duration 必须向上取整且为3–8秒。若实际对白需要超过8秒，必须拆成多个连续镜头，不得加速朗读或删掉关键因果。必须覆盖全部大纲段落，形成完整起承转合。相邻镜头的 entryState 必须准确承接上一镜 exitState；只有明确转场才允许重置，并由 transitionAnchor 说明如何完成。sceneId 变化代表真实地点或时段切换，切换后的第一镜必须是建立镜头或由声音先行、动作匹配、道具特写等明确桥接进入，不能让角色和背景无解释瞬移；必要时新增一个短过渡镜头。sceneId 不变时必须锁定同一空间布局、建筑位置、主光方向和人物左右关系，只允许按剧情改变景别、机位、动作和局部状态。相邻镜头即使在同一场景，也必须有明确的信息、动作或情绪增量；禁止连续安排人物以相同站位、相同正面中景和相同构图重复说话。每连续 2–3 镜应有节奏明确的景别或观察角度变化，但变化必须服务剧情，不能破坏人物站位、视线、180度轴线和动作方向连续性。';
     const shotPlanText = `创作需求：\n${text}\n\n已校验剧情、人物、道具和场景基座：\n${JSON.stringify(foundation)}`;
     let shotPlan = checkpoint.shotPlan
       ? checkpoint.shotPlan
@@ -2198,6 +2219,10 @@ app.post("/agents/comic", async (request, reply) => {
           String(item.transition || "").trim() ||
           (index === 0 ? "黑场淡入" : "承接上一镜连续切入");
         item.continuity = String(item.continuity || "").trim() || "承接上一镜人物、场景与道具状态";
+        item.entryState = String(item.entryState || item.continuity || "").trim();
+        item.exitState = String(item.exitState || item.storyBeat || "").trim();
+        item.transitionAnchor = String(item.transitionAnchor || item.transition || "").trim();
+        item.cameraAxis = String(item.cameraAxis || "保持人物左右关系、180度轴线和动作方向连续").trim();
         if (!Array.isArray(item.characterIndexes)) item.characterIndexes = [];
         if (!Array.isArray(item.propIndexes)) item.propIndexes = [];
         return item;
@@ -2229,6 +2254,9 @@ app.post("/agents/comic", async (request, reply) => {
         else if(duration<speech.minimumSeconds)issues.push(`镜头${index+1}时长${duration}秒不足，至少需${speech.minimumSeconds}秒`);
         if (!String(item.transition || "").trim())
           issues.push(`镜头${index + 1}.transition 为空`);
+        for (const field of ["entryState", "exitState", "transitionAnchor", "cameraAxis"])
+          if (!String(item[field] || "").trim())
+            issues.push(`镜头${index + 1}.${field} 为空`);
         if (
           !Number.isInteger(outlineIndex) ||
           outlineIndex < 1 ||
@@ -2261,15 +2289,34 @@ app.post("/agents/comic", async (request, reply) => {
         receivedBytes: streamReceivedBytes,
         rewrite,
       });
-      shotPlan = await readStage(
-        "镜头规划重写中…",
-        shotPlanSystem,
-        `保持故事事实不变，修复下列问题并返回完整 plannedShots。\n${issues.join("\n")}\n\n原规划：\n${JSON.stringify(shotPlan)}\n\n基座：\n${shotPlanText}`,
-        3200,
-        57,
-        57,
-        true,
-      );
+      const splitIssue = issues.map((issue) => issue.match(/^镜头(\d+)对白预计需\d+秒，必须拆镜$/)).find(Boolean),
+        splitIndex = splitIssue ? Number(splitIssue[1]) - 1 : -1,
+        currentPlanned = Array.isArray(shotPlan.plannedShots) ? [...shotPlan.plannedShots] : [];
+      if (splitIndex >= 0 && currentPlanned[splitIndex]) {
+        const neighbors = currentPlanned.slice(Math.max(0, splitIndex - 1), splitIndex + 2),
+          localRepair = await readStage(
+            `镜头 ${splitIndex + 1} 对白拆分中…`,
+            `${shotPlanSystem} 本次只拆分指定的一个超时镜头，plannedShots 仅返回替换该镜头的连续子镜头，不得返回邻镜。完整保留原对白、剧情事实和因果，不得删词；每个子镜头对白均需在8秒内自然说完。`,
+            `问题：${issues.filter((issue) => issue.startsWith(`镜头${splitIndex + 1}`)).join("\n")}\n\n需要拆分的镜头：\n${JSON.stringify(currentPlanned[splitIndex])}\n\n前后镜头仅供连续性参考：\n${JSON.stringify(neighbors)}\n\n视觉与剧情基座：\n${shotPlanText}`,
+            1800,
+            57,
+            57,
+            true,
+          ), replacements = Array.isArray(localRepair.plannedShots) ? localRepair.plannedShots : [];
+        if (!replacements.length) throw new SyntaxError("超时对白镜头拆分返回为空");
+        currentPlanned.splice(splitIndex, 1, ...replacements);
+        shotPlan = { ...shotPlan, plannedShots: currentPlanned };
+      } else {
+        shotPlan = await readStage(
+          "镜头规划重写中…",
+          shotPlanSystem,
+          `保持故事事实不变，修复下列问题并返回完整 plannedShots。\n${issues.join("\n")}\n\n原规划：\n${JSON.stringify(shotPlan)}\n\n基座：\n${shotPlanText}`,
+          3200,
+          57,
+          57,
+          true,
+        );
+      }
       shotPlan = normalizeShotPlan(shotPlan);
     }
     const remainingPlanIssues = shotPlanIssues(shotPlan);
@@ -2306,8 +2353,8 @@ app.post("/agents/comic", async (request, reply) => {
       receivedBytes: streamReceivedBytes,
       totalShots,
     });
-    const shotsSystem = `你是漫剧分镜导演。严格按照本批轻量镜头规划逐镜扩写，只返回合法 JSON：{"shots":[完整镜头数组]}，返回数量和 number 必须与本批规划完全一致，不得合并、删除或新增镜头。每项必须包含 number、title、duration、storyBeat、action、sceneId、scene、scenePrompt、characterIndexes、characterForms、propIndexes、hasAnonymousCrowd、crowdPrompt、dialogue、frames、imagePrompt、videoPrompt、transition、continuity、referenceIndexes。frames 每项必须包含 title、imagePrompt、keyframe、inherit、change、lock、characterIndexes、characterForms、propIndexes；这些帧级索引只列当前画面实际可见的人物、形态和关键道具，不得把下一帧才出现的素材提前列入上一帧。imagePrompt 与每个 frame.imagePrompt 不得超过100字，scenePrompt 和 crowdPrompt 不得超过160字，videoPrompt 不得超过125字；角色和道具索引严格引用视觉基座。必须沿用镜头规划中的实际对白和已计算 duration，不得在扩写阶段添加放不下的新台词。自然中文按每秒约3.6个汉字计算，每段台词或说话人切换留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；3–5秒以一句短台词为主，6–8秒最多两句。scenePrompt 只能描述无人物环境、空间、UI界面和光影素材，禁止人物、人体、手部和角色剪影。frame.imagePrompt 才是完整剧情分镜：必须明确当前出镜人物、动作、景别、构图、场景状态和必要道具，且与该帧 characterIndexes、characterForms、propIndexes 一一对应；禁止三视图、设定板、素材拼贴、重复人物和无关元素。若本帧参考上一分镜或其他图片，inherit 必须列出保持不变的可见项，change 只能列本帧相对参考图的主要变化，lock 必须列出不得改变的人物数量与身份、服饰发型、道具、场景结构、光线和空间关系。hasAnonymousCrowd 只能根据画面是否真的需要匿名人物取值；“无人知道、不为人知、人尽皆知、鲜为人知”等修饰词绝不表示有人群。仅当画面明确出现路人、群众或围观者时才设 true 并填写 crowdPrompt，否则必须为 false、crowdPrompt 为空，并禁止模型自行增加背景人物。未明确要求时禁止动物或车辆特写、可读文字、字幕、标牌、Logo、水印和无关装饰。相邻分镜必须延续人物身份、站位、视线、动作结果和场景锚点，但不能只是复制上一张：change 必须写清本帧新增动作、表情、景别、机位或焦点变化。禁止连续三个镜头使用相同景别、相同正面机位、相同人物尺寸和相同中心构图；在特写、近景、中景、全景、过肩、侧面或高低机位之间按剧情目的变化，避免为了变化而越轴。视频提示词只保留主要动作、运镜、结束状态和必要对白，让连接分镜按既定人物身份与场景演进，禁止重新设计人物、换装、换场景或切换画风。${comicProductionRules}\n${comicContinuityRules}\n${comicTransitionRules}\n${comicDialogueRules}\n${comicStyleRules}`;
-    const shotBatchSize = 4,
+    const shotsSystem = `你是漫剧分镜导演。严格按照本批轻量镜头规划逐镜扩写，只返回合法 JSON：{"shots":[完整镜头数组]}，返回数量和 number 必须与本批规划完全一致，不得合并、删除或新增镜头。每项必须包含 number、title、duration、storyBeat、action、sceneId、scene、scenePrompt、characterIndexes、characterForms、propIndexes、hasAnonymousCrowd、crowdPrompt、dialogue、frames、imagePrompt、videoPrompt、transition、continuity、referenceIndexes。frames 每项必须包含 title、imagePrompt、keyframe、inherit、change、lock、characterIndexes、characterForms、propIndexes；这些帧级索引只列当前画面实际可见的人物、形态和关键道具，不得把下一帧才出现的素材提前列入上一帧。必须把镜头规划的 entryState 写入首帧 inherit，把 exitState 落实到末帧 change/lock，并严格遵守 transitionAnchor 与 cameraAxis；不得在扩写时重新解释或丢失这些连续性状态。imagePrompt 与每个 frame.imagePrompt 不得超过100字，scenePrompt 和 crowdPrompt 不得超过160字，videoPrompt 不得超过125字；角色和道具索引严格引用视觉基座。必须沿用镜头规划中的实际对白和已计算 duration，不得在扩写阶段添加放不下的新台词。自然中文按每秒约3.6个汉字计算，每段台词或说话人切换留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；3–5秒以一句短台词为主，6–8秒最多两句。scenePrompt 只能描述无人物环境、空间、UI界面和光影素材，禁止人物、人体、手部和角色剪影。frame.imagePrompt 才是完整剧情分镜：必须明确当前出镜人物、动作、景别、构图、场景状态和必要道具，且与该帧 characterIndexes、characterForms、propIndexes 一一对应；禁止三视图、设定板、素材拼贴、重复人物和无关元素。若本帧参考上一分镜或其他图片，inherit 必须列出保持不变的可见项，change 只能列本帧相对参考图的主要变化，lock 必须列出不得改变的人物数量与身份、服饰发型、道具、场景结构、光线和空间关系。hasAnonymousCrowd 只能根据画面是否真的需要匿名人物取值；“无人知道、不为人知、人尽皆知、鲜为人知”等修饰词绝不表示有人群。仅当画面明确出现路人、群众或围观者时才设 true 并填写 crowdPrompt，否则必须为 false、crowdPrompt 为空，并禁止模型自行增加背景人物。未明确要求时禁止动物或车辆特写、可读文字、字幕、标牌、Logo、水印和无关装饰。相邻分镜必须延续人物身份、站位、视线、动作结果和场景锚点，但不能只是复制上一张：change 必须写清本帧新增动作、表情、景别、机位或焦点变化。禁止连续三个镜头使用相同景别、相同正面机位、相同人物尺寸和相同中心构图；在特写、近景、中景、全景、过肩、侧面或高低机位之间按剧情目的变化，避免为了变化而越轴。视频提示词只保留主要动作、运镜、结束状态和必要对白，让连接分镜按既定人物身份与场景演进，禁止重新设计人物、换装、换场景或切换画风。${comicProductionRules}\n${comicContinuityRules}\n${comicTransitionRules}\n${comicDialogueRules}\n${comicStyleRules}`;
+    const shotBatchSize = 6,
       batchCount = Math.ceil(totalShots / shotBatchSize);
     let resumeBatch = Math.min(
       batchCount,
@@ -2358,7 +2405,7 @@ app.post("/agents/comic", async (request, reply) => {
         `正在生成镜头 ${firstNumber}–${lastNumber}/${totalShots}…`,
         shotsSystem,
         batchContent,
-        4200,
+        6200,
         batchStart,
         Math.max(batchStart + 1, batchEnd - 1),
       );
@@ -2413,7 +2460,7 @@ app.post("/agents/comic", async (request, reply) => {
           frames.forEach((rawFrame) => {
             if (!rawFrame || typeof rawFrame !== "object") return;
             const frame = rawFrame as Record<string, unknown>,
-              evidence = `${String(frame.title || "")} ${String(frame.imagePrompt || "")} ${String(frame.inherit || "")} ${String(frame.change || "")}`,
+              evidence = `${String(frame.title || "")} ${String(frame.imagePrompt || "")} ${String(frame.inherit || "")} ${String(frame.change || "")} ${String(frame.lock || "")}`,
               characterIndexes = foundationCharacters
                 .map((raw, index) => {
                   const name =
@@ -2445,6 +2492,48 @@ app.post("/agents/comic", async (request, reply) => {
               );
             });
           });
+          const visibleCharacterIndexes = new Set<number>(),
+            visiblePropIndexes = new Set<number>();
+          frames.forEach((rawFrame) => {
+            if (!rawFrame || typeof rawFrame !== "object") return;
+            const frame = rawFrame as Record<string, unknown>;
+            (Array.isArray(frame.characterIndexes)
+              ? frame.characterIndexes
+              : []
+            ).forEach((index) => visibleCharacterIndexes.add(Number(index)));
+            (Array.isArray(frame.propIndexes) ? frame.propIndexes : []).forEach(
+              (index) => visiblePropIndexes.add(Number(index)),
+            );
+          });
+          // Shot-level dependencies are derived from what is actually visible in
+          // its frames. This prevents off-screen dialogue and anonymous crowds
+          // from accidentally attaching unrelated character bases.
+          shot.characterIndexes = [...visibleCharacterIndexes].filter(
+            (index) =>
+              Number.isInteger(index) &&
+              index >= 1 &&
+              index <= foundationCharacters.length,
+          );
+          shot.propIndexes = [...visiblePropIndexes].filter(
+            (index) =>
+              Number.isInteger(index) &&
+              index >= 1 &&
+              index <= foundationProps.length,
+          );
+          const allowedShotCharacters = new Set(
+            shot.characterIndexes as number[],
+          );
+          shot.characterForms = (Array.isArray(shot.characterForms)
+            ? shot.characterForms
+            : []
+          ).filter(
+            (raw) =>
+              raw &&
+              typeof raw === "object" &&
+              allowedShotCharacters.has(
+                Number((raw as Record<string, unknown>).characterIndex),
+              ),
+          );
         });
         return value;
       };
@@ -2486,15 +2575,39 @@ app.post("/agents/comic", async (request, reply) => {
           receivedBytes: streamReceivedBytes,
           rewrite,
         });
-        shotPart = await readStage(
-          `镜头 ${firstNumber}–${lastNumber}/${totalShots} 重写中…`,
-          shotsSystem,
-          `严格保持本批镜头规划、编号和剧情事实，修复下列问题。\n${issues.join("\n")}\n\n本批规划：\n${JSON.stringify(expected)}\n\n待重写 JSON：\n${JSON.stringify(shotPart)}\n\n上一批末镜：\n${JSON.stringify(previousTail)}`,
-          4200,
+        const invalidNumbers = new Set<number>();
+        for (const issue of issues) {
+          const matched = issue.match(/镜头\s*(\d+)/), rawNumber = Number(matched?.[1]);
+          if (!Number.isInteger(rawNumber)) continue;
+          const actual = expected.some((item) => Number(item.number) === rawNumber)
+            ? rawNumber
+            : rawNumber >= 1 && rawNumber <= expected.length
+              ? Number(expected[rawNumber - 1]?.number)
+              : 0;
+          if (actual) invalidNumbers.add(actual);
+        }
+        const repairExpected = invalidNumbers.size
+          ? expected.filter((item) => invalidNumbers.has(Number(item.number)))
+          : expected;
+        const repaired = await readStage(
+          `镜头 ${[...invalidNumbers].join("、") || `${firstNumber}–${lastNumber}`} 定向重写中…`,
+          `${shotsSystem} 本次只返回指定问题镜头，shots 数组不得包含其他编号。`,
+          `只修复下列问题，不得改变其他已通过镜头。\n${issues.join("\n")}\n\n只需返回的镜头规划：\n${JSON.stringify(repairExpected)}\n\n当前完整批次：\n${JSON.stringify(shotPart)}\n\n上一批末镜：\n${JSON.stringify(previousTail)}`,
+          Math.min(6200, 1000 + repairExpected.length * 1100),
           Math.max(batchStart, batchEnd - 1),
           Math.max(batchStart, batchEnd - 1),
           true,
         );
+        const currentShots = Array.isArray(shotPart.shots) ? [...shotPart.shots] : [],
+          repairedShots = Array.isArray(repaired.shots) ? repaired.shots : [],
+          repairedByNumber = new Map(repairedShots.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object")).map((item) => [Number(item.number), item]));
+        shotPart = {
+          ...shotPart,
+          shots: currentShots.map((item) => {
+            const number = Number(item && typeof item === "object" ? (item as Record<string, unknown>).number : 0);
+            return repairedByNumber.get(number) || item;
+          }),
+        };
         shotPart = normalizeFrameReferences(normalizeShotBatch(shotPart));
       }
       const remaining = batchIssues(shotPart);
