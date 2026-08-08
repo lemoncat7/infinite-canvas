@@ -394,6 +394,10 @@ setInterval(() => void probeLocalImageFallback(), 15000).unref();
 const notificationStreams = new Map<FastifyReply["raw"], string>();
 const activeComicPlans = new Set<string>();
 const activeComicChats = new Set<string>();
+const ttsPreviewRequests = new Map<
+  string,
+  Promise<{ bytes: Buffer; mimeType: string }>
+>();
 function sendNotificationSync(stream: FastifyReply["raw"]) {
   if (!stream.destroyed)
     stream.write(
@@ -490,8 +494,8 @@ app.get("/tts/preview", async (request, reply) => {
   const text = String(query.text || "").trim().slice(0, 120);
   if (!text) return reply.code(400).send({ error: "试听文本不能为空" });
   const provider = getTtsProvider(String(query.providerId || "easyvoice-local"));
-  if (!provider?.synthesizeStream)
-    return reply.code(400).send({ error: "当前语音服务不支持流式试听" });
+  if (!provider)
+    return reply.code(400).send({ error: "当前语音服务不可用" });
   const voiceId = resolveEasyVoiceId(String(query.voiceId || "zh-CN-XiaoxiaoNeural"));
   try {
     const supportedVoice = (await provider.voices()).some(
@@ -502,22 +506,36 @@ app.get("/tts/preview", async (request, reply) => {
     const speed = Math.max(0.5, Math.min(2, Number(query.speed) || 1));
     const pitch = Math.max(-50, Math.min(50, Number(query.pitch) || 0));
     const volume = Math.max(0, Math.min(2, Number(query.volume) || 1));
-    const result = await provider.synthesizeStream({
-      text,
-      voiceId,
-      speed,
-      pitch,
-      volume,
-      format: "mp3",
-      language: "zh-CN",
-      emotion: "中性",
-    });
+    const previewInput = {
+        text,
+        voiceId,
+        speed,
+        pitch,
+        volume,
+        format: "mp3" as const,
+        language: "zh-CN",
+        emotion: "中性",
+      },
+      previewKey = createHash("sha256")
+        .update(JSON.stringify({ provider: provider.id, ...previewInput }))
+        .digest("hex");
+    let previewRequest = ttsPreviewRequests.get(previewKey);
+    if (!previewRequest) {
+      previewRequest = provider.synthesize(previewInput);
+      ttsPreviewRequests.set(previewKey, previewRequest);
+      // Media elements can request the same URL twice while probing metadata.
+      // Keep the completed promise briefly so both requests share one TTS job.
+      void previewRequest.finally(() =>
+        setTimeout(() => ttsPreviewRequests.delete(previewKey), 10_000),
+      );
+    }
+    const result = await previewRequest;
     return reply
       .type(result.mimeType)
       .header("cache-control", "no-store")
-      .header("x-accel-buffering", "no")
       .header("content-disposition", "inline")
-      .send(Readable.fromWeb(result.stream as any));
+      .header("content-length", String(result.bytes.length))
+      .send(result.bytes);
   } catch (error) {
     request.log.error({ error, provider: provider.id }, "tts preview stream failed");
     return reply.code(502).send({
@@ -1436,7 +1454,7 @@ app.post("/agents/comic", async (request, reply) => {
   const comicCharacterSheetRules =
     "人物资产规则：characters.imagePrompt 与 forms.imagePrompt 不受分镜 100 字限制，应提供 180–350 个中文字符的专业角色设定板说明。Base 人物必须是 16:9 横向 Character Design Sheet，同一人物同一比例排列正面、严格侧面、背面三视图，并包含头部/五官/发型近景、服装内外层结构、鞋靴、关键装备、武器、饰品、徽记和材质纹理的独立局部放大；写清年龄感、身高体型、肤色、发色瞳色、轮廓、主辅色和不可变化的身份锚点。不要生成三种不同人物、动作海报或复杂场景。特殊形态也使用三视图设定板，严格继承 Base 的脸、发型、体型和身份锚点，只展示该形态发生变化的服饰、伤势、装备或身体状态。";
   const comicStyleRules =
-    "全局视觉风格规则：tone 必须以“风格类型：动漫风 / 拟人风 / 写实风 / 三维卡通风 / 插画风”中的一个明确类别开头，再给出可直接用于生成的统一规范，包括线条、上色、材质、光影、色彩与镜头质感。根据用户需求选择类别，不得擅自把一种风格转换成另一种。characters、forms、props、scenePrompt、frames.imagePrompt 与 videoPrompt 必须全部继承该风格类型和 tone；每一个提示词都必须明确写出同一个“风格类型：××风”，场景、人物、分镜与视频不得依靠模型自行猜测风格。";
+    "全局视觉风格规则：tone 必须以“风格类型：动漫风 / 拟人风 / 写实风 / 三维卡通风 / 插画风”中的一个明确类别开头，再给出可直接用于生成的统一规范，包括线条、上色、材质、光影、色彩与镜头质感。根据用户需求选择类别，不得擅自把一种风格转换成另一种。characters、forms、props、scenePrompt、frames.imagePrompt 与 videoPrompt 必须全部继承该风格类型和 tone；每一个提示词都必须明确写出同一个“风格类型：××风”，场景、人物、分镜与视频不得依靠模型自行猜测风格。分镜图专用规则：每个 frames.imagePrompt 使用100–320个中文字符，本规则覆盖其他位置的分镜100字限制；按顺序写明统一风格与画幅、当前具名主体和唯一核心动作、表情视线及空间关系、静态镜头设计（景别、机位、焦段、构图和视觉焦点）、从上一帧或连接参考图继承的内容、本帧唯一变化、人物左右关系与摄影轴线、光线和必要效果、明确排除项。静态分镜禁止写推拉摇移等动态运镜，只描述运镜完成后的机位和取景结果。必须明确只生成当前帧实际出现的人物和道具；没有匿名群众时写明禁止路人、群众、人物剪影和人形背景主体；禁止新增角色、复制人物、换装、改变场景结构、额外肢体、三视图、设定板、拼贴、多格漫画、字幕、气泡字、Logo、水印和无关可读文字。";
   let storedBrief = String(comicSession.brief || "{}"), confirmedBriefTitle = "";
   try {
     const value = JSON.parse(storedBrief) as { constraints?: unknown };
@@ -1936,8 +1954,8 @@ app.post("/agents/comic", async (request, reply) => {
                 : {},
             prompt = String(item.imagePrompt || "");
           if (!prompt) issues.push(`镜头${index + 1}.imagePrompt 为空`);
-          if (prompt.length > 100)
-            issues.push(`镜头${index + 1}.imagePrompt ${prompt.length}>100`);
+          if (prompt.length > 320)
+            issues.push(`镜头${index + 1}.imagePrompt ${prompt.length}>320`);
           const scenePrompt = String(item.scenePrompt || "");
           if (!scenePrompt) issues.push(`镜头${index + 1}.scenePrompt 为空`);
           if (scenePrompt.length > 160)
@@ -1982,9 +2000,13 @@ app.post("/agents/comic", async (request, reply) => {
               issues.push(
                 `镜头${index + 1}.frames[${frameIndex}].imagePrompt 为空`,
               );
-            if (framePrompt.length > 100)
+            if (framePrompt.length > 0 && framePrompt.length < 100)
               issues.push(
-                `镜头${index + 1}.frames[${frameIndex}].imagePrompt ${framePrompt.length}>100`,
+                `镜头${index + 1}.frames[${frameIndex}].imagePrompt ${framePrompt.length}<100，缺少完整分镜约束`,
+              );
+            if (framePrompt.length > 320)
+              issues.push(
+                `镜头${index + 1}.frames[${frameIndex}].imagePrompt ${framePrompt.length}>320`,
               );
             if (!["start", "middle", "end"].includes(String(frame.keyframe)))
               issues.push(`镜头${index + 1}.frames[${frameIndex}].keyframe 无效`);
@@ -2414,6 +2436,14 @@ app.post("/agents/comic", async (request, reply) => {
         batchStart,
         Math.max(batchStart + 1, batchEnd - 1),
       );
+      emit({
+        type: "progress",
+        progress: Math.max(batchStart, batchEnd - 1),
+        phase: `正在校验镜头 ${firstNumber}–${lastNumber}/${totalShots}…`,
+        receivedBytes: streamReceivedBytes,
+        totalShots,
+        completedShots: allShots.length,
+      });
       const normalizeShotBatch = (value: Record<string, unknown>) => {
         const returned = Array.isArray(value.shots) ? value.shots : [],
           byNumber = new Map<number, Record<string, unknown>>();
@@ -2640,7 +2670,7 @@ app.post("/agents/comic", async (request, reply) => {
     emit({
       type: "progress",
       progress: 94,
-      phase: "正在校验批次边界连续性…",
+      phase: `正在校验 ${Math.max(0, batchCount - 1)} 个批次边界…`,
       receivedBytes: streamReceivedBytes,
     });
     const continuityAuditSubset = (shotNumbers: number[] = []) => {
@@ -2665,8 +2695,9 @@ app.post("/agents/comic", async (request, reply) => {
         .sort((left, right) => left - right)
         .map((index) => allShots[index]);
     };
-    const auditSystem =
+    let auditSystem =
       '你是漫剧连续性审校。只返回合法 JSON：{"valid":true,"issues":[],"repairs":[{"shotNumber":1,"sceneId":"修正后场景ID","scene":"修正后地点","scenePrompt":"修正后无人场景","imagePrompt":"修正后主画面","storyBeat":"修正后剧情承接","action":"修正后动作","dialogue":"修正后完整对白","videoPrompt":"修正后视频提示","transition":"修正后过渡","continuity":"修正后连续性","exitState":"修正后出口状态","transitionAnchor":"修正后过渡锚点","cameraAxis":"修正后轴线","frames":[{"title":"原标题","imagePrompt":"不超过100字的修正分镜","keyframe":"start","inherit":"明确继承项","change":"本帧唯一变化","lock":"不可改变项","characterIndexes":[],"characterForms":[],"propIndexes":[]}]}]}。检查相邻镜头和分段边界的因果、人物形态、道具状态、地点时段、场景结构、建筑位置、主光方向、人物左右站位、视线、180度轴线、动作方向、景别变化、对白与悬念是否承接。sceneId 相同时画面必须像同一空间的连续拍摄；sceneId 变化时必须有建立镜头或明确视听桥接，禁止无解释瞬移。只给确有问题的镜头 repairs，不重写整个方案。修复地点冲突时必须同时返回 sceneId、scene、scenePrompt、imagePrompt、exitState、transitionAnchor 和 cameraAxis；若错误存在于分镜画面，必须返回完整 frames 定向修正 imagePrompt、inherit、change、lock，不能只改旁边的 continuity 文本来掩盖；若原 frames 无错则不要返回 frames。对白事实错误必须返回 dialogue，动作错误必须返回 action，视频演出与对白不一致必须返回 videoPrompt。修改 dialogue 时保持原 duration 可自然说完，修改 videoPrompt 时不超过125字并明确无字幕。';
+    auditSystem += " 修复 frames.imagePrompt 时必须保持100–320个中文字符，并保留主体、静态镜头设计、参考继承、本帧变化、连续性和排除项，不得压缩回简略描述。";
     let audit = await readStage(
       "正在审校跨段过渡…",
       auditSystem,
@@ -2696,7 +2727,7 @@ app.post("/agents/comic", async (request, reply) => {
       emit({
         type: "progress",
         progress: 97,
-        phase: `发现 ${repairs.length} 处跨段问题，正在修复…`,
+        phase: `镜头 ${repairs.map((repair) => Number(repair && typeof repair === "object" ? (repair as Record<string, unknown>).shotNumber : 0)).filter(Boolean).join("、") || "边界"} 未通过，正在第 ${auditAttempt} 次定向修复…`,
         receivedBytes: streamReceivedBytes,
         repairAttempt: auditAttempt,
       });
@@ -2736,7 +2767,7 @@ app.post("/agents/comic", async (request, reply) => {
       emit({
         type: "progress",
         progress: 97,
-        phase: "正在复检跨段修复结果…",
+        phase: `正在复检第 ${auditAttempt} 次边界修复结果…`,
         receivedBytes: streamReceivedBytes,
         repairAttempt: auditAttempt,
       });
