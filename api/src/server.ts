@@ -2069,6 +2069,20 @@ app.post("/agents/comic", async (request, reply) => {
     });
     const assetSystem = `你是漫剧视觉设定师。只返回合法 JSON：{"characters":[{"name":"角色名","description":"稳定设定","voiceProfile":"中文声线","visualAsset":true,"imagePrompt":"180–420字角色设定板提示词","forms":[]}],"props":[{"name":"道具名","description":"固定设定","imagePrompt":"不超过160字的道具图提示词"}]}。只建立跨镜头需要保持一致的具名人物和关键道具，普通路人不建档。人物提示词的生成目标只能是单一角色设定板，展示固定外观、服饰、三视图与细节，禁止剧情场景、表演动作、多人互动、海报构图和复制角色。道具提示词的生成目标只能是单一道具设定素材，展示结构、材质、颜色与细节，禁止人物、人体、手持动作、剧情表演和复杂背景。角色 imagePrompt 与形态 imagePrompt 均不得超过420字，道具 imagePrompt 不得超过160字。${comicCharacterSheetRules}\n${comicStyleRules}`;
     const assetText = `已确认创作需求：\n${text}\n\n已校验剧情大纲：\n${JSON.stringify(story)}`;
+    const sceneSystem = `你是漫剧场景美术。只返回合法 JSON：{"scenes":[{"sceneId":"稳定地点与时段ID","name":"场景名","description":"空间结构与剧情用途","imagePrompt":"不超过160字的无人物场景设定图提示词"}]}。合并同一地点与时段，状态变化不得重复创建场景。每条 imagePrompt 必须明确写出“无人物场景基准图，禁止出现任何人物、人体、手部、角色剪影或人形主体”，只生成可供后续分镜合成使用的空环境、空间结构、UI界面、剧情明确要求的固定物体与光影素材。即使剧情中该场景原本有人，场景基准图也必须保持无人；人物只能在后续 frames 分镜合成阶段加入。未明确要求时禁止动物、车辆特写、可读文字、字幕、标牌、Logo 和水印，不能因为“无人知道、不为人知、人尽皆知”等修饰性语句生成任何人物或人群。每条 imagePrompt 不得超过160字，并继承统一风格。`;
+    // Scene assets are deliberately character-free, so they only depend on
+    // the approved story. Generate them alongside character/prop assets.
+    const sceneText = `已确认创作需求：\n${text}\n\n已校验剧情大纲：\n${JSON.stringify(story)}`,
+      sceneInitialPromise = checkpoint.sceneBible
+        ? Promise.resolve(checkpoint.sceneBible)
+        : readStage(
+            "正在生成场景设定…",
+            sceneSystem,
+            sceneText,
+            2600,
+            20,
+            34,
+          );
     let assets = checkpoint.assets
       ? checkpoint.assets
       : await readStage(
@@ -2105,18 +2119,7 @@ app.post("/agents/comic", async (request, reply) => {
       phase: "人物与道具设定校验通过",
       receivedBytes: streamReceivedBytes,
     });
-    const sceneSystem = `你是漫剧场景美术。只返回合法 JSON：{"scenes":[{"sceneId":"稳定地点与时段ID","name":"场景名","description":"空间结构与剧情用途","imagePrompt":"不超过160字的无人物场景设定图提示词"}]}。合并同一地点与时段，状态变化不得重复创建场景。每条 imagePrompt 必须明确写出“无人物场景基准图，禁止出现任何人物、人体、手部、角色剪影或人形主体”，只生成可供后续分镜合成使用的空环境、空间结构、UI界面、剧情明确要求的固定物体与光影素材。即使剧情中该场景原本有人，场景基准图也必须保持无人；人物只能在后续 frames 分镜合成阶段加入。未明确要求时禁止动物、车辆特写、可读文字、字幕、标牌、Logo 和水印，不能因为“无人知道、不为人知、人尽皆知”等修饰性语句生成任何人物或人群。每条 imagePrompt 不得超过160字，并继承统一风格。`;
-    const sceneText = `剧情与视觉基座：\n${JSON.stringify({ ...story, ...assets })}`;
-    let sceneBible = checkpoint.sceneBible
-      ? checkpoint.sceneBible
-      : await readStage(
-          "正在生成场景设定…",
-          sceneSystem,
-          sceneText,
-          2600,
-          36,
-          48,
-        );
+    let sceneBible = await sceneInitialPromise;
     sceneBible = await rewriteUntilValid(
       "场景设定",
       sceneBible,
@@ -2637,15 +2640,43 @@ app.post("/agents/comic", async (request, reply) => {
     emit({
       type: "progress",
       progress: 94,
-      phase: "正在执行全局连续性校验…",
+      phase: "正在校验批次边界连续性…",
       receivedBytes: streamReceivedBytes,
     });
+    const continuityAuditSubset = (shotNumbers: number[] = []) => {
+      const indexes = new Set<number>();
+      if (shotNumbers.length) {
+        for (const number of shotNumbers)
+          for (let index = number - 3; index <= number + 1; index++)
+            if (index >= 0 && index < allShots.length) indexes.add(index);
+      } else {
+        // Each batch already passed structural validation. The final semantic
+        // pass only needs the opening/ending context and the four-shot windows
+        // around boundaries, where cross-batch discontinuities can occur.
+        [0, 1, allShots.length - 2, allShots.length - 1].forEach((index) => {
+          if (index >= 0 && index < allShots.length) indexes.add(index);
+        });
+        for (let boundary = shotBatchSize; boundary < allShots.length; boundary++)
+          if (boundary % shotBatchSize === 0)
+            for (let index = boundary - 2; index <= boundary + 1; index++)
+              if (index >= 0 && index < allShots.length) indexes.add(index);
+      }
+      return [...indexes]
+        .sort((left, right) => left - right)
+        .map((index) => allShots[index]);
+    };
     const auditSystem =
       '你是漫剧连续性审校。只返回合法 JSON：{"valid":true,"issues":[],"repairs":[{"shotNumber":1,"sceneId":"修正后场景ID","scene":"修正后地点","scenePrompt":"修正后无人场景","imagePrompt":"修正后主画面","storyBeat":"修正后剧情承接","action":"修正后动作","dialogue":"修正后完整对白","videoPrompt":"修正后视频提示","transition":"修正后过渡","continuity":"修正后连续性","exitState":"修正后出口状态","transitionAnchor":"修正后过渡锚点","cameraAxis":"修正后轴线","frames":[{"title":"原标题","imagePrompt":"不超过100字的修正分镜","keyframe":"start","inherit":"明确继承项","change":"本帧唯一变化","lock":"不可改变项","characterIndexes":[],"characterForms":[],"propIndexes":[]}]}]}。检查相邻镜头和分段边界的因果、人物形态、道具状态、地点时段、场景结构、建筑位置、主光方向、人物左右站位、视线、180度轴线、动作方向、景别变化、对白与悬念是否承接。sceneId 相同时画面必须像同一空间的连续拍摄；sceneId 变化时必须有建立镜头或明确视听桥接，禁止无解释瞬移。只给确有问题的镜头 repairs，不重写整个方案。修复地点冲突时必须同时返回 sceneId、scene、scenePrompt、imagePrompt、exitState、transitionAnchor 和 cameraAxis；若错误存在于分镜画面，必须返回完整 frames 定向修正 imagePrompt、inherit、change、lock，不能只改旁边的 continuity 文本来掩盖；若原 frames 无错则不要返回 frames。对白事实错误必须返回 dialogue，动作错误必须返回 action，视频演出与对白不一致必须返回 videoPrompt。修改 dialogue 时保持原 duration 可自然说完，修改 videoPrompt 时不超过125字并明确无字幕。';
     let audit = await readStage(
       "正在审校跨段过渡…",
       auditSystem,
-      JSON.stringify({ outline: outlineParts, shots: allShots }),
+      JSON.stringify({
+        outline: outlineParts.map((item) => ({
+          act: item && typeof item === "object" ? (item as Record<string, unknown>).act : "",
+          content: String(item && typeof item === "object" ? (item as Record<string, unknown>).content || "" : "").slice(0, 240),
+        })),
+        shots: continuityAuditSubset(),
+      }),
       2200,
       94,
       97,
@@ -2714,8 +2745,15 @@ app.post("/agents/comic", async (request, reply) => {
         `${auditSystem} 本次是定向复检：只验证上一轮明确列出的 issues 是否已经通过 repairs 修复。除非仍存在会导致剧情事实矛盾、人物或道具状态冲突的硬错误，否则必须返回 valid=true；不得在复检时新增审美偏好、措辞优化或非阻断性建议。`,
         JSON.stringify({
           previousAudit: audit,
-          outline: outlineParts,
-          shots: allShots,
+          shots: continuityAuditSubset(
+            repairs.map((repair) =>
+              Number(
+                repair && typeof repair === "object"
+                  ? (repair as Record<string, unknown>).shotNumber
+                  : 0,
+              ),
+            ),
+          ),
         }),
         1800,
         97,
