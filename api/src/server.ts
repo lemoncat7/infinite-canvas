@@ -1508,7 +1508,7 @@ app.post("/agents/comic", async (request, reply) => {
     completedBatches?: number;
     updatedAt?: string;
   };
-  const comicPipelineVersion = "compact-shot-plan-v2";
+  const comicPipelineVersion = "compact-shot-plan-v3";
   const checkpointFingerprint = createHash("sha256")
     // Resolved visual inputs contain expiring signed URLs. Fingerprinting them
     // makes the same request look new on every retry and discards checkpoints.
@@ -2302,15 +2302,9 @@ app.post("/agents/comic", async (request, reply) => {
               : 1;
         item.motionLevel = motionLevel;
         item.stateChanges = stateChanges;
-        item.frameCount = Math.max(
-          1,
-          Math.min(
-            4,
-            Number.isInteger(requestedFrameCount)
-              ? requestedFrameCount
-              : inferredFrameCount,
-          ),
-        );
+        // Always use the deterministic production result. The model's raw
+        // frameCount is only a hint for the exceptional four-frame case.
+        item.frameCount = Math.max(1, Math.min(4, inferredFrameCount));
         if (!Array.isArray(item.characterIndexes)) item.characterIndexes = [];
         if (!Array.isArray(item.propIndexes)) item.propIndexes = [];
         return item;
@@ -2339,6 +2333,11 @@ app.post("/agents/comic", async (request, reply) => {
         if(!dialogue)issues.push(`镜头${index+1}.dialogue 为空`);
         if(!Number.isInteger(duration)||duration<3||duration>8)issues.push(`镜头${index+1}.duration 必须为3–8秒整数`);
         const frameCount=Number(item.frameCount);if(!Number.isInteger(frameCount)||frameCount<1||frameCount>4)issues.push(`镜头${index+1}.frameCount 必须为1–4整数`);
+        const motionLevel=String(item.motionLevel||""),stateChanges=Array.isArray(item.stateChanges)?item.stateChanges.filter((change)=>String(change||"").trim()):[];
+        if(!["static","simple","complex"].includes(motionLevel))issues.push(`镜头${index+1}.motionLevel 无效`);
+        if(motionLevel==="static"&&stateChanges.length>1)issues.push(`镜头${index+1} 静态镜头包含 ${stateChanges.length} 项可见变化，应升级或拆镜`);
+        if(motionLevel==="simple"&&(stateChanges.length<1||stateChanges.length>2))issues.push(`镜头${index+1} 简单动作必须包含1–2项可见变化`);
+        if(motionLevel==="complex"&&stateChanges.length<2)issues.push(`镜头${index+1} 复杂动作至少需要2项可见变化`);
         if(speech.minimumSeconds>8)issues.push(`镜头${index+1}对白预计需${speech.minimumSeconds}秒，必须拆镜`);
         else if(duration<speech.minimumSeconds)issues.push(`镜头${index+1}时长${duration}秒不足，至少需${speech.minimumSeconds}秒`);
         if (!String(item.transition || "").trim())
@@ -2442,7 +2441,7 @@ app.post("/agents/comic", async (request, reply) => {
       receivedBytes: streamReceivedBytes,
       totalShots,
     });
-    const shotsSystem = `你是漫剧分镜导演。严格按照本批轻量镜头规划逐镜扩写，只返回合法 JSON：{"shots":[完整镜头数组]}，返回数量和 number 必须与本批规划完全一致，不得合并、删除或新增镜头。每项必须包含 number、title、duration、storyBeat、action、sceneId、scene、scenePrompt、characterIndexes、characterForms、propIndexes、hasAnonymousCrowd、crowdPrompt、dialogue、frames、imagePrompt、videoPrompt、transition、continuity、referenceIndexes。frames 每项必须包含 title、imagePrompt、keyframe、inherit、change、lock、characterIndexes、characterForms、propIndexes；这些帧级索引只列当前画面实际可见的人物、形态和关键道具，不得把下一帧才出现的素材提前列入上一帧。必须把镜头规划的 entryState 写入首帧 inherit，把 exitState 落实到末帧 change/lock，并严格遵守 transitionAnchor 与 cameraAxis；不得在扩写时重新解释或丢失这些连续性状态。imagePrompt 与每个 frame.imagePrompt 不得超过100字，scenePrompt 和 crowdPrompt 不得超过160字，videoPrompt 不得超过125字；角色和道具索引严格引用视觉基座。必须沿用镜头规划中的实际对白和已计算 duration，不得在扩写阶段添加放不下的新台词。自然中文按每秒约3.6个汉字计算，每段台词或说话人切换留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；3–5秒以一句短台词为主，6–8秒最多两句。scenePrompt 只能描述无人物环境、空间、UI界面和光影素材，禁止人物、人体、手部和角色剪影。frame.imagePrompt 才是完整剧情分镜：必须明确当前出镜人物、动作、景别、构图、场景状态和必要道具，且与该帧 characterIndexes、characterForms、propIndexes 一一对应；禁止三视图、设定板、素材拼贴、重复人物和无关元素。若本帧参考上一分镜或其他图片，inherit 必须列出保持不变的可见项，change 只能列本帧相对参考图的主要变化，lock 必须列出不得改变的人物数量与身份、服饰发型、道具、场景结构、光线和空间关系。hasAnonymousCrowd 只能根据画面是否真的需要匿名人物取值；“无人知道、不为人知、人尽皆知、鲜为人知”等修饰词绝不表示有人群。仅当画面明确出现路人、群众或围观者时才设 true 并填写 crowdPrompt，否则必须为 false、crowdPrompt 为空，并禁止模型自行增加背景人物。未明确要求时禁止动物或车辆特写、可读文字、字幕、标牌、Logo、水印和无关装饰。相邻分镜必须延续人物身份、站位、视线、动作结果和场景锚点，但不能只是复制上一张：change 必须写清本帧新增动作、表情、景别、机位或焦点变化。禁止连续三个镜头使用相同景别、相同正面机位、相同人物尺寸和相同中心构图；在特写、近景、中景、全景、过肩、侧面或高低机位之间按剧情目的变化，避免为了变化而越轴。视频提示词只保留主要动作、运镜、结束状态和必要对白，让连接分镜按既定人物身份与场景演进，禁止重新设计人物、换装、换场景或切换画风。${comicProductionRules}\n${comicContinuityRules}\n${comicTransitionRules}\n${comicDialogueRules}\n${comicStyleRules}`;
+    const shotsSystem = `你是漫剧分镜导演。严格按照本批轻量镜头规划逐镜扩写，只返回合法 JSON：{"shots":[完整镜头数组]}，返回数量和 number 必须与本批规划完全一致，不得合并、删除或新增镜头。每项必须包含 number、title、duration、storyBeat、action、sceneId、scene、scenePrompt、characterIndexes、characterForms、propIndexes、hasAnonymousCrowd、crowdPrompt、dialogue、frames、imagePrompt、videoPrompt、transition、continuity、referenceIndexes。frames 每项必须包含 title、imagePrompt、keyframe、inherit、change、lock、stateChangeIndexes、characterIndexes、characterForms、propIndexes；stateChangeIndexes 使用0起始索引，声明该帧落实了镜头规划 stateChanges 中的哪些可见变化。规划中的每个状态变化必须恰好被一帧认领，不得遗漏或重复。这些帧级索引只列当前画面实际可见的人物、形态和关键道具，不得把下一帧才出现的素材提前列入上一帧。必须把镜头规划的 entryState 写入首帧 inherit，把 exitState 落实到末帧 change/lock，并严格遵守 transitionAnchor 与 cameraAxis；不得在扩写时重新解释或丢失这些连续性状态。imagePrompt 与每个 frame.imagePrompt 不得超过100字，scenePrompt 和 crowdPrompt 不得超过160字，videoPrompt 不得超过125字；角色和道具索引严格引用视觉基座。必须沿用镜头规划中的实际对白和已计算 duration，不得在扩写阶段添加放不下的新台词。自然中文按每秒约3.6个汉字计算，每段台词或说话人切换留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；3–5秒以一句短台词为主，6–8秒最多两句。scenePrompt 只能描述无人物环境、空间、UI界面和光影素材，禁止人物、人体、手部和角色剪影。frame.imagePrompt 才是完整剧情分镜：必须明确当前出镜人物、动作、景别、构图、场景状态和必要道具，且与该帧 characterIndexes、characterForms、propIndexes 一一对应；禁止三视图、设定板、素材拼贴、重复人物和无关元素。若本帧参考上一分镜或其他图片，inherit 必须列出保持不变的可见项，change 只能列本帧相对参考图的主要变化，lock 必须列出不得改变的人物数量与身份、服饰发型、道具、场景结构、光线和空间关系。hasAnonymousCrowd 只能根据画面是否真的需要匿名人物取值；“无人知道、不为人知、人尽皆知、鲜为人知”等修饰词绝不表示有人群。仅当画面明确出现路人、群众或围观者时才设 true 并填写 crowdPrompt，否则必须为 false、crowdPrompt 为空，并禁止模型自行增加背景人物。未明确要求时禁止动物或车辆特写、可读文字、字幕、标牌、Logo、水印和无关装饰。相邻分镜必须延续人物身份、站位、视线、动作结果和场景锚点，但不能只是复制上一张：change 必须写清本帧新增动作、表情、景别、机位或焦点变化。禁止连续三个镜头使用相同景别、相同正面机位、相同人物尺寸和相同中心构图；在特写、近景、中景、全景、过肩、侧面或高低机位之间按剧情目的变化，避免为了变化而越轴。视频提示词只保留主要动作、运镜、结束状态和必要对白，让连接分镜按既定人物身份与场景演进，禁止重新设计人物、换装、换场景或切换画风。${comicProductionRules}\n${comicContinuityRules}\n${comicTransitionRules}\n${comicDialogueRules}\n${comicStyleRules}`;
     const adaptiveShotsSystem = `${shotsSystem}\n帧数与视频简化硬规则：每个镜头返回的 frames 数量必须严格等于镜头规划的 frameCount，不得自行统一成3帧或补帧。frameCount=1 时只给代表核心事件的单帧；frameCount=2 时给动作开始与结果；frameCount=3 时给开始、变化、结果；frameCount=4 仅用于规划明确指定的关键复杂动作。每个 videoPrompt 只执行一个核心事件，只保留完成该事件所需的一种主要运镜、必要动作和最多一个主要说话者；不得同时塞入多人对白、大量动作、复杂运镜和大型特效。相邻镜头必须让上一镜 exitState 成为下一镜 entryState，并通过动作、视线、声音、道具或同场景不同角度自然连接；换角度时保持人物左右关系、视线、动作方向和180度轴线。`;
     const shotBatchSize = 6,
       batchCount = Math.ceil(totalShots / shotBatchSize);
@@ -2547,7 +2546,16 @@ app.post("/agents/comic", async (request, reply) => {
         });
         return value;
       };
-      const normalizeFrameReferences = (value: Record<string, unknown>) => {
+      const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+        isCharacterVisible = (evidence: string, name: string) => {
+          if (!name || !evidence.includes(name)) return false;
+          const escaped = escapeRegExp(name),
+            negative = new RegExp(
+              `(?:不出现|禁止|不得|不可|没有|只有|不包含)[^\u3002；；,，]{0,16}${escaped}|${escaped}[^\u3002；；,，]{0,20}(?:不入画|不出现|不可见|尚未可见|尚未落地|留在画外|仅为画外|不在画面)`
+            );
+          return !negative.test(evidence);
+        },
+        normalizeFrameReferences = (value: Record<string, unknown>) => {
         const returned = Array.isArray(value.shots) ? value.shots : [],
           foundationCharacters = Array.isArray(foundation.characters)
             ? foundation.characters
@@ -2555,15 +2563,6 @@ app.post("/agents/comic", async (request, reply) => {
           foundationProps = Array.isArray(foundation.props)
             ? foundation.props
             : [];
-        const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-          isCharacterVisible = (evidence: string, name: string) => {
-            if (!name || !evidence.includes(name)) return false;
-            const escaped = escapeRegExp(name),
-              negative = new RegExp(
-                `(?:不出现|禁止|不得|不可|没有|只有|不包含)[^\u3002；；,，]{0,16}${escaped}|${escaped}[^\u3002；；,，]{0,20}(?:不入画|不出现|不可见|尚未可见|尚未落地|留在画外|仅为画外|不在画面)`
-              );
-            return !negative.test(evidence);
-          };
         returned.forEach((rawShot) => {
           if (!rawShot || typeof rawShot !== "object") return;
           const shot = rawShot as Record<string, unknown>,
@@ -2669,9 +2668,15 @@ app.post("/agents/comic", async (request, reply) => {
             issues.push(
               `第 ${index + 1} 项镜头编号不匹配，预期 ${planItem.number}`,
             );
-          const rawShot=returned[index]&&typeof returned[index]==="object"?returned[index] as Record<string,unknown>:null,frames=rawShot&&Array.isArray(rawShot.frames)?rawShot.frames:[],expectedFrameCount=Math.max(1,Math.min(4,Number((planItem as Record<string,unknown>).frameCount)||1));
+          const plan = planItem as Record<string, unknown>,
+            rawShot=returned[index]&&typeof returned[index]==="object"?returned[index] as Record<string,unknown>:null,
+            frames=rawShot&&Array.isArray(rawShot.frames)?rawShot.frames:[],
+            expectedFrameCount=Math.max(1,Math.min(4,Number(plan.frameCount)||1)),
+            plannedStateChanges=(Array.isArray(plan.stateChanges)?plan.stateChanges:[]).map((change)=>String(change||"").trim()).filter(Boolean),
+            claimedStateChanges:number[]=[];
           if(frames.length!==expectedFrameCount)issues.push(`镜头 ${planItem.number} 返回 ${frames.length} 张分镜，规划要求 ${expectedFrameCount} 张`);
-          frames.forEach((rawFrame,frameIndex)=>{const frame=rawFrame&&typeof rawFrame==="object"?rawFrame as Record<string,unknown>:null,label=`镜头 ${planItem.number} 分镜 ${frameIndex+1}`;if(!frame){issues.push(`${label} 数据无效`);return}for(const field of ["characterIndexes","characterForms","propIndexes"] as const)if(!Array.isArray(frame[field]))issues.push(`${label} 缺少 ${field}`);const evidence=`${String(frame.title||"")}${String(frame.imagePrompt||"")}${String(frame.inherit||"")}${String(frame.change||"")}`,characterIndexes=Array.isArray(frame.characterIndexes)?frame.characterIndexes.map(Number):[],propIndexes=Array.isArray(frame.propIndexes)?frame.propIndexes.map(Number):[];characterIndexes.forEach(characterIndex=>{const raw=foundationCharacters[characterIndex-1],name=raw&&typeof raw==="object"?String((raw as Record<string,unknown>).name||""):"";if(name&&!evidence.includes(name))issues.push(`${label} 连接角色「${name}」但帧描述未说明该角色`)});propIndexes.forEach(propIndex=>{const raw=foundationProps[propIndex-1],name=raw&&typeof raw==="object"?String((raw as Record<string,unknown>).name||""):"";if(name&&!evidence.includes(name))issues.push(`${label} 连接道具「${name}」但帧描述未说明该道具`)});foundationCharacters.forEach((raw,characterIndex)=>{const name=raw&&typeof raw==="object"?String((raw as Record<string,unknown>).name||""):"";if(name&&evidence.includes(name)&&!characterIndexes.includes(characterIndex+1))issues.push(`${label} 描述出现角色「${name}」但 characterIndexes 未连接`)});foundationProps.forEach((raw,propIndex)=>{const name=raw&&typeof raw==="object"?String((raw as Record<string,unknown>).name||""):"";if(name&&evidence.includes(name)&&!propIndexes.includes(propIndex+1))issues.push(`${label} 描述出现道具「${name}」但 propIndexes 未连接`)})});
+          frames.forEach((rawFrame,frameIndex)=>{const frame=rawFrame&&typeof rawFrame==="object"?rawFrame as Record<string,unknown>:null,label=`镜头 ${planItem.number} 分镜 ${frameIndex+1}`;if(!frame){issues.push(`${label} 数据无效`);return}for(const field of ["stateChangeIndexes","characterIndexes","characterForms","propIndexes"] as const)if(!Array.isArray(frame[field]))issues.push(`${label} 缺少 ${field}`);const stateChangeIndexes=Array.isArray(frame.stateChangeIndexes)?frame.stateChangeIndexes.map(Number):[];stateChangeIndexes.forEach((changeIndex)=>{if(!Number.isInteger(changeIndex)||changeIndex<0||changeIndex>=plannedStateChanges.length)issues.push(`${label} stateChangeIndexes 越界: ${changeIndex}`);else claimedStateChanges.push(changeIndex)});if(!String(frame.change||"").trim())issues.push(`${label}.change 为空，未落实可见变化`);const evidence=`${String(frame.title||"")}${String(frame.imagePrompt||"")}${String(frame.inherit||"")}${String(frame.change||"")}`,characterIndexes=Array.isArray(frame.characterIndexes)?frame.characterIndexes.map(Number):[],propIndexes=Array.isArray(frame.propIndexes)?frame.propIndexes.map(Number):[];characterIndexes.forEach(characterIndex=>{const raw=foundationCharacters[characterIndex-1],name=raw&&typeof raw==="object"?String((raw as Record<string,unknown>).name||""):"";if(name&&!evidence.includes(name))issues.push(`${label} 连接角色「${name}」但帧描述未说明该角色`)});propIndexes.forEach(propIndex=>{const raw=foundationProps[propIndex-1],name=raw&&typeof raw==="object"?String((raw as Record<string,unknown>).name||""):"";if(name&&!evidence.includes(name))issues.push(`${label} 连接道具「${name}」但帧描述未说明该道具`)});foundationCharacters.forEach((raw,characterIndex)=>{const name=raw&&typeof raw==="object"?String((raw as Record<string,unknown>).name||""):"";if(name&&isCharacterVisible(evidence,name)&&!characterIndexes.includes(characterIndex+1))issues.push(`${label} 描述出现角色「${name}」但 characterIndexes 未连接`)});foundationProps.forEach((raw,propIndex)=>{const name=raw&&typeof raw==="object"?String((raw as Record<string,unknown>).name||""):"";if(name&&evidence.includes(name)&&!propIndexes.includes(propIndex+1))issues.push(`${label} 描述出现道具「${name}」但 propIndexes 未连接`)})});
+          plannedStateChanges.forEach((change,changeIndex)=>{const claims=claimedStateChanges.filter((index)=>index===changeIndex).length;if(claims===0)issues.push(`镜头 ${planItem.number} 遗漏状态变化 ${changeIndex+1}「${change}」`);else if(claims>1)issues.push(`镜头 ${planItem.number} 状态变化 ${changeIndex+1}「${change}」被重复认领 ${claims} 次`)});
         });
         return issues;
       };
