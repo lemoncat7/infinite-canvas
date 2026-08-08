@@ -2130,7 +2130,7 @@ app.post("/agents/comic", async (request, reply) => {
         ? [...checkpoint.shots]
         : [];
     const shotPlanSystem =
-      '你是漫剧镜头规划师。本阶段只确定镜头总数、实际对白草稿和轻量结构，禁止生成图片提示词、视频提示词和 frames。只返回合法 JSON：{"plannedShots":[{"number":1,"outlineIndex":1,"title":"镜头名","duration":5,"storyBeat":"承接上一镜并推动下一镜的剧情节拍","sceneId":"场景ID","characterIndexes":[1],"propIndexes":[1],"dialogue":"旁白或角色可直接配音的实际中文台词；无对白则明确写无对白","transition":"与上一镜的过渡方式","continuity":"需要继承的状态"}]}。镜头数由剧情节拍和真实播音时长决定，不得固定数量。按自然中文每秒约3.6个汉字计算台词时间，每段台词或说话人切换另留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；duration 必须向上取整且为3–8秒。若实际对白需要超过8秒，必须拆成多个连续镜头，不得加速朗读或删掉关键因果。必须覆盖全部大纲段落，形成完整起承转合，地点、时间、目标或情绪变化处安排必要过渡镜头。相邻镜头即使在同一场景，也必须有明确的信息、动作或情绪增量；禁止连续安排人物以相同站位、相同正面中景和相同构图重复说话。每连续 2–3 镜应有节奏明确的景别或观察角度变化，但变化必须服务剧情，不能破坏人物站位、视线和动作连续性。';
+      '你是漫剧镜头规划师。本阶段只确定镜头总数、实际对白草稿和轻量结构，禁止生成图片提示词、视频提示词和 frames。只返回合法 JSON：{"plannedShots":[{"number":1,"outlineIndex":1,"title":"镜头名","duration":5,"storyBeat":"承接上一镜并推动下一镜的剧情节拍","sceneId":"场景ID","characterIndexes":[1],"propIndexes":[1],"dialogue":"旁白或角色可直接配音的实际中文台词；无对白则明确写无对白","transition":"与上一镜的过渡方式","continuity":"需要继承的状态"}]}。镜头数由剧情节拍和真实播音时长决定，不得固定数量。按自然中文每秒约3.6个汉字计算台词时间，每段台词或说话人切换另留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；duration 必须向上取整且为3–8秒。若实际对白需要超过8秒，必须拆成多个连续镜头，不得加速朗读或删掉关键因果。必须覆盖全部大纲段落，形成完整起承转合。sceneId 变化代表真实地点或时段切换，切换后的第一镜必须是建立镜头或由声音先行、动作匹配、道具特写等明确桥接进入，不能让角色和背景无解释瞬移；必要时新增一个短过渡镜头。sceneId 不变时必须锁定同一空间布局、建筑位置、主光方向和人物左右关系，只允许按剧情改变景别、机位、动作和局部状态。相邻镜头即使在同一场景，也必须有明确的信息、动作或情绪增量；禁止连续安排人物以相同站位、相同正面中景和相同构图重复说话。每连续 2–3 镜应有节奏明确的景别或观察角度变化，但变化必须服务剧情，不能破坏人物站位、视线、180度轴线和动作方向连续性。';
     const shotPlanText = `创作需求：\n${text}\n\n已校验剧情、人物、道具和场景基座：\n${JSON.stringify(foundation)}`;
     let shotPlan = checkpoint.shotPlan
       ? checkpoint.shotPlan
@@ -2523,7 +2523,7 @@ app.post("/agents/comic", async (request, reply) => {
       receivedBytes: streamReceivedBytes,
     });
     const auditSystem =
-      '你是漫剧连续性审校。只返回合法 JSON：{"valid":true,"issues":[],"repairs":[{"shotNumber":1,"storyBeat":"修正后剧情承接","action":"修正后动作","dialogue":"修正后完整对白","videoPrompt":"修正后视频提示","transition":"修正后过渡","continuity":"修正后连续性"}]}。检查相邻镜头和分段边界的因果、人物形态、道具状态、地点时段、动作、情绪、对白与悬念是否承接。只给确有问题的镜头 repairs，不修改图片提示词，不重写整个方案。修复必须包含真正出错的字段：对白事实错误必须返回 dialogue，动作错误必须返回 action，视频演出与对白不一致必须返回 videoPrompt；不得只修改旁边的描述字段来回避问题。修改 dialogue 时保持原 duration 可自然说完，修改 videoPrompt 时不超过125字并明确无字幕。';
+      '你是漫剧连续性审校。只返回合法 JSON：{"valid":true,"issues":[],"repairs":[{"shotNumber":1,"storyBeat":"修正后剧情承接","action":"修正后动作","dialogue":"修正后完整对白","videoPrompt":"修正后视频提示","transition":"修正后过渡","continuity":"修正后连续性","frames":[{"title":"原标题","imagePrompt":"不超过100字的修正分镜","keyframe":"start","inherit":"明确继承项","change":"本帧唯一变化","lock":"不可改变项","characterIndexes":[],"characterForms":[],"propIndexes":[]}]}]}。检查相邻镜头和分段边界的因果、人物形态、道具状态、地点时段、场景结构、建筑位置、主光方向、人物左右站位、视线、180度轴线、动作方向、景别变化、对白与悬念是否承接。sceneId 相同时画面必须像同一空间的连续拍摄；sceneId 变化时必须有建立镜头或明确视听桥接，禁止无解释瞬移。只给确有问题的镜头 repairs，不重写整个方案。若错误存在于分镜画面，必须返回完整 frames 定向修正 imagePrompt、inherit、change、lock，不能只改旁边的 continuity 文本来掩盖；若原 frames 无错则不要返回 frames。对白事实错误必须返回 dialogue，动作错误必须返回 action，视频演出与对白不一致必须返回 videoPrompt。修改 dialogue 时保持原 duration 可自然说完，修改 videoPrompt 时不超过125字并明确无字幕。';
     let audit = await readStage(
       "正在审校跨段过渡…",
       auditSystem,
@@ -2567,6 +2567,8 @@ app.post("/agents/comic", async (request, reply) => {
         ])
           if (String(repair[field] || "").trim())
             target[field] = String(repair[field]);
+        if (Array.isArray(repair.frames) && repair.frames.length)
+          target.frames = repair.frames;
       }
       saveCheckpoint({
         shotPlan,
