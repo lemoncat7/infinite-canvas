@@ -4817,6 +4817,9 @@ app.post("/jobs", async (request, reply) => {
         ? 4000
         : input.promptProfile === "character"
           ? 600
+          : input.promptProfile === "storyboard" ||
+              input.promptProfile === "composite"
+            ? 400
           : 320;
   if (finalPrompt.length > promptLimit)
     return reply
