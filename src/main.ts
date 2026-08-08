@@ -607,6 +607,7 @@ function linkPathGeometry(link: FlowLink) {
   return { a, b, ca, cb }
 }
 let selectedFlowLinks=new Set<FlowLink>()
+function canvasInteractionActive(){return Boolean(pointer.down||domDrag||marquee?.active||pinchGesture)}
 function collectSelectedFlowLinks(){
   const highlighted=new Set<FlowLink>()
   if(!selectedId)return highlighted
@@ -623,7 +624,7 @@ function drawLink(link: FlowLink, index: number) {
   ctx.bezierCurveTo(ca.x, ca.y, cb.x, cb.y, b.x, b.y)
   const generating = linkIsGenerating(link), hovered = index === hoveredLinkIndex || index === touchSelectedLinkIndex,selectedFlow=selectedFlowLinks.has(link)
   ctx.save()
-  if (generating) { ctx.setLineDash([10 * camera.zoom, 8 * camera.zoom]); ctx.lineDashOffset = -(performance.now() / 28) % (18 * camera.zoom); ctx.strokeStyle = selectedFlow?(colorTheme==='dark'?'rgba(137,232,228,.96)':'rgba(24,111,103,.9)'):(colorTheme === 'dark' ? 'rgba(111,199,195,.72)' : 'rgba(72,137,122,.64)'); ctx.lineWidth = (selectedFlow?3:2.25) * camera.zoom }
+  if (generating) { if(!canvasInteractionActive()){ctx.setLineDash([10 * camera.zoom, 8 * camera.zoom]);ctx.lineDashOffset=-(performance.now()/28)%(18*camera.zoom)}ctx.strokeStyle = selectedFlow?(colorTheme==='dark'?'rgba(137,232,228,.96)':'rgba(24,111,103,.9)'):(colorTheme === 'dark' ? 'rgba(111,199,195,.72)' : 'rgba(72,137,122,.64)'); ctx.lineWidth = (selectedFlow?3:2.25) * camera.zoom }
   else if (hovered) { ctx.strokeStyle = colorTheme === 'dark' ? 'rgba(178,222,218,.72)' : 'rgba(42,76,67,.76)'; ctx.lineWidth = 3 * camera.zoom; ctx.shadowColor = colorTheme === 'dark' ? 'rgba(88,190,186,.2)' : 'rgba(38,76,66,.13)'; ctx.shadowBlur = 5 * camera.zoom }
   else if(selectedFlow){ctx.strokeStyle=colorTheme==='dark'?'rgba(132,220,218,.88)':'rgba(31,105,99,.82)';ctx.lineWidth=2.8*camera.zoom;ctx.shadowColor=colorTheme==='dark'?'rgba(82,202,198,.24)':'rgba(34,105,98,.15)';ctx.shadowBlur=6*camera.zoom}
   else { ctx.strokeStyle = 'rgba(183,190,201,.5)'; ctx.lineWidth = 2 * camera.zoom }
@@ -665,7 +666,7 @@ function hitLink(sx: number, sy: number, tolerance = 9) {
   return -1
 }
 function drawPendingLink() { if (!connecting) return; const node = nodes.find(item => item.id === connecting!.nodeId); if (!node) return; const a = screen(portWorld(node, connecting.side)), b = connecting.pointer; ctx.save();ctx.beginPath(); ctx.moveTo(a.x, a.y); const distance = Math.max(55, Math.hypot(b.x - a.x, b.y - a.y) * .3), control = controlPoint(a, connecting.side, distance); ctx.quadraticCurveTo(control.x, control.y, b.x, b.y); ctx.strokeStyle = colorTheme==='dark'?'rgba(132,226,235,.96)':'rgba(24,112,132,.96)';ctx.shadowColor=colorTheme==='dark'?'rgba(77,205,218,.34)':'rgba(20,105,127,.2)';ctx.shadowBlur=6; ctx.lineWidth = 2.4; ctx.setLineDash([7, 5]); ctx.stroke(); ctx.setLineDash([]);ctx.restore(); if (connectionSnap) { ctx.beginPath(); ctx.arc(b.x, b.y, 11, 0, Math.PI * 2); ctx.fillStyle = colorTheme==='dark'?'rgba(111,220,229,.2)':'rgba(20,112,132,.18)'; ctx.fill(); ctx.beginPath(); ctx.arc(b.x, b.y, 5, 0, Math.PI * 2); ctx.fillStyle = colorTheme==='dark'?'#8de3ea':'#176f83'; ctx.fill() } }
-function paint() { drawFrame = null;const syncUi=drawNeedsDomSync;drawNeedsDomSync=false;nodeViewport.style.transform=`translate3d(${innerWidth/2+camera.x}px, ${innerHeight/2+camera.y}px, 0) scale(${camera.zoom})`;if(syncUi||paintNodeIndex.size!==nodes.length)rebuildPaintIndexes();if(syncUi){selectedFlowLinks=collectSelectedFlowLinks();generatingLinkNodeIds=new Set<number>();for(const node of nodes){if(!nodeIsActivelyGenerating(node))continue;generatingLinkNodeIds.add(node.id);if(node.sourceNodeId)generatingLinkNodeIds.add(node.sourceNodeId)}}ctx.fillStyle = colorTheme === 'dark' ? '#0b1113' : '#eef3ef'; ctx.fillRect(0, 0, innerWidth, innerHeight); drawGrid();links.forEach(drawLink); drawPendingLink();if(syncUi){syncDomNodes(); updateTaskMonitor(); updateCancelPendingButton(); updateHistoryControls(); zoomSlider.value = String(Math.round(camera.zoom * 100)); zoomSlider.title = `${Math.round(camera.zoom * 100)}%`; zoomPercent.value = `${Math.round(camera.zoom * 100)}%`; nodeCount.textContent = String(nodes.length)}if(generatingLinkNodeIds.size&&!document.hidden&&!animatedLinkTimer){const animationDelay=!document.hasFocus()?240:innerWidth<=780?110:50;animatedLinkTimer=window.setTimeout(()=>{animatedLinkTimer=0;draw(false)},animationDelay)} }
+function paint() { drawFrame = null;const interacting=canvasInteractionActive(),syncUi=drawNeedsDomSync&&!interacting;if(syncUi)drawNeedsDomSync=false;nodeViewport.style.transform=`translate(${innerWidth/2+camera.x}px, ${innerHeight/2+camera.y}px) scale(${camera.zoom})`;if(syncUi||paintNodeIndex.size!==nodes.length)rebuildPaintIndexes();if(syncUi){selectedFlowLinks=collectSelectedFlowLinks();generatingLinkNodeIds=new Set<number>();for(const node of nodes){if(!nodeIsActivelyGenerating(node))continue;generatingLinkNodeIds.add(node.id);if(node.sourceNodeId)generatingLinkNodeIds.add(node.sourceNodeId)}}ctx.fillStyle = colorTheme === 'dark' ? '#0b1113' : '#eef3ef'; ctx.fillRect(0, 0, innerWidth, innerHeight); drawGrid();links.forEach(drawLink); drawPendingLink();if(syncUi){syncDomNodes(); updateTaskMonitor(); updateCancelPendingButton(); updateHistoryControls(); zoomSlider.value = String(Math.round(camera.zoom * 100)); zoomSlider.title = `${Math.round(camera.zoom * 100)}%`; zoomPercent.value = `${Math.round(camera.zoom * 100)}%`; nodeCount.textContent = String(nodes.length)}if(generatingLinkNodeIds.size&&!interacting&&!document.hidden&&!animatedLinkTimer){const animationDelay=!document.hasFocus()?300:innerWidth<=780?140:80;animatedLinkTimer=window.setTimeout(()=>{animatedLinkTimer=0;draw(false)},animationDelay)} }
 function draw(syncDom=true) { if(syncDom)drawNeedsDomSync=true;if (drawFrame === null) drawFrame = requestAnimationFrame(paint) }
 function resize() { const ratio = Math.min(devicePixelRatio || 1, innerWidth <= 780 ? 1.5 : 2); canvas.width = innerWidth * ratio; canvas.height = innerHeight * ratio; canvas.style.width = `${innerWidth}px`; canvas.style.height = `${innerHeight}px`; ctx.setTransform(ratio, 0, 0, ratio, 0, 0); draw() }
 function setZoom(next: number, anchor = { x: innerWidth / 2, y: innerHeight / 2 }) { const old = camera.zoom; next = Math.min(2.5, Math.max(.3, next)); const cx = innerWidth / 2 + camera.x, cy = innerHeight / 2 + camera.y; camera.x += (anchor.x - cx) * (1 - next / old); camera.y += (anchor.y - cy) * (1 - next / old); camera.zoom = next; draw(false) }
@@ -949,14 +950,16 @@ function createDomNode(node: FlowNode) {
   element.addEventListener('dblclick', event => {
     if (performance.now() < suppressNodeReleaseUntil) { event.preventDefault(); event.stopPropagation(); return }
     if ((event.target as HTMLElement).closest('.image-config-panel,.video-config-panel,.node-floating-tools,.node-port')) return
-    if(node.kind==='audio'){
+    const current=liveNode()
+    if(!current)return
+    if(current.kind==='audio'){
       event.preventDefault();event.stopPropagation();const current=liveNode(),audio=audioPanel.querySelector<HTMLAudioElement>('audio');if(!current?.mediaUrl||!audio)return;selectedId=current.id;updateEditor();if(audio.paused)void audio.play();else audio.pause();return
     }
-    if (node.kind === 'prompt') { event.preventDefault(); event.stopPropagation(); selectedId = node.id; updateEditor(); enterTextEdit(node, element); return }
-    if ((node.kind !== 'image' && node.kind !== 'video') || !node.mediaUrl) return
+    if (current.kind === 'prompt') { event.preventDefault(); event.stopPropagation(); selectedId = current.id; updateEditor(); enterTextEdit(current, element); return }
+    if ((current.kind !== 'image' && current.kind !== 'video') || !current.mediaUrl) return
     const rect = element.querySelector<HTMLElement>('.node-media')!.getBoundingClientRect(), insideImage = event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom
     if (!insideImage) return
-    event.preventDefault(); event.stopPropagation(); selectedId = node.id; updateEditor(); openAssetPreview(node.mediaUrl, node.title, node.kind)
+    event.preventDefault(); event.stopPropagation(); selectedId = current.id; updateEditor(); openAssetPreview(current.mediaUrl, current.title, current.kind)
   })
   element.addEventListener('dragstart', event => event.preventDefault())
   element.addEventListener('contextmenu', event => { event.preventDefault(); event.stopPropagation() })
@@ -966,15 +969,15 @@ function createDomNode(node: FlowNode) {
   labelHeading.addEventListener('input',()=>{node.title=labelHeading.innerText;setSaveState('editing','编辑中…')})
   labelHeading.addEventListener('blur',()=>{if(!labelHeading.isContentEditable)return;node.title=labelHeading.innerText.trim()||'未命名标签';labelHeading.contentEditable='false';labelHeading.classList.remove('editing');scheduleSave();draw()})
   element.querySelectorAll<HTMLElement>('.node-port').forEach(port => {const output=port.dataset.side==='right';port.dataset.label=output?'输出':'输入';port.title=output?'输出：拖动到其他卡片的输入端':'输入：接收其他卡片的输出';port.setAttribute('aria-label',output?'输出端点':'输入端点');port.addEventListener('pointerdown', event => { event.preventDefault(); event.stopPropagation();if(!output)return;selectedId = 0; updateEditor(); connectionSnap = null; connecting = { nodeId: node.id, side:'right', pointer: { x: event.clientX, y: event.clientY } }; draw() })})
-  element.querySelector('[data-action="info"]')!.addEventListener('click', event => { event.stopPropagation(); openNodeInfo(node) })
-  element.querySelector('[data-action="edit"]')!.addEventListener('click', event => { event.stopPropagation(); selectedId = node.id; updateEditor(); if (node.kind === 'prompt') enterTextEdit(node, element); else promptInput.focus() })
-  element.querySelector('[data-action="zoom-in"]')!.addEventListener('click', event => { event.stopPropagation(); node.fontScale = Math.min(2, (node.fontScale ?? 1) + .1); scheduleSave(); draw() })
-  element.querySelector('[data-action="zoom-out"]')!.addEventListener('click', event => { event.stopPropagation(); node.fontScale = Math.max(.7, (node.fontScale ?? 1) - .1); scheduleSave(); draw() })
-  element.querySelector('[data-action="generate"]')!.addEventListener('click', event => { event.stopPropagation(); selectedId = node.id; updateEditor(); void generate() })
-  element.querySelector('[data-action="preview"]')!.addEventListener('click', event => { event.stopPropagation(); if (node.mediaUrl) openAssetPreview(node.mediaUrl, node.title) })
+  element.querySelector('[data-action="info"]')!.addEventListener('click', event => { event.stopPropagation();const current=liveNode();if(current)openNodeInfo(current) })
+  element.querySelector('[data-action="edit"]')!.addEventListener('click', event => { event.stopPropagation();const current=liveNode();if(!current)return;selectedId=current.id;updateEditor();if(current.kind==='prompt')enterTextEdit(current,element);else promptInput.focus() })
+  element.querySelector('[data-action="zoom-in"]')!.addEventListener('click', event => { event.stopPropagation();const current=liveNode();if(!current)return;current.fontScale=Math.min(2,(current.fontScale??1)+.1);scheduleSave();draw() })
+  element.querySelector('[data-action="zoom-out"]')!.addEventListener('click', event => { event.stopPropagation();const current=liveNode();if(!current)return;current.fontScale=Math.max(.7,(current.fontScale??1)-.1);scheduleSave();draw() })
+  element.querySelector('[data-action="generate"]')!.addEventListener('click', event => { event.stopPropagation();const current=liveNode();if(!current)return;selectedId=current.id;updateEditor();void generate(current) })
+  element.querySelector('[data-action="preview"]')!.addEventListener('click', event => { event.stopPropagation();const current=liveNode();if(current?.mediaUrl&&(current.kind==='image'||current.kind==='video'))openAssetPreview(current.mediaUrl,current.title,current.kind) })
   element.querySelector('[data-action="download"]')!.addEventListener('click', event => { event.stopPropagation();const current=liveNode();if(!current?.mediaUrl)return;if(current.kind==='audio')audioPanel.querySelector<HTMLButtonElement>('[data-audio-download]')!.click();else void downloadNodeImage(current) })
   const clearImageButton=element.querySelector<HTMLButtonElement>('[data-action="clear-image"]')!,requestClearImage=async(event:Event)=>{event.preventDefault();event.stopPropagation();const current=nodes.find(item=>item.id===Number(element.dataset.id));if(!current?.mediaUrl||current.status==='queued'||current.status==='running')return;const confirmed=await askProjectDialog({title:'清除当前卡片的图片？',description:'资产库中的原图不会删除。原提示词、当前描述、模型、图像设置和参考连线都会保留。',confirm:'清除图片'});if(!confirmed)return;const latest=nodes.find(item=>item.id===current.id);if(!latest?.mediaUrl||latest.status==='queued'||latest.status==='running')return;imageCache.delete(latest.mediaUrl);if(!latest.corePrompt)latest.body=normalizePromptText(latest.generationPrompt||latest.body);delete latest.mediaUrl;delete latest.jobId;latest.status='idle';latest.progress=0;latest.agentAuto=false;selectedId=latest.id;updateEditor();scheduleSave();draw();showToast('图片已清除，原提示词与当前描述已保留','success')};clearImageButton.addEventListener('pointerdown',event=>{event.preventDefault();event.stopPropagation()});clearImageButton.addEventListener('pointerup',requestClearImage);clearImageButton.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();if(event.detail===0)void requestClearImage(event)})
-  element.querySelector('[data-action="delete"]')!.addEventListener('click', event => { event.stopPropagation(); selectedId = node.id; deleteSelectedNode() })
+  element.querySelector('[data-action="delete"]')!.addEventListener('click', event => { event.stopPropagation();const current=liveNode();if(!current)return;selectedId=current.id;deleteSelectedNode() })
   const imagePanel = element.querySelector<HTMLElement>('.image-config-panel')!
   bindNodeConfigPanel(imagePanel)
   imagePanel.querySelector<HTMLSelectElement>('[data-image-field="model"]')!.addEventListener('change', event => { const current=liveNode();if(!current)return;current.model = (event.target as HTMLSelectElement).value; scheduleSave() })
@@ -1334,14 +1337,16 @@ function pollJob(node: FlowNode) {
       const job = await response.json() as { status: string; progress: number; result_url?: string; error?: string }
       currentNode=nodes.find(item=>item.id===nodeId)
       if(!currentNode?.jobId||currentNode.jobId!==jobId){window.clearInterval(timer);activeJobPolls.delete(jobId);return}
-      failures = 0; failureNotified = false; currentNode.status = job.status
+      failures = 0; failureNotified = false
+      const previousStatus=currentNode.status,previousProgress=Number(currentNode.progress??0),nextProgress=Number(job.progress??0),terminal=job.status==='succeeded'||job.status==='failed'||job.status==='canceled'
+      currentNode.status = job.status
       if (currentNode.kind === 'image' && job.status === 'running' && job.progress === 20 && !retryNotifiedJobs.has(jobId)) {
         retryNotifiedJobs.add(jobId)
         showToast('首次生成请求超时，正在自动重试一次', 'warning')
       }
-      currentNode.progress = job.progress
-      updateEditor(); draw()
-      if (job.status === 'succeeded' || job.status === 'failed' || job.status === 'canceled') {
+      currentNode.progress = nextProgress
+      if(!terminal&&(previousStatus!==job.status||previousProgress!==nextProgress)){if(canvasInteractionActive())draw(false);else{updateEditor();draw()}}
+      if (terminal) {
         window.clearInterval(timer); activeJobPolls.delete(jobId); retryNotifiedJobs.delete(jobId)
         if(finalizedJobIds.has(jobId))return
         finalizedJobIds.add(jobId)
