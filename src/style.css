@@ -348,6 +348,20 @@ body[data-theme="light"] .prompt-agent-panel.agent-capsule .agent-mode.open > bu
   letter-spacing:.005em;
 }
 .prompt-agent-panel.agent-capsule .agent-goal textarea::placeholder { font-size:10.5px; }
+.prompt-agent-panel.agent-capsule .agent-goal textarea {
+  min-height:42px;
+  height:42px;
+  max-height:62px;
+  overflow-x:hidden;
+  overflow-y:auto;
+  line-height:20px;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+  scrollbar-width:none;
+  transition:height .16s ease;
+}
+.prompt-agent-panel.agent-capsule .agent-goal textarea::-webkit-scrollbar { display:none; }
+.prompt-agent-panel.agent-capsule.has-wrapped-goal { height:78px; border-radius:30px; }
 
 .kind-video.node-generator .video-storyboard { pointer-events:auto; }
 .kind-video.node-generator .video-storyboard > i[data-video-reference-source] {

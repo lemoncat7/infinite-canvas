@@ -59,8 +59,11 @@ export class AgnesVideoProvider implements GenerationProvider {
     const imageSources = input.inputUrls ?? []
     if (referenceMode === 'keyframes' && imageSources.length < 2) throw new Error('Agnes 关键帧动画至少需要 2 张按时间顺序排列的图片')
     if (referenceMode !== 'keyframes' && imageSources.length > 1) throw new Error('Agnes 官方接口不支持多图自由参考；多张图片请改用关键帧动画')
-    const requiresPublicUrls = referenceMode === 'keyframes'
-    let images = await Promise.all(imageSources.map(source => this.resolveImage(source, false, requiresPublicUrls)))
+    // Agnes accepts embedded image data for keyframes as well as ordinary
+    // image-to-video jobs. Prefer the signed public URL when it is usable, but
+    // never make a CDN a hard requirement: the upstream service occasionally
+    // rejects an otherwise reachable URL and must then receive embedded data.
+    let images = await Promise.all(imageSources.map(source => this.resolveImage(source)))
     onUpdate({ status: 'running', progress: 0 })
     console.info('[agnes-video] preparing ordered inputs', { internalJobId: input.internalJobId, imageCount: images.length, orderedInputIndexes: images.map((_, index) => index + 1) })
     console.info('[agnes-video] credential assigned', { internalJobId:input.internalJobId, channel:credential.channel, channelCount:agnesCredentialPool.length })
@@ -68,7 +71,7 @@ export class AgnesVideoProvider implements GenerationProvider {
     let created = await readTask(response)
     if (!response.ok && imageSources.length && images.some(image => /^https?:\/\//i.test(image)) && /image URL|image.*download/i.test(taskError(created))) {
       console.info('[agnes-video] public image rejected, retrying with embedded images', { internalJobId: input.internalJobId, imageCount: imageSources.length })
-      images = await Promise.all(imageSources.map(source => this.resolveImage(source, true, requiresPublicUrls)))
+      images = await Promise.all(imageSources.map(source => this.resolveImage(source, true)))
       response = await this.request('/v1/videos', { method: 'POST', body: createAgnesRequestBody(input, images, settings, this.defaultModel, referenceMode) }, this.timeoutForImages(images), credential.key)
       created = await readTask(response)
     }
@@ -159,24 +162,14 @@ export class AgnesVideoProvider implements GenerationProvider {
     return images.some(image => image.startsWith('data:')) ? this.embeddedCreateTimeout : this.createTimeout
   }
 
-  private async resolveImage(source: string, forceEmbedded = false, requirePublicUrl = false) {
-    if (source.startsWith('data:')) {
-      if (!requirePublicUrl) return source
-      if (!this.cdnUploadUrl) throw new Error('Agnes 关键帧需要公网图片 URL，当前未配置素材 CDN')
-      const match = /^data:([^;,]+);base64,(.+)$/s.exec(source)
-      if (!match) throw new Error('关键帧图片 Data URL 格式无效')
-      return this.uploadToCdn(Buffer.from(match[2], 'base64'), match[1])
-    }
+  private async resolveImage(source: string, forceEmbedded = false) {
+    if (source.startsWith('data:')) return source
     if (/^https?:\/\//i.test(source) && !forceEmbedded) return source
     if (/^https?:\/\//i.test(source) && forceEmbedded) {
       const response = await fetch(source, { signal:AbortSignal.timeout(30000) })
       if (!response.ok) throw new Error(`重新读取 Agnes 参考图片失败（${response.status}）`)
       const mimeType = response.headers.get('content-type')?.split(';')[0] || 'image/png'
       const bytes = Buffer.from(await response.arrayBuffer())
-      if (requirePublicUrl) {
-        if (!this.cdnUploadUrl) throw new Error('Agnes 关键帧需要公网图片 URL，当前未配置素材 CDN')
-        return this.uploadToCdn(bytes, mimeType)
-      }
       return `data:${mimeType};base64,${bytes.toString('base64')}`
     }
     if (source.startsWith('/api/')) {
@@ -194,7 +187,6 @@ export class AgnesVideoProvider implements GenerationProvider {
         try { return await this.uploadToCdn(bytes, mimeType) }
         catch (error) { console.warn('[agnes-video] CDN upload failed, using data URL', { message: sanitizeError(error instanceof Error ? error.message : String(error)) }) }
       }
-      if (requirePublicUrl) throw new Error('Agnes 关键帧需要公网图片 URL，素材 CDN 上传失败或未配置')
       return `data:${mimeType};base64,${bytes.toString('base64')}`
     }
     if (!this.publicBaseUrl) throw new Error('图生视频需要公网图片 URL 或本地资产')

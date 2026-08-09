@@ -8824,6 +8824,8 @@ type ComicShot = {
 };
 type ComicScene = {
   sceneId: string;
+  baseSceneId?: string;
+  variantType?: "base" | "area" | "state" | "time";
   name: string;
   description: string;
   imagePrompt?: string;
@@ -8979,9 +8981,17 @@ document.addEventListener("click", (event) => {
   }
 });
 queueMicrotask(() => setPromptAgentMode(promptAgentMode));
-promptAgentPanel
-  .querySelector<HTMLTextAreaElement>(".agent-goal textarea")!
-  .addEventListener("keydown", (event) => {
+const promptAgentGoalInput = promptAgentPanel.querySelector<HTMLTextAreaElement>(
+  ".agent-goal textarea",
+)!;
+function resizePromptAgentGoal() {
+  promptAgentGoalInput.style.height = "42px";
+  const height = Math.min(62, Math.max(42, promptAgentGoalInput.scrollHeight));
+  promptAgentGoalInput.style.height = `${height}px`;
+  promptAgentPanel.classList.toggle("has-wrapped-goal", height > 44);
+}
+promptAgentGoalInput.addEventListener("input", resizePromptAgentGoal);
+promptAgentGoalInput.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
     event.preventDefault();
     if (
@@ -10008,12 +10018,24 @@ async function restoreComicSession(force = false) {
   if (!force && comicRestoreKey === key) return;
   comicRestoreKey = key;
   try {
-    const response = await fetch(
-      `/api/agents/comic/session?projectId=${encodeURIComponent(currentProjectId)}`,
-    );
+    const trackedSessionId = comicSubmitting ? comicSessionId : "",
+      response = await fetch(
+        `/api/agents/comic/session?projectId=${encodeURIComponent(currentProjectId)}${trackedSessionId ? `&sessionId=${encodeURIComponent(trackedSessionId)}` : ""}`,
+      );
     if (response.status === 204) {
       comicSubmitting = false;
       setComicInteractionLocked(false);
+      comicOriginalIdea = "";
+      comicLinkedLabelId = 0;
+      resetComicConversationState(true);
+      renderComicLabelState();
+      comicStudio
+        .querySelectorAll(".comic-message:not(.comic-welcome)")
+        .forEach((message) => message.remove());
+      comicStudio.querySelector<HTMLElement>(".comic-plan")!.hidden = true;
+      comicStudio
+        .querySelector<HTMLOutputElement>("[data-comic-status]")!
+        .classList.remove("visible", "generating");
       return;
     }
     if (!response.ok) return;
@@ -10805,6 +10827,7 @@ function applyComicToCanvas() {
       compositeCount = 0,
       previousShotLastFrame = 0,
       previousShotSceneKey = "",
+      sceneCrowdSteps = new Map<string, number>(),
       previousFrameCharacterKeys = new Set<string>(),
       previousFramePropIndexes = new Set<number>();
     const prepareTwoReferenceInputs = (
@@ -10850,6 +10873,43 @@ function applyComicToCanvas() {
       }
       return [composite, unique.at(-1)!];
     };
+    const ensureSceneStep = (sceneKey: string, fallbackShot?: ComicShot): number => {
+      const existing = sceneSteps.get(sceneKey);
+      if (existing) return existing;
+      const sceneAsset = comicPlan!.scenes?.find((scene) => scene.sceneId === sceneKey),
+        parentKey = sceneAsset?.baseSceneId?.trim(),
+        parentStep = parentKey && parentKey !== sceneKey ? ensureSceneStep(parentKey) : 0,
+        scenePropIndexes = [...new Set((sceneAsset?.propIndexes || []).filter((value) => Number.isInteger(value) && value >= 1 && value <= propSteps.length))],
+        rawScenePrompt = sceneAsset?.imagePrompt || fallbackShot?.scenePrompt || fallbackShot?.scene || sceneAsset?.description || sceneAsset?.name || "空场景",
+        anchors = (sceneAsset?.environmentAnchors || []).join("；"),
+        variantGuide = parentStep
+          ? `严格基于连接的父场景生成${sceneAsset?.variantType === "area" ? "同一地点的局部区域" : sceneAsset?.variantType === "time" ? "同一空间的时段变体" : "同一空间的状态变体"}；继承建筑语言、标志物、材质、色彩、空间方向和主光，禁止重新设计。`
+          : "",
+        scenePrompt = `无人物场景基准图，禁止出现任何人物、人体、手部、角色剪影或人形主体；仅生成可供后续分镜合成的环境。${variantGuide}${clipComicPrompt(rawScenePrompt.replace(/^(?:无人物|空镜头?|纯场景)[，,：:\s]*/, "").trim(), parentStep ? 80 : 105)}${anchors ? `；固定空间锚点：${clipComicPrompt(anchors, 55)}` : ""}`,
+        dependencies = prepareTwoReferenceInputs(
+          [parentStep, ...scenePropIndexes.map((value) => propSteps[value - 1])].filter(Boolean),
+          `场景 ${sceneAsset?.name || fallbackShot?.title || sceneKey}`,
+          comicPlan!.aspectRatio,
+        );
+      steps.push({
+        title: `场景 · ${sceneAsset?.name || fallbackShot?.title || sceneKey}`,
+        kind: "image",
+        prompt: scenePrompt,
+        referenceIndexes: [],
+        dependsOn: dependencies,
+        aspectRatio: comicPlan!.aspectRatio,
+        stage: "scene",
+        styleConstraint: styleType,
+        formConstraint: [
+          parentStep ? "连接的父场景是本场景唯一空间基准，只允许执行指定的区域、时段或状态变化。" : "",
+          scenePropIndexes.length ? "连接的固定道具属于场景结构，只按空间锚点放置并锁定外观、比例与位置，禁止重新设计或生成副本。" : "",
+        ].filter(Boolean).join("；"),
+        autoGenerate: true,
+      });
+      const created = steps.length;
+      sceneSteps.set(sceneKey, created);
+      return created;
+    };
     comicPlan.shots.forEach((shot, index) => {
       shot = {
         ...shot,
@@ -10872,35 +10932,7 @@ function applyComicToCanvas() {
           ),
         ],
         scenePropSet = new Set(scenePropIndexes);
-      let sceneStep = sceneSteps.get(sceneKey);
-      if (!sceneStep) {
-        const rawScenePrompt =
-            sceneAsset?.imagePrompt || shot.scenePrompt || shot.scene,
-          anchors = (sceneAsset?.environmentAnchors || []).join("；"),
-          scenePrompt = `无人物场景基准图，禁止出现任何人物、人体、手部、角色剪影或人形主体；仅生成可供后续分镜合成的环境。${clipComicPrompt(rawScenePrompt.replace(/^(?:无人物|空镜头?|纯场景)[，,：:\s]*/, "").trim(), 105)}${anchors ? `；固定空间锚点：${clipComicPrompt(anchors, 55)}` : ""}`;
-        steps.push({
-          title: `场景 · ${sceneAsset?.name || shot.title}`,
-          kind: "image",
-          prompt: scenePrompt,
-          referenceIndexes: [],
-          dependsOn: prepareTwoReferenceInputs(
-            scenePropIndexes
-              .map((value) => propSteps[value - 1])
-              .filter(Boolean),
-            `场景 ${sceneAsset?.name || shot.title}`,
-            comicPlan!.aspectRatio,
-          ),
-          aspectRatio: comicPlan!.aspectRatio,
-          stage: "scene",
-          styleConstraint: styleType,
-          formConstraint: scenePropIndexes.length
-            ? "连接的固定道具属于场景结构，只按空间锚点放置并锁定外观、比例与位置，禁止重新设计或生成副本。"
-            : "",
-          autoGenerate: true,
-        });
-        sceneStep = steps.length;
-        sceneSteps.set(sceneKey, sceneStep);
-      }
+      const sceneStep = ensureSceneStep(sceneKey, shot);
       const characterEvidence = `${shot.scene}${shot.storyBeat || ""}${shot.action || ""}${shot.dialogue}${shot.imagePrompt}${JSON.stringify(shot.frames || [])}`,
         mentionedCharacterIndexes = comicPlan!.characters
           .map((character, characterIndex) =>
@@ -10936,18 +10968,23 @@ function applyComicToCanvas() {
             : inferAnonymousCrowd(characterEvidence);
       let crowdStep = 0;
       if (hasAnonymousCrowd) {
-        steps.push({
-          title: `群演背景 · 镜头 ${shot.number}`,
-          kind: "image",
-          prompt: `匿名群演背景层，只生成不具名人物：${clipComicPrompt(shot.crowdPrompt || shot.scene, 100)}。所有个体脸型、发型、年龄、体型、服装颜色和动作必须明显不同，自然错落分布；禁止出现或复制任何具名角色，禁止多人共用同一张脸。`,
-          referenceIndexes: [],
-          dependsOn: [sceneStep],
-          aspectRatio: comicPlan!.aspectRatio,
-          stage: "storyboard",
-          styleConstraint: styleType,
-          autoGenerate: true,
-        });
-        crowdStep = steps.length;
+        crowdStep = sceneCrowdSteps.get(sceneKey) || 0;
+        if (!crowdStep) {
+          steps.push({
+            title: `群演基图 · ${sceneAsset?.name || shot.title}`,
+            kind: "image",
+            prompt: `当前场景的可复用匿名群演基图，只生成不具名人物：${clipComicPrompt(shot.crowdPrompt || shot.scene, 100)}。保持连接场景的建筑、布局、机位轴线和光线；所有个体脸型、发型、年龄、体型、服装颜色与动作明显不同，自然错落分布；禁止出现或复制任何具名角色，禁止多人共用同一张脸。`,
+            referenceIndexes: [],
+            dependsOn: [sceneStep],
+            aspectRatio: comicPlan!.aspectRatio,
+            stage: "storyboard",
+            styleConstraint: styleType,
+            continuityConstraint: "这是当前场景唯一的匿名群演分布基准，后续镜头只允许在此基础上改变动作和站位，不得随机更换整批人群。",
+            autoGenerate: true,
+          });
+          crowdStep = steps.length;
+          sceneCrowdSteps.set(sceneKey, crowdStep);
+        }
       }
       let priorCharacterKeys = continuesPrevious
           ? new Set(previousFrameCharacterKeys)
@@ -11014,7 +11051,7 @@ function applyComicToCanvas() {
                   : "middle"),
           continuityGuide = [
             frameIndex === 0 && continuesPrevious
-              ? "严格承接上一镜末帧的位置、动作结束姿态、视线、服饰、道具、光线、机位轴线与左右空间关系。"
+              ? "严格承接上一镜末帧的人物位置、动作结束姿态、视线、服饰与道具状态；同时以连接的当前场景基准恢复建筑、空间方向、主光和轴线，换景别或换角度不得丢失场景。"
               : "",
             frameIndex === 0 && !continuesPrevious && index > 0
               ? `这是新场景建立帧，按“${shot.transition || "明确转场"}”完成地点或时段转换，先建立空间再表现动作，不得伪装成上一场景。`
@@ -11053,9 +11090,18 @@ function applyComicToCanvas() {
             : continuesPrevious
               ? previousShotLastFrame
               : 0,
+          cameraChangeEvidence = `${frame.title} ${frame.imagePrompt} ${frame.change || ""} ${frame.inherit || ""}`,
+          needsSceneAnchor = Boolean(
+            continuityFrame &&
+              (frameIndex === 0 ||
+                /远景|全景|广角|俯拍|仰拍|反打|过肩|侧面|背面|鸟瞰|航拍|机位|视角|换角度|重新构图|wide shot|aerial|reverse shot|over-the-shoulder/i.test(
+                  cameraChangeEvidence,
+                )),
+          ),
           referenceCandidates = continuityFrame
             ? [
                 continuityFrame,
+                ...(needsSceneAnchor ? [sceneStep] : []),
                 ...(crowdStep ? [crowdStep] : []),
                 ...newCharacterDependencies,
                 ...newPropDependencies,

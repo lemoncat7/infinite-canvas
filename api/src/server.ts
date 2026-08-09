@@ -32,7 +32,7 @@ import { promisify } from "node:util";
 import { isAbsolute, relative, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { gzipSync, gunzipSync } from "node:zlib";
-import { comicAssetNameMentioned, finalizeComicSceneDependencies, hasVisibleAnonymousCrowd } from "./comic-validation.js";
+import { comicAssetNameMentioned, comicCharacterStateTransitionIssues, comicPostureTransitionIssue, comicShotCapacity, finalizeComicSceneDependencies, hasVisibleAnonymousCrowd, normalizeComicAssetIndexes, normalizeComicCharacterStates, normalizeComicSceneHierarchy, resolveVisibleAnonymousCrowd } from "./comic-validation.js";
 
 type CanvasPayload = {
   nodes: unknown[];
@@ -1038,8 +1038,8 @@ app.post("/agents/comic/chat", async (request, reply) => {
   const chatLockKey = `${userId}:${projectId}`;
   if (activeComicChats.has(chatLockKey))
     return reply.code(409).send({ error: "另一台设备正在处理本项目的漫剧对话，请稍候" });
-  if (message.length < 1 || message.length > 3000)
-    return reply.code(400).send({ error: "每次对话需要 1–3000 个字符" });
+  if (message.length < 1 || message.length > 12000)
+    return reply.code(400).send({ error: "每次对话需要 1–12000 个字符" });
   let session = requestedSessionId
     ? getOne(
         "SELECT id,phase,brief,messages,pending_revision AS pendingRevision,plan FROM comic_sessions WHERE id=? AND user_id=? AND project_id=?",
@@ -1105,6 +1105,14 @@ app.post("/agents/comic/chat", async (request, reply) => {
             typeof item.content === "string",
         )
         .slice(-16);
+      // The brief is the durable source of truth. Keep recent conversational
+      // wording for tone and local context, but cap its total size so several
+      // pasted scripts cannot make every later turn progressively slower.
+      while (
+        history.length > 2 &&
+        history.reduce((total, item) => total + item.content.length, 0) > 24000
+      )
+        history.shift();
   } catch {
     /* 从空历史继续 */
   }
@@ -1333,6 +1341,11 @@ app.post("/agents/comic/chat", async (request, reply) => {
       { role: "assistant", content: assistantReply },
     );
     history = history.slice(-18);
+    while (
+      history.length > 2 &&
+      history.reduce((total, item) => total + item.content.length, 0) > 24000
+    )
+      history.shift();
     const phase = hasPlan ? "revising" : ready ? "ready" : "discussing";
     database.run(
       "UPDATE comic_sessions SET phase=?,brief=?,messages=?,pending_revision=?,updated_at=? WHERE id=? AND user_id=? AND project_id=?",
@@ -1947,6 +1960,9 @@ app.post("/agents/comic", async (request, reply) => {
       if (kind === "scenes") {
         const scenes = Array.isArray(value.scenes) ? value.scenes : [];
         if (!scenes.length) issues.push("scenes 为空");
+        const sceneIds = scenes.map((raw, index) => String(raw && typeof raw === "object" ? (raw as Record<string, unknown>).sceneId || "" : "").trim() || `scene-${index + 1}`);
+        const knownSceneIds = new Set(sceneIds);
+        if (knownSceneIds.size !== sceneIds.length) issues.push("场景 sceneId 重复");
         scenes.forEach((raw, index) => {
           const item =
               raw && typeof raw === "object"
@@ -1956,7 +1972,25 @@ app.post("/agents/comic", async (request, reply) => {
           if (!prompt) issues.push(`场景${index + 1}.imagePrompt 为空`);
           if (prompt.length > 160)
             issues.push(`场景${index + 1}.imagePrompt ${prompt.length}>160`);
+          const baseSceneId = String(item.baseSceneId || "").trim(),
+            variantType = String(item.variantType || (baseSceneId ? "area" : "base"));
+          if (!["base", "area", "state", "time"].includes(variantType))
+            issues.push(`场景${index + 1}.variantType 无效`);
+          if (baseSceneId && (!knownSceneIds.has(baseSceneId) || baseSceneId === sceneIds[index]))
+            issues.push(`场景${index + 1}.baseSceneId 无效`);
+          if (variantType !== "base" && !baseSceneId)
+            issues.push(`场景${index + 1}变体缺少 baseSceneId`);
         });
+        for (const sceneId of sceneIds) {
+          const visited = new Set([sceneId]);
+          let current = sceneId;
+          while (current) {
+            const position = sceneIds.indexOf(current), raw = scenes[position], item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {}, parent = String(item.baseSceneId || "").trim();
+            if (!parent) break;
+            if (visited.has(parent)) { issues.push(`场景${position + 1}父子关系循环`); break; }
+            visited.add(parent); current = parent;
+          }
+        }
       }
       if (kind === "shots") {
         const shots = Array.isArray(value.shots) ? value.shots : [];
@@ -2105,7 +2139,7 @@ app.post("/agents/comic", async (request, reply) => {
     });
     const assetSystem = `你是漫剧视觉设定师。只返回合法 JSON：{"characters":[{"name":"角色名","description":"稳定设定","voiceProfile":"中文声线","visualAsset":true,"imagePrompt":"180–420字角色设定板提示词","forms":[]}],"props":[{"name":"道具名","description":"固定设定","imagePrompt":"不超过160字的道具图提示词"}]}。只建立跨镜头需要保持一致的具名人物和关键道具，普通路人不建档。人物提示词的生成目标只能是单一角色设定板，展示固定外观、服饰、三视图与细节，禁止剧情场景、表演动作、多人互动、海报构图和复制角色。道具提示词的生成目标只能是单一道具设定素材，展示结构、材质、颜色与细节，禁止人物、人体、手持动作、剧情表演和复杂背景。角色 imagePrompt 与形态 imagePrompt 均不得超过420字，道具 imagePrompt 不得超过160字。${comicCharacterSheetRules}\n${comicStyleRules}`;
     const assetText = `已确认创作需求：\n${text}\n\n已校验剧情大纲：\n${JSON.stringify(story)}`;
-    const sceneSystem = `你是漫剧场景美术。只返回合法 JSON：{"scenes":[{"sceneId":"稳定地点与时段ID","name":"场景名","description":"空间结构与剧情用途","propIndexes":[1],"environmentAnchors":["固定道具及建筑的方位、距离或朝向"],"imagePrompt":"不超过160字的无人物场景设定图提示词"}]}。propIndexes 使用已建档关键道具的1起始索引，只列从该场景第一镜开始就固定存在、后续持续作为空间组成的道具、建筑标志或环境装置。角色手持、临时带入、只在单镜出现，以及封印解除后才出现、召唤后才出现、开启后才出现、破坏后才形成的剧情状态资产，绝不能提前列入场景 propIndexes、environmentAnchors 或 imagePrompt；它们必须留给首次可见的后续分镜单独引用。例如“关闭的古门”开场存在时可进入场景，“最终才开启的天门异象”不得进入初始场景。石碑、雕像、祭坛等若从首镜起属于场地组成，必须通过 propIndexes 引用，禁止在场景中另行重新设计。environmentAnchors 必须锁定固定资产及主要建筑的空间方位、距离、朝向和主光关系，同一 sceneId 只能有一套锚点。合并同一地点与时段，状态变化不得重复创建场景。每条 imagePrompt 必须明确写出“无人物场景基准图，禁止出现任何人物、人体、手部、角色剪影或人形主体”，只生成可供后续分镜合成使用的初始空环境、空间结构、已连接的固定道具与光影素材；提示词不得重新描述已连接道具的外观，只说明其位置和比例。即使剧情中该场景原本有人，场景基准图也必须保持无人。未明确要求时禁止动物、车辆特写、可读文字、字幕、标牌、Logo 和水印。每条 imagePrompt 不得超过160字，并继承统一风格。`;
+    const sceneSystem = `你是漫剧场景美术。只返回合法 JSON：{"scenes":[{"sceneId":"稳定地点与时段ID","baseSceneId":"父场景ID或空字符串","variantType":"base|area|state|time","name":"场景名","description":"空间结构与剧情用途","propIndexes":[1],"environmentAnchors":["固定道具及建筑的方位、距离或朝向"],"imagePrompt":"不超过160字的无人物场景设定图提示词"}]}。每个独立地点先建 variantType=base 的基准场景，baseSceneId 留空。同一大地点的屋顶、大厅、廊道等不同区域必须建为 variantType=area 并用 baseSceneId 指向所属基准；昼夜转换用 time；只有破坏、开启、淹没等足以需要后续多镜复用的大型空间变化才建 state 变体并指向变化前场景。单镜光效、天气或局部破损不新建场景，直接沿用原 sceneId 写入分镜。返回旧地点必须复用已有 sceneId，禁止创建“返回版”。子场景 imagePrompt 只写相对父场景的区域、时间或结构变化，必须明确继承父场景的建筑语言、标志物方位、材质、色彩和空间方向，禁止重新设计。propIndexes 使用已建档关键道具的1起始索引，只列从该场景第一镜开始就固定存在、后续持续作为空间组成的道具、建筑标志或环境装置。角色手持、临时带入、只在单镜出现，以及封印解除后才出现、召唤后才出现、开启后才出现、破坏后才形成的剧情状态资产，绝不能提前列入场景 propIndexes、environmentAnchors 或 imagePrompt；它们必须留给首次可见的后续分镜单独引用。石碑、雕像、祭坛等若从首镜起属于场地组成，必须通过 propIndexes 引用，禁止在场景中另行重新设计。environmentAnchors 必须锁定固定资产及主要建筑的空间方位、距离、朝向和主光关系，同一 sceneId 只能有一套锚点。每条 imagePrompt 必须明确写出“无人物场景基准图，禁止出现任何人物、人体、手部、角色剪影或人形主体”，只生成可供后续分镜合成使用的初始空环境、空间结构、已连接的固定道具与光影素材；提示词不得重新描述已连接道具的外观，只说明其位置和比例。即使剧情中该场景原本有人，场景基准图也必须保持无人。未明确要求时禁止动物、车辆特写、可读文字、字幕、标牌、Logo 和水印。每条 imagePrompt 不得超过160字，并继承统一风格。`;
     let assets = checkpoint.assets
       ? checkpoint.assets
       : await readStage(
@@ -2170,8 +2204,11 @@ app.post("/agents/comic", async (request, reply) => {
       scene.environmentAnchors = (Array.isArray(scene.environmentAnchors) ? scene.environmentAnchors : [])
         .map((value) => String(value || "").trim().slice(0, 80)).filter(Boolean).slice(0, 8);
       scene.sceneId = String(scene.sceneId || scene.id || `scene-${index + 1}`).trim().slice(0, 80);
+      scene.baseSceneId = String(scene.baseSceneId || "").trim().slice(0, 80) || undefined;
+      scene.variantType = ["base", "area", "state", "time"].includes(String(scene.variantType)) ? String(scene.variantType) : scene.baseSceneId ? "area" : "base";
       return scene;
     });
+    normalizeComicSceneHierarchy(sceneBible.scenes as Array<{ sceneId:string; baseSceneId?:string; variantType?:"base"|"area"|"state"|"time"; imagePrompt:string; propIndexes:number[]; environmentAnchors:string[] }>);
     if (!checkpoint.sceneBible) saveCheckpoint({ sceneBible });
     else
       emit({
@@ -2200,7 +2237,7 @@ app.post("/agents/comic", async (request, reply) => {
         ? [...checkpoint.shots]
         : [];
     let shotPlanSystem =
-      '你是漫剧镜头规划师。本阶段只输出“紧凑镜头状态表”，确定镜头数、真实对白和连续性状态；禁止生成图片提示词、视频提示词、frames，也不要重述资产外观。只返回合法 JSON：{"plannedShots":[{"number":1,"outlineIndex":1,"title":"镜头名","duration":5,"motionLevel":"static|simple|complex","stateChanges":["可见变化"],"frameCount":1,"storyBeat":"因果与结果","sceneId":"场景ID","characterIndexes":[1],"propIndexes":[1],"dialogue":"可直接配音的台词或无对白","transition":"过渡方式","entryState":"开镜可见状态","exitState":"结束可见状态","transitionAnchor":"前后镜锚点","cameraAxis":"左右关系与动作方向"}]}。motionLevel 严格分级：static=对白、旁白、反应、空镜或单一结果；simple=一次明确动作或机位变化；complex=必须表达开始、转折、结果的连续复杂动作。stateChanges 只列实际可见的状态变化，最多3项、每项≤18字；台词、情绪、镜头目的不算状态变化。严格限长：title≤18字，storyBeat≤55字，transition≤20字，entryState/exitState各≤45字，transitionAnchor/cameraAxis各≤30字。状态只写可验证的差异，不重复剧情、对白和资产设定。镜头数由剧情节拍和真实播音时长决定，不得固定数量。按自然中文每秒约3.6个汉字计算，说话人切换留0.35秒，并至少留1.2秒给动作；duration 为3–8秒整数，超时对白必须拆镜且不得删减因果。必须覆盖所有大纲并完成起承转合。相邻镜头 entryState 必须承接上一镜 exitState；转场必须用建立镜头、声音先行、动作匹配或道具特写桥接。sceneId 不变时锁定空间布局、主光、人物左右关系和180度轴线；相邻镜头必须有动作、信息、情绪或观察角度增量，禁止重复正面中景。';
+      '你是漫剧镜头规划师。本阶段只输出“紧凑镜头状态表”，确定镜头数、真实对白和连续性状态；禁止生成图片提示词、视频提示词、frames，也不要重述资产外观。只返回合法 JSON：{"plannedShots":[{"number":1,"outlineIndex":1,"title":"镜头名","duration":5,"motionLevel":"static|simple|complex","stateChanges":["可见变化"],"frameCount":1,"storyBeat":"因果与结果","sceneId":"场景ID","characterIndexes":[1],"propIndexes":[1],"hasAnonymousCrowd":false,"dialogue":"可直接配音的台词或无对白","transition":"过渡方式","entryState":"开镜可见状态","exitState":"结束可见状态","transitionAnchor":"前后镜锚点","cameraAxis":"左右关系与动作方向"}]}。hasAnonymousCrowd 必须按该镜画面是否实际出现不具名人物填写；拍卖观众、宗门弟子、街市行人、宴会宾客、战场士兵等即使没有台词也必须为 true；空场、单人镜头以及“无人知道”等修饰语必须为 false。motionLevel 严格分级：static=对白、旁白、反应、空镜或单一结果；simple=一次明确动作或机位变化；complex=必须表达开始、转折、结果的连续复杂动作。stateChanges 只列实际可见的状态变化，最多3项、每项≤18字；台词、情绪、镜头目的不算状态变化。严格限长：title≤18字，storyBeat≤55字，transition≤20字，entryState/exitState各≤45字，transitionAnchor/cameraAxis各≤30字。状态只写可验证的差异，不重复剧情、对白和资产设定。镜头数由剧情节拍和真实播音时长决定，不得固定数量。按自然中文每秒约3.6个汉字计算，说话人切换留0.35秒，并至少留1.2秒给动作；duration 为3–8秒整数，超时对白必须拆镜且不得删减因果。必须覆盖所有大纲并完成起承转合。相邻镜头 entryState 必须承接上一镜 exitState；转场必须用建立镜头、声音先行、动作匹配或道具特写桥接。sceneId 不变时锁定空间布局、主光、人物左右关系和180度轴线；相邻镜头必须有动作、信息、情绪或观察角度增量，禁止重复正面中景。';
     shotPlanSystem += ' 每个 plannedShot 必须增加 frameCount 整数：静态对白、单一反应、旁白空镜为1；简单动作或一次机位变化为2；明显走位、道具状态变化或动作转折为3；只有无法用3帧表达的关键复杂动作才为4。不得机械地让每镜都使用相同帧数。每个镜头只允许一个核心事件；复杂过程必须拆成“动作开始→动作变化→动作结果”等多个相邻简单镜头。相邻视频必须至少通过动作结果、视线、声音、道具状态或同场景不同角度中的一项明确承接。';
     const compactFoundation = {
       title: foundation.title,
@@ -2218,7 +2255,7 @@ app.post("/agents/comic", async (request, reply) => {
       }),
       scenes: (Array.isArray(foundation.scenes) ? foundation.scenes : []).map((raw) => {
         const item = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-        return { sceneId: item.sceneId || item.id, name: item.name, description: item.description || item.scene, propIndexes: item.propIndexes, environmentAnchors: item.environmentAnchors, imagePrompt: item.imagePrompt || item.scenePrompt };
+        return { sceneId: item.sceneId || item.id, baseSceneId:item.baseSceneId, variantType:item.variantType, name: item.name, description: item.description || item.scene, propIndexes: item.propIndexes, environmentAnchors: item.environmentAnchors, imagePrompt: item.imagePrompt || item.scenePrompt };
       }),
     };
     const shotPlanText = `创作需求：\n${text}\n\n已校验的紧凑剧情与资产索引：\n${JSON.stringify(compactFoundation)}`;
@@ -2304,7 +2341,8 @@ app.post("/agents/comic", async (request, reply) => {
             .slice(0, 3),
           motionLevel = stateChanges.length === 0
             ? "static"
-            : rawMotionLevel === "complex" && stateChanges.length >= 2
+            : stateChanges.length >= 3 ||
+                (rawMotionLevel === "complex" && stateChanges.length >= 2)
               ? "complex"
               : stateChanges.length >= 2 || rawMotionLevel === "simple"
                 ? "simple"
@@ -2328,13 +2366,17 @@ app.post("/agents/comic", async (request, reply) => {
       return value;
     };
     shotPlan = normalizeShotPlan(shotPlan);
+    const maxShotCapacity = comicShotCapacity(foundation.duration);
     const shotPlanIssues = (value: Record<string, unknown>) => {
       const planned = Array.isArray(value.plannedShots)
           ? value.plannedShots
           : [],
         issues: string[] = [];
       if (!planned.length) issues.push("plannedShots 为空");
-      if (planned.length > 48) issues.push(`镜头数量 ${planned.length}>48`);
+      if (planned.length > maxShotCapacity)
+        issues.push(
+          `镜头数量 ${planned.length}>当前时长的安全容量 ${maxShotCapacity}`,
+        );
       planned.forEach((raw, index) => {
         const item =
             raw && typeof raw === "object"
@@ -2441,7 +2483,6 @@ app.post("/agents/comic", async (request, reply) => {
     const plannedShots = (
         Array.isArray(shotPlan.plannedShots) ? shotPlan.plannedShots : []
       )
-        .slice(0, 48)
         .map((raw, index) => ({
           ...((raw && typeof raw === "object" ? raw : {}) as Record<
             string,
@@ -2457,7 +2498,7 @@ app.post("/agents/comic", async (request, reply) => {
       receivedBytes: streamReceivedBytes,
       totalShots,
     });
-    const shotsSystem = `你是漫剧分镜导演。严格按照本批轻量镜头规划逐镜扩写，只返回合法 JSON：{"shots":[完整镜头数组]}，返回数量和 number 必须与本批规划完全一致，不得合并、删除或新增镜头。每项必须包含 number、title、duration、storyBeat、action、sceneId、scene、scenePrompt、characterIndexes、characterForms、propIndexes、hasAnonymousCrowd、crowdPrompt、dialogue、frames、imagePrompt、videoPrompt、transition、continuity、referenceIndexes。frames 每项必须包含 title、imagePrompt、keyframe、inherit、change、lock、stateChangeIndexes、characterIndexes、characterForms、propIndexes；stateChangeIndexes 使用0起始索引，声明该帧落实了镜头规划 stateChanges 中的哪些可见变化。规划中的每个状态变化必须恰好被一帧认领，不得遗漏或重复。这些帧级索引只列当前画面实际可见的人物、形态和关键道具，不得把下一帧才出现的素材提前列入上一帧。必须把镜头规划的 entryState 写入首帧 inherit，把 exitState 落实到末帧 change/lock，并严格遵守 transitionAnchor 与 cameraAxis；不得在扩写时重新解释或丢失这些连续性状态。imagePrompt 与每个 frame.imagePrompt 不得超过100字，scenePrompt 和 crowdPrompt 不得超过160字，videoPrompt 不得超过125字；角色和道具索引严格引用视觉基座。必须沿用镜头规划中的实际对白和已计算 duration，不得在扩写阶段添加放不下的新台词。自然中文按每秒约3.6个汉字计算，每段台词或说话人切换留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；3–5秒以一句短台词为主，6–8秒最多两句。scenePrompt 只能描述无人物环境、空间、UI界面和光影素材，禁止人物、人体、手部和角色剪影。frame.imagePrompt 才是完整剧情分镜：必须明确当前出镜人物、动作、景别、构图、场景状态和必要道具，且与该帧 characterIndexes、characterForms、propIndexes 一一对应；禁止三视图、设定板、素材拼贴、重复人物和无关元素。若本帧参考上一分镜或其他图片，inherit 必须列出保持不变的可见项，change 只能列本帧相对参考图的主要变化，lock 必须列出不得改变的人物数量与身份、服饰发型、道具、场景结构、光线和空间关系。hasAnonymousCrowd 只能根据画面是否真的需要匿名人物取值；“无人知道、不为人知、人尽皆知、鲜为人知”等修饰词绝不表示有人群。仅当画面明确出现路人、群众或围观者时才设 true 并填写 crowdPrompt，否则必须为 false、crowdPrompt 为空，并禁止模型自行增加背景人物。未明确要求时禁止动物或车辆特写、可读文字、字幕、标牌、Logo、水印和无关装饰。相邻分镜必须延续人物身份、站位、视线、动作结果和场景锚点，但不能只是复制上一张：change 必须写清本帧新增动作、表情、景别、机位或焦点变化。禁止连续三个镜头使用相同景别、相同正面机位、相同人物尺寸和相同中心构图；在特写、近景、中景、全景、过肩、侧面或高低机位之间按剧情目的变化，避免为了变化而越轴。视频提示词只保留主要动作、运镜、结束状态和必要对白，让连接分镜按既定人物身份与场景演进，禁止重新设计人物、换装、换场景或切换画风。${comicProductionRules}\n${comicContinuityRules}\n${comicTransitionRules}\n${comicDialogueRules}\n${comicStyleRules}`;
+    const shotsSystem = `你是漫剧分镜导演。严格按照本批轻量镜头规划逐镜扩写，只返回合法 JSON：{"shots":[完整镜头数组]}，返回数量和 number 必须与本批规划完全一致，不得合并、删除或新增镜头。每项必须包含 number、title、duration、storyBeat、action、sceneId、scene、scenePrompt、characterIndexes、characterForms、propIndexes、hasAnonymousCrowd、crowdPrompt、dialogue、frames、imagePrompt、videoPrompt、transition、continuity、referenceIndexes。frames 每项必须包含 title、imagePrompt、keyframe、inherit、change、lock、stateChangeIndexes、characterIndexes、characterForms、propIndexes、characterStates。characterStates 必须为当前帧每个可见角色各返回一项：{"characterIndex":1,"posture":"standing|walking|crouching|kneeling|sitting|lying|airborne|other","positionAnchor":"角色在场景中的固定物理站位，如黑棺左侧","facingTarget":"character:2|prop:1|scene:院门|camera|other","heldPropIndexes":[],"transitionAction":"相对上一帧或上一镜的可见过渡动作；状态完全不变时留空"}。同一角色没有实际移动时 positionAnchor 必须逐字沿用；姿态、站位、朝向或手持道具变化时 transitionAction 必须明确写出停步、走近、转身、俯身、蹲下、起身、拾取或放下等过程，禁止只写变化后的静态结果。stateChangeIndexes 使用0起始索引，声明该帧落实了镜头规划 stateChanges 中的哪些可见变化。规划中的每个状态变化必须恰好被一帧认领，不得遗漏或重复。这些帧级索引只列当前画面实际可见的人物、形态和关键道具，不得把下一帧才出现的素材提前列入上一帧。必须把镜头规划的 entryState 写入首帧 inherit，把 exitState 落实到末帧 change/lock，并严格遵守 transitionAnchor 与 cameraAxis；不得在扩写时重新解释或丢失这些连续性状态。imagePrompt 与每个 frame.imagePrompt 不得超过100字，scenePrompt 和 crowdPrompt 不得超过160字，videoPrompt 不得超过125字；角色和道具索引严格引用视觉基座。必须沿用镜头规划中的实际对白和已计算 duration，不得在扩写阶段添加放不下的新台词。自然中文按每秒约3.6个汉字计算，每段台词或说话人切换留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；3–5秒以一句短台词为主，6–8秒最多两句。scenePrompt 只能描述无人物环境、空间、UI界面和光影素材，禁止人物、人体、手部和角色剪影。frame.imagePrompt 才是完整剧情分镜：必须明确当前出镜人物、动作、景别、构图、场景状态和必要道具，且与该帧 characterIndexes、characterForms、propIndexes 一一对应；禁止三视图、设定板、素材拼贴、重复人物和无关元素。若本帧参考上一分镜或其他图片，inherit 必须列出保持不变的可见项，change 只能列本帧相对参考图的主要变化，lock 必须列出不得改变的人物数量与身份、服饰发型、道具、场景结构、光线和空间关系。hasAnonymousCrowd 只能根据画面是否真的需要匿名人物取值；“无人知道、不为人知、人尽皆知、鲜为人知”等修饰词绝不表示有人群。仅当画面明确出现路人、群众或围观者时才设 true 并填写 crowdPrompt，否则必须为 false、crowdPrompt 为空，并禁止模型自行增加背景人物。未明确要求时禁止动物或车辆特写、可读文字、字幕、标牌、Logo、水印和无关装饰。相邻分镜必须延续人物身份、站位、视线、动作结果和场景锚点，但不能只是复制上一张：change 必须写清本帧新增动作、表情、景别、机位或焦点变化。禁止连续三个镜头使用相同景别、相同正面机位、相同人物尺寸和相同中心构图；在特写、近景、中景、全景、过肩、侧面或高低机位之间按剧情目的变化，避免为了变化而越轴。视频提示词只保留主要动作、运镜、结束状态和必要对白，让连接分镜按既定人物身份与场景演进，禁止重新设计人物、换装、换场景或切换画风。${comicProductionRules}\n${comicContinuityRules}\n${comicTransitionRules}\n${comicDialogueRules}\n${comicStyleRules}`;
     const adaptiveShotsSystem = `${shotsSystem}\n帧数与视频简化硬规则：每个镜头返回的 frames 数量必须严格等于镜头规划的 frameCount，不得自行统一成3帧或补帧。frameCount=1 时只给代表核心事件的单帧；frameCount=2 时给动作开始与结果；frameCount=3 时给开始、变化、结果；frameCount=4 仅用于规划明确指定的关键复杂动作。每个 videoPrompt 只执行一个核心事件，只保留完成该事件所需的一种主要运镜、必要动作和最多一个主要说话者；不得同时塞入多人对白、大量动作、复杂运镜和大型特效。相邻镜头必须让上一镜 exitState 成为下一镜 entryState，并通过动作、视线、声音、道具或同场景不同角度自然连接；换角度时保持人物左右关系、视线、动作方向和180度轴线。`;
     const shotBatchSize = 6,
       batchCount = Math.ceil(totalShots / shotBatchSize);
@@ -2582,34 +2623,29 @@ app.post("/agents/comic", async (request, reply) => {
         returned.forEach((rawShot) => {
           if (!rawShot || typeof rawShot !== "object") return;
           const shot = rawShot as Record<string, unknown>,
-            frames = Array.isArray(shot.frames) ? shot.frames : [];
+            frames = Array.isArray(shot.frames) ? shot.frames : [],
+            plannedShot = expected.find(
+              (item) => Number(item.number) === Number(shot.number),
+            ) as Record<string, unknown> | undefined;
           frames.forEach((rawFrame) => {
             if (!rawFrame || typeof rawFrame !== "object") return;
             const frame = rawFrame as Record<string, unknown>,
-              // `lock` may mention off-screen assets merely to forbid changes;
-              // it is not evidence that an asset is visible in this frame.
-              evidence = `${String(frame.title || "")} ${String(frame.imagePrompt || "")} ${String(frame.inherit || "")} ${String(frame.change || "")}`,
-              characterIndexes = foundationCharacters
-                .map((raw, index) => {
-                  const name =
-                    raw && typeof raw === "object"
-                      ? String((raw as Record<string, unknown>).name || "").trim()
-                      : "";
-                  return isCharacterVisible(evidence, name) ? index + 1 : 0;
-                })
-                .filter(Boolean),
-              propIndexes = foundationProps
-                .map((raw, index) => {
-                  const name =
-                    raw && typeof raw === "object"
-                      ? String((raw as Record<string, unknown>).name || "").trim()
-                      : "";
-                  return name && evidence.includes(name) ? index + 1 : 0;
-                })
-                .filter(Boolean),
+              characterIndexes = normalizeComicAssetIndexes(
+                frame.characterIndexes,
+                foundationCharacters.length,
+              ),
+              propIndexes = normalizeComicAssetIndexes(
+                frame.propIndexes,
+                foundationProps.length,
+              ),
               allowedCharacters = new Set(characterIndexes);
             frame.characterIndexes = characterIndexes;
             frame.propIndexes = propIndexes;
+            frame.characterStates = normalizeComicCharacterStates(
+              frame.characterStates,
+              characterIndexes,
+              propIndexes,
+            );
             frame.characterForms = (Array.isArray(frame.characterForms)
               ? frame.characterForms
               : []
@@ -2669,7 +2705,12 @@ app.post("/agents/comic", async (request, reply) => {
               return `${String(frame.title || "")} ${String(frame.imagePrompt || "")} ${String(frame.inherit || "")} ${String(frame.change || "")}`;
             })
             .join(" "),
-            hasAnonymousCrowd = hasVisibleAnonymousCrowd(crowdEvidence);
+            hasAnonymousCrowd = resolveVisibleAnonymousCrowd(
+              plannedShot?.hasAnonymousCrowd,
+              shot.hasAnonymousCrowd,
+              shot.crowdPrompt,
+              `${String(shot.storyBeat || "")} ${String(shot.action || "")} ${crowdEvidence}`,
+            );
           // Anonymous crowd layers are production dependencies. Derive them
           // from visible frame evidence instead of trusting a stray model flag.
           shot.hasAnonymousCrowd = hasAnonymousCrowd;
@@ -2705,8 +2746,95 @@ app.post("/agents/comic", async (request, reply) => {
             plannedStateChanges=(Array.isArray(plan.stateChanges)?plan.stateChanges:[]).map((change)=>String(change||"").trim()).filter(Boolean),
             claimedStateChanges:number[]=[];
           if(frames.length!==expectedFrameCount)issues.push(`镜头 ${planItem.number} 返回 ${frames.length} 张分镜，规划要求 ${expectedFrameCount} 张`);
-          frames.forEach((rawFrame,frameIndex)=>{const frame=rawFrame&&typeof rawFrame==="object"?rawFrame as Record<string,unknown>:null,label=`镜头 ${planItem.number} 分镜 ${frameIndex+1}`;if(!frame){issues.push(`${label} 数据无效`);return}for(const field of ["stateChangeIndexes","characterIndexes","characterForms","propIndexes"] as const)if(!Array.isArray(frame[field]))issues.push(`${label} 缺少 ${field}`);const stateChangeIndexes=Array.isArray(frame.stateChangeIndexes)?frame.stateChangeIndexes.map(Number):[];stateChangeIndexes.forEach((changeIndex)=>{if(!Number.isInteger(changeIndex)||changeIndex<0||changeIndex>=plannedStateChanges.length)issues.push(`${label} stateChangeIndexes 越界: ${changeIndex}`);else claimedStateChanges.push(changeIndex)});if(!String(frame.change||"").trim())issues.push(`${label}.change 为空，未落实可见变化`);const evidence=`${String(frame.title||"")}${String(frame.imagePrompt||"")}${String(frame.inherit||"")}${String(frame.change||"")}`,characterIndexes=Array.isArray(frame.characterIndexes)?frame.characterIndexes.map(Number):[],propIndexes=Array.isArray(frame.propIndexes)?frame.propIndexes.map(Number):[];characterIndexes.forEach(characterIndex=>{const raw=foundationCharacters[characterIndex-1],name=raw&&typeof raw==="object"?String((raw as Record<string,unknown>).name||""):"";if(name&&!evidence.includes(name))issues.push(`${label} 连接角色「${name}」但帧描述未说明该角色`)});propIndexes.forEach(propIndex=>{const raw=foundationProps[propIndex-1],name=raw&&typeof raw==="object"?String((raw as Record<string,unknown>).name||""):"";if(name&&!evidence.includes(name))issues.push(`${label} 连接道具「${name}」但帧描述未说明该道具`)});foundationCharacters.forEach((raw,characterIndex)=>{const name=raw&&typeof raw==="object"?String((raw as Record<string,unknown>).name||""):"";if(name&&isCharacterVisible(evidence,name)&&!characterIndexes.includes(characterIndex+1))issues.push(`${label} 描述出现角色「${name}」但 characterIndexes 未连接`)});foundationProps.forEach((raw,propIndex)=>{const name=raw&&typeof raw==="object"?String((raw as Record<string,unknown>).name||""):"";if(name&&evidence.includes(name)&&!propIndexes.includes(propIndex+1))issues.push(`${label} 描述出现道具「${name}」但 propIndexes 未连接`)})});
+          const plannedCharacterIndexes = new Set(
+              (Array.isArray(plan.characterIndexes) ? plan.characterIndexes : []).map(Number),
+            ),
+            plannedPropIndexes = new Set(
+              (Array.isArray(plan.propIndexes) ? plan.propIndexes : []).map(Number),
+            ),
+            claimedCharacterIndexes = new Set<number>(),
+            claimedPropIndexes = new Set<number>();
+          frames.forEach((rawFrame, frameIndex) => {
+            const frame = rawFrame && typeof rawFrame === "object"
+                ? rawFrame as Record<string, unknown>
+                : null,
+              label = `镜头 ${planItem.number} 分镜 ${frameIndex + 1}`;
+            if (!frame) {
+              issues.push(`${label} 数据无效`);
+              return;
+            }
+            for (const field of ["stateChangeIndexes", "characterIndexes", "characterForms", "propIndexes", "characterStates"] as const)
+              if (!Array.isArray(frame[field])) issues.push(`${label} 缺少 ${field}`);
+            const stateChangeIndexes = Array.isArray(frame.stateChangeIndexes)
+                ? frame.stateChangeIndexes.map(Number)
+                : [],
+              characterIndexes = Array.isArray(frame.characterIndexes)
+                ? frame.characterIndexes.map(Number)
+                : [],
+              propIndexes = Array.isArray(frame.propIndexes)
+                ? frame.propIndexes.map(Number)
+                : [],
+              characterStates = Array.isArray(frame.characterStates)
+                ? frame.characterStates as Record<string, unknown>[]
+                : [];
+            stateChangeIndexes.forEach((changeIndex) => {
+              if (!Number.isInteger(changeIndex) || changeIndex < 0 || changeIndex >= plannedStateChanges.length)
+                issues.push(`${label} stateChangeIndexes 越界: ${changeIndex}`);
+              else claimedStateChanges.push(changeIndex);
+            });
+            if (!String(frame.change || "").trim())
+              issues.push(`${label}.change 为空，未落实可见变化`);
+            characterIndexes.forEach((characterIndex) => {
+              if (!Number.isInteger(characterIndex) || !plannedCharacterIndexes.has(characterIndex))
+                issues.push(`${label} 使用了镜头规划外的角色 ID ${characterIndex}`);
+              else claimedCharacterIndexes.add(characterIndex);
+            });
+            propIndexes.forEach((propIndex) => {
+              if (!Number.isInteger(propIndex) || !plannedPropIndexes.has(propIndex))
+                issues.push(`${label} 使用了镜头规划外的道具 ID ${propIndex}`);
+              else claimedPropIndexes.add(propIndex);
+            });
+            const stateCharacters = new Set<number>();
+            characterStates.forEach((state) => {
+              const characterIndex = Number(state.characterIndex),
+                posture = String(state.posture || ""),
+                heldPropIndexes = Array.isArray(state.heldPropIndexes) ? state.heldPropIndexes.map(Number) : [];
+              if (stateCharacters.has(characterIndex)) issues.push(`${label} 角色 ID ${characterIndex} 的 characterStates 重复`);
+              stateCharacters.add(characterIndex);
+              if (!characterIndexes.includes(characterIndex)) issues.push(`${label} characterStates 含不可见角色 ID ${characterIndex}`);
+              if (!["standing", "walking", "crouching", "kneeling", "sitting", "lying", "airborne", "other"].includes(posture)) issues.push(`${label} 角色 ID ${characterIndex} posture 无效`);
+              if (!String(state.positionAnchor || "").trim()) issues.push(`${label} 角色 ID ${characterIndex} positionAnchor 为空`);
+              if (!String(state.facingTarget || "").trim()) issues.push(`${label} 角色 ID ${characterIndex} facingTarget 为空`);
+              if (!Array.isArray(state.heldPropIndexes)) issues.push(`${label} 角色 ID ${characterIndex} heldPropIndexes 无效`);
+              if (typeof state.transitionAction !== "string") issues.push(`${label} 角色 ID ${characterIndex} 缺少 transitionAction 字段`);
+              heldPropIndexes.forEach((propIndex) => {
+                if (!propIndexes.includes(propIndex)) issues.push(`${label} 角色 ID ${characterIndex} 持有未出镜道具 ID ${propIndex}`);
+              });
+            });
+            characterIndexes.forEach((characterIndex) => {
+              if (!stateCharacters.has(characterIndex)) issues.push(`${label} 可见角色 ID ${characterIndex} 缺少 characterStates`);
+            });
+            const priorShot = index > 0 ? returned[index - 1] : previousTail.at(-1),
+              priorFrames = priorShot && typeof priorShot === "object" && Array.isArray((priorShot as Record<string, unknown>).frames)
+                ? (priorShot as Record<string, unknown>).frames as unknown[]
+                : [],
+              previousFrame = frameIndex > 0 ? frames[frameIndex - 1] : priorFrames.at(-1);
+            issues.push(...comicCharacterStateTransitionIssues(previousFrame, frame, Number(planItem.number), frameIndex + 1));
+          });
+          plannedCharacterIndexes.forEach((characterIndex) => {
+            if (!claimedCharacterIndexes.has(characterIndex))
+              issues.push(`镜头 ${planItem.number} 规划角色 ID ${characterIndex} 未分配到任何分镜`);
+          });
+          plannedPropIndexes.forEach((propIndex) => {
+            if (!claimedPropIndexes.has(propIndex))
+              issues.push(`镜头 ${planItem.number} 规划道具 ID ${propIndex} 未分配到任何分镜`);
+          });
           plannedStateChanges.forEach((change,changeIndex)=>{const claims=claimedStateChanges.filter((index)=>index===changeIndex).length;if(claims===0)issues.push(`镜头 ${planItem.number} 遗漏状态变化 ${changeIndex+1}「${change}」`);else if(claims>1)issues.push(`镜头 ${planItem.number} 状态变化 ${changeIndex+1}「${change}」被重复认领 ${claims} 次`)});
+          const previousShot = index > 0
+              ? returned[index - 1]
+              : previousTail.at(-1),
+            postureIssue = comicPostureTransitionIssue(previousShot, rawShot);
+          if (postureIssue) issues.push(postureIssue);
         });
         return issues;
       };
@@ -2808,9 +2936,9 @@ app.post("/agents/comic", async (request, reply) => {
         .map((index) => allShots[index]);
     };
     let auditSystem =
-      '你是漫剧连续性审校。只返回合法 JSON：{"valid":true,"issues":[],"repairs":[{"shotNumber":1,"sceneId":"修正后场景ID","scene":"修正后地点","scenePrompt":"修正后无人场景","imagePrompt":"修正后主画面","storyBeat":"修正后剧情承接","action":"修正后动作","dialogue":"修正后完整对白","videoPrompt":"修正后视频提示","transition":"修正后过渡","continuity":"修正后连续性","exitState":"修正后出口状态","transitionAnchor":"修正后过渡锚点","cameraAxis":"修正后轴线","frames":[{"title":"原标题","imagePrompt":"不超过100字的修正分镜","keyframe":"start","inherit":"明确继承项","change":"本帧唯一变化","lock":"不可改变项","characterIndexes":[],"characterForms":[],"propIndexes":[]}]}]}。检查相邻镜头和分段边界的因果、人物形态、道具状态、地点时段、场景结构、建筑位置、主光方向、人物左右站位、视线、180度轴线、动作方向、景别变化、对白与悬念是否承接。sceneId 相同时画面必须像同一空间的连续拍摄；sceneId 变化时必须有建立镜头或明确视听桥接，禁止无解释瞬移。只给确有问题的镜头 repairs，不重写整个方案。修复地点冲突时必须同时返回 sceneId、scene、scenePrompt、imagePrompt、exitState、transitionAnchor 和 cameraAxis；若错误存在于分镜画面，必须返回完整 frames 定向修正 imagePrompt、inherit、change、lock，不能只改旁边的 continuity 文本来掩盖；若原 frames 无错则不要返回 frames。对白事实错误必须返回 dialogue，动作错误必须返回 action，视频演出与对白不一致必须返回 videoPrompt。修改 dialogue 时保持原 duration 可自然说完，修改 videoPrompt 时不超过125字并明确无字幕。';
+      '你是漫剧连续性审校。只返回合法 JSON：{"valid":true,"issues":[],"repairs":[{"shotNumber":1,"sceneId":"修正后场景ID","scene":"修正后地点","scenePrompt":"修正后无人场景","imagePrompt":"修正后主画面","storyBeat":"修正后剧情承接","action":"修正后动作","dialogue":"修正后完整对白","videoPrompt":"修正后视频提示","transition":"修正后过渡","continuity":"修正后连续性","exitState":"修正后出口状态","transitionAnchor":"修正后过渡锚点","cameraAxis":"修正后轴线","frames":[{"title":"原标题","imagePrompt":"不超过100字的修正分镜","keyframe":"start","inherit":"明确继承项","change":"本帧唯一变化","lock":"不可改变项","characterIndexes":[],"characterForms":[],"propIndexes":[],"characterStates":[{"characterIndex":1,"posture":"standing","positionAnchor":"固定物理站位","facingTarget":"prop:1","heldPropIndexes":[],"transitionAction":"可见过渡动作或空字符串"}]}]}]}。检查相邻镜头和分段边界的因果、人物形态、道具状态、地点时段、场景结构、建筑位置、主光方向、人物左右站位、视线、180度轴线、动作方向、景别变化、对白与悬念是否承接。sceneId 相同时画面必须像同一空间的连续拍摄；sceneId 变化时必须有建立镜头或明确视听桥接，禁止无解释瞬移。只给确有问题的镜头 repairs，不重写整个方案。修复地点冲突时必须同时返回 sceneId、scene、scenePrompt、imagePrompt、exitState、transitionAnchor 和 cameraAxis；若错误存在于分镜画面，必须返回完整 frames 定向修正 imagePrompt、inherit、change、lock 和 characterStates，不能只改旁边的 continuity 文本来掩盖；若原 frames 无错则不要返回 frames。对白事实错误必须返回 dialogue，动作错误必须返回 action，视频演出与对白不一致必须返回 videoPrompt。修改 dialogue 时保持原 duration 可自然说完，修改 videoPrompt 时不超过125字并明确无字幕。';
     auditSystem += " 修复 frames.imagePrompt 时必须保持100–320个中文字符，并保留主体、静态镜头设计、参考继承、本帧变化、连续性和排除项，不得压缩回简略描述。";
-    auditSystem += " 若修复 frames，repairs 必须同时返回由修正后各帧实际可见素材汇总得到的镜头级 characterIndexes、characterForms 和 propIndexes；不得保留已经从 frames 中移除的人物或道具。修复帧还必须保留正确的 stateChangeIndexes。";
+    auditSystem += " 若修复 frames，repairs 必须同时返回由修正后各帧实际可见素材汇总得到的镜头级 characterIndexes、characterForms 和 propIndexes；不得保留已经从 frames 中移除的人物或道具。修复帧还必须保留正确的 stateChangeIndexes 与完整 characterStates；姿态、站位、朝向或持物变化时 transitionAction 必须描述可见过渡，状态不变才可留空。";
     let audit = await readStage(
       "正在审校跨段过渡…",
       auditSystem,
@@ -3023,6 +3151,8 @@ app.post("/agents/comic", async (request, reply) => {
       const scene = value && typeof value === "object" ? value as Record<string, unknown> : {};
       return {
         sceneId: String(scene.sceneId || scene.id || `scene-${index + 1}`).slice(0, 80),
+        baseSceneId: String(scene.baseSceneId || "").trim().slice(0, 80) || undefined,
+        variantType: ["base", "area", "state", "time"].includes(String(scene.variantType)) ? String(scene.variantType) as "base"|"area"|"state"|"time" : String(scene.baseSceneId || "").trim() ? "area" as const : "base" as const,
         name: String(scene.name || `场景 ${index + 1}`).slice(0, 60),
         description: String(scene.description || scene.scene || "").slice(0, 800),
         imagePrompt: compactImagePrompt(String(scene.imagePrompt || scene.scenePrompt || scene.description || ""), 160),
@@ -3030,9 +3160,8 @@ app.post("/agents/comic", async (request, reply) => {
         environmentAnchors: (Array.isArray(scene.environmentAnchors) ? scene.environmentAnchors : []).map((item) => String(item || "").trim().slice(0, 80)).filter(Boolean).slice(0, 8),
       };
     });
-    const shots = rawShots
-      .slice(0, 48)
-      .map((value, index) => {
+    normalizeComicSceneHierarchy(scenes);
+    const shots = rawShots.map((value, index) => {
         const shot =
             value && typeof value === "object"
               ? (value as Record<string, unknown>)
@@ -3065,13 +3194,7 @@ app.post("/agents/comic", async (request, reply) => {
             )
             .filter(Boolean),
           validatedCharacters =
-            explicitCharacters.length && inferredCharacters.length
-              ? explicitCharacters.filter((number) =>
-                  inferredCharacters.includes(number),
-                )
-              : explicitCharacters.length
-                ? explicitCharacters
-                : inferredCharacters,
+            explicitCharacters.length ? explicitCharacters : inferredCharacters,
           declaredPropIndexes = Array.isArray(shot.propIndexes)
             ? [
                 ...new Set(
@@ -3089,7 +3212,9 @@ app.post("/agents/comic", async (request, reply) => {
           inferredShotPropIndexes = props
             .map((prop, propIndex) => comicAssetNameMentioned(characterEvidence, prop.name) ? propIndex + 1 : 0)
             .filter(Boolean),
-          propIndexes = [...new Set([...declaredPropIndexes, ...inferredShotPropIndexes])],
+          propIndexes = declaredPropIndexes.length
+            ? declaredPropIndexes
+            : [...new Set(inferredShotPropIndexes)],
           rawFrames = Array.isArray(shot.frames) ? shot.frames : [],
           frames = (
             rawFrames.length ? rawFrames : [{ title: "主画面", imagePrompt }]
@@ -3107,10 +3232,10 @@ app.post("/agents/comic", async (request, reply) => {
                 inferredFrameCharacters = validatedCharacters.filter((number) => frameEvidence.includes(characters[number - 1]?.name || "\u0000")),
                 frameCharacterIndexes = [
                   ...new Set(
-                    inferredFrameCharacters.length
-                      ? inferredFrameCharacters
+                    explicitFrameCharacters.length
+                      ? explicitFrameCharacters
                       : rawFrames.length <= 1
-                        ? explicitFrameCharacters
+                        ? inferredFrameCharacters
                         : [],
                   ),
                 ],
@@ -3120,10 +3245,10 @@ app.post("/agents/comic", async (request, reply) => {
                 inferredFrameProps = props.map((prop, propIndex) => comicAssetNameMentioned(frameEvidence, prop.name) ? propIndex + 1 : 0).filter(Boolean),
                 framePropIndexes = [
                   ...new Set(
-                    inferredFrameProps.length
-                      ? [...explicitFrameProps, ...inferredFrameProps]
+                    explicitFrameProps.length
+                      ? explicitFrameProps
                       : rawFrames.length <= 1
-                        ? explicitFrameProps
+                        ? inferredFrameProps
                         : [],
                   ),
                 ],
@@ -3164,7 +3289,12 @@ app.post("/agents/comic", async (request, reply) => {
                 `${frame.title} ${frame.imagePrompt} ${frame.inherit} ${frame.change}`,
             )
             .join(" "),
-          hasAnonymousCrowd = hasVisibleAnonymousCrowd(crowdEvidence),
+          hasAnonymousCrowd = resolveVisibleAnonymousCrowd(
+            shot.hasAnonymousCrowd,
+            shot.hasAnonymousCrowd,
+            shot.crowdPrompt,
+            `${String(shot.storyBeat || "")} ${String(shot.action || "")} ${String(shot.scene || "")} ${crowdEvidence}`,
+          ),
           crowdPrompt = hasAnonymousCrowd
             ? compactImagePrompt(
                 String(
@@ -3383,14 +3513,21 @@ app.post("/agents/comic", async (request, reply) => {
 app.get("/agents/comic/session", async (request, reply) => {
   const user = requireUser(request, reply);
   if (!user) return;
-  const query = request.query as { projectId?: string },
-    projectId = String(query.projectId || "");
+  const query = request.query as { projectId?: string; sessionId?: string },
+    projectId = String(query.projectId || ""),
+    requestedSessionId = String(query.sessionId || "").trim();
   if (!projectId || !ownsProject(projectId, String(user.id)))
     return reply.code(404).send({ error: "当前项目不存在" });
-  const session = getOne(
-    "SELECT id,phase,brief,messages,pending_revision AS pendingRevision,plan,generation_status AS generationStatus,generation_stage AS generationStage,generation_progress AS generationProgress,generation_received_bytes AS generationReceivedBytes,generation_error AS generationError,generation_issues AS generationIssues,generation_checkpoint AS generationCheckpoint,updated_at AS updatedAt FROM comic_sessions WHERE user_id=? AND project_id=? ORDER BY CASE WHEN generation_status='running' THEN 0 WHEN plan IS NOT NULL THEN 1 ELSE 2 END,updated_at DESC LIMIT 1",
-    [String(user.id), projectId],
-  );
+  const fields = "id,phase,brief,messages,pending_revision AS pendingRevision,plan,generation_status AS generationStatus,generation_stage AS generationStage,generation_progress AS generationProgress,generation_received_bytes AS generationReceivedBytes,generation_error AS generationError,generation_issues AS generationIssues,generation_checkpoint AS generationCheckpoint,updated_at AS updatedAt",
+    session = requestedSessionId
+      ? getOne(
+          `SELECT ${fields} FROM comic_sessions WHERE id=? AND user_id=? AND project_id=? LIMIT 1`,
+          [requestedSessionId, String(user.id), projectId],
+        )
+      : getOne(
+          `SELECT ${fields} FROM comic_sessions WHERE user_id=? AND project_id=? AND generation_status='running' ORDER BY updated_at DESC LIMIT 1`,
+          [String(user.id), projectId],
+        );
   if (!session) return reply.code(204).send();
   let checkpoint: Record<string, unknown> = {};
   try {
