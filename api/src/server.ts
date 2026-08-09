@@ -2105,7 +2105,7 @@ app.post("/agents/comic", async (request, reply) => {
     });
     const assetSystem = `你是漫剧视觉设定师。只返回合法 JSON：{"characters":[{"name":"角色名","description":"稳定设定","voiceProfile":"中文声线","visualAsset":true,"imagePrompt":"180–420字角色设定板提示词","forms":[]}],"props":[{"name":"道具名","description":"固定设定","imagePrompt":"不超过160字的道具图提示词"}]}。只建立跨镜头需要保持一致的具名人物和关键道具，普通路人不建档。人物提示词的生成目标只能是单一角色设定板，展示固定外观、服饰、三视图与细节，禁止剧情场景、表演动作、多人互动、海报构图和复制角色。道具提示词的生成目标只能是单一道具设定素材，展示结构、材质、颜色与细节，禁止人物、人体、手持动作、剧情表演和复杂背景。角色 imagePrompt 与形态 imagePrompt 均不得超过420字，道具 imagePrompt 不得超过160字。${comicCharacterSheetRules}\n${comicStyleRules}`;
     const assetText = `已确认创作需求：\n${text}\n\n已校验剧情大纲：\n${JSON.stringify(story)}`;
-    const sceneSystem = `你是漫剧场景美术。只返回合法 JSON：{"scenes":[{"sceneId":"稳定地点与时段ID","name":"场景名","description":"空间结构与剧情用途","propIndexes":[1],"environmentAnchors":["固定道具及建筑的方位、距离或朝向"],"imagePrompt":"不超过160字的无人物场景设定图提示词"}]}。propIndexes 使用已建档关键道具的1起始索引，只列场景结构中固定存在的道具、建筑标志或环境装置；角色手持、临时带入或只在单镜出现的剧情道具不得列入。石碑、雕像、祭坛、门、固定兵器等若已在道具表建档且属于场地组成，必须通过 propIndexes 引用，禁止在场景中另行重新设计。environmentAnchors 必须锁定这些固定资产及主要建筑的空间方位、距离、朝向和主光关系，同一 sceneId 只能有一套锚点。合并同一地点与时段，状态变化不得重复创建场景。每条 imagePrompt 必须明确写出“无人物场景基准图，禁止出现任何人物、人体、手部、角色剪影或人形主体”，只生成可供后续分镜合成使用的空环境、空间结构、UI界面、已连接的固定道具与光影素材；提示词不得重新描述或重造已连接道具的外观，只说明其位置和比例。即使剧情中该场景原本有人，场景基准图也必须保持无人；人物只能在后续 frames 分镜合成阶段加入。未明确要求时禁止动物、车辆特写、可读文字、字幕、标牌、Logo 和水印。每条 imagePrompt 不得超过160字，并继承统一风格。`;
+    const sceneSystem = `你是漫剧场景美术。只返回合法 JSON：{"scenes":[{"sceneId":"稳定地点与时段ID","name":"场景名","description":"空间结构与剧情用途","propIndexes":[1],"environmentAnchors":["固定道具及建筑的方位、距离或朝向"],"imagePrompt":"不超过160字的无人物场景设定图提示词"}]}。propIndexes 使用已建档关键道具的1起始索引，只列从该场景第一镜开始就固定存在、后续持续作为空间组成的道具、建筑标志或环境装置。角色手持、临时带入、只在单镜出现，以及封印解除后才出现、召唤后才出现、开启后才出现、破坏后才形成的剧情状态资产，绝不能提前列入场景 propIndexes、environmentAnchors 或 imagePrompt；它们必须留给首次可见的后续分镜单独引用。例如“关闭的古门”开场存在时可进入场景，“最终才开启的天门异象”不得进入初始场景。石碑、雕像、祭坛等若从首镜起属于场地组成，必须通过 propIndexes 引用，禁止在场景中另行重新设计。environmentAnchors 必须锁定固定资产及主要建筑的空间方位、距离、朝向和主光关系，同一 sceneId 只能有一套锚点。合并同一地点与时段，状态变化不得重复创建场景。每条 imagePrompt 必须明确写出“无人物场景基准图，禁止出现任何人物、人体、手部、角色剪影或人形主体”，只生成可供后续分镜合成使用的初始空环境、空间结构、已连接的固定道具与光影素材；提示词不得重新描述已连接道具的外观，只说明其位置和比例。即使剧情中该场景原本有人，场景基准图也必须保持无人。未明确要求时禁止动物、车辆特写、可读文字、字幕、标牌、Logo 和水印。每条 imagePrompt 不得超过160字，并继承统一风格。`;
     let assets = checkpoint.assets
       ? checkpoint.assets
       : await readStage(
@@ -2165,14 +2165,8 @@ app.post("/agents/comic", async (request, reply) => {
     const availableProps = Array.isArray(assets.props) ? assets.props : [];
     sceneBible.scenes = (Array.isArray(sceneBible.scenes) ? sceneBible.scenes : []).map((raw, index) => {
       const scene = raw && typeof raw === "object" ? { ...(raw as Record<string, unknown>) } : {};
-      const evidence = `${String(scene.name || "")} ${String(scene.description || "")} ${String(scene.imagePrompt || scene.scenePrompt || "")}`;
       const declared = Array.isArray(scene.propIndexes) ? scene.propIndexes.map(Number) : [];
-      const inferred = availableProps.map((propRaw, propIndex) => {
-        const prop = propRaw && typeof propRaw === "object" ? propRaw as Record<string, unknown> : {};
-        const name = String(prop.name || "").trim();
-        return name && evidence.includes(name) ? propIndex + 1 : 0;
-      }).filter(Boolean);
-      scene.propIndexes = [...new Set([...declared, ...inferred].filter((value) => Number.isInteger(value) && value >= 1 && value <= availableProps.length))];
+      scene.propIndexes = [...new Set(declared.filter((value) => Number.isInteger(value) && value >= 1 && value <= availableProps.length))];
       scene.environmentAnchors = (Array.isArray(scene.environmentAnchors) ? scene.environmentAnchors : [])
         .map((value) => String(value || "").trim().slice(0, 80)).filter(Boolean).slice(0, 8);
       scene.sceneId = String(scene.sceneId || scene.id || `scene-${index + 1}`).trim().slice(0, 80);
@@ -3078,7 +3072,7 @@ app.post("/agents/comic", async (request, reply) => {
               : explicitCharacters.length
                 ? explicitCharacters
                 : inferredCharacters,
-          propIndexes = Array.isArray(shot.propIndexes)
+          declaredPropIndexes = Array.isArray(shot.propIndexes)
             ? [
                 ...new Set(
                   shot.propIndexes
@@ -3092,6 +3086,10 @@ app.post("/agents/comic", async (request, reply) => {
                 ),
               ]
             : [],
+          inferredShotPropIndexes = props
+            .map((prop, propIndex) => comicAssetNameMentioned(characterEvidence, prop.name) ? propIndex + 1 : 0)
+            .filter(Boolean),
+          propIndexes = [...new Set([...declaredPropIndexes, ...inferredShotPropIndexes])],
           rawFrames = Array.isArray(shot.frames) ? shot.frames : [],
           frames = (
             rawFrames.length ? rawFrames : [{ title: "主画面", imagePrompt }]
@@ -3117,13 +3115,13 @@ app.post("/agents/comic", async (request, reply) => {
                   ),
                 ],
                 explicitFrameProps = Array.isArray(frame.propIndexes)
-                  ? frame.propIndexes.map(Number).filter((number) => Number.isInteger(number) && propIndexes.includes(number))
+                  ? frame.propIndexes.map(Number).filter((number) => Number.isInteger(number) && number >= 1 && number <= props.length)
                   : [],
-                inferredFrameProps = propIndexes.filter((number) => frameEvidence.includes(props[number - 1]?.name || "\u0000")),
+                inferredFrameProps = props.map((prop, propIndex) => comicAssetNameMentioned(frameEvidence, prop.name) ? propIndex + 1 : 0).filter(Boolean),
                 framePropIndexes = [
                   ...new Set(
                     inferredFrameProps.length
-                      ? inferredFrameProps
+                      ? [...explicitFrameProps, ...inferredFrameProps]
                       : rawFrames.length <= 1
                         ? explicitFrameProps
                         : [],
@@ -3229,6 +3227,7 @@ app.post("/agents/comic", async (request, reply) => {
         };
       })
       .filter((shot) => shot.frames.length && shot.videoPrompt);
+    finalizeComicSceneDependencies(scenes, shots, props);
     shots.forEach((shot, index) => {
       const rawShot =
           rawShots[index] && typeof rawShots[index] === "object"
@@ -5485,6 +5484,55 @@ function normalizeComicDialogue(value: unknown): string {
     })
     .filter(Boolean)
     .join("\n");
+}
+
+export function finalizeComicSceneDependencies(
+  scenes: Array<{ sceneId:string; imagePrompt:string; propIndexes:number[]; environmentAnchors:string[] }>,
+  shots: Array<{ sceneId:string; scenePrompt:string; frames:Array<{ propIndexes:number[] }> }>,
+  props: Array<{ name:string }>,
+) {
+  for (const scene of scenes) {
+    const firstShot = shots.find((shot) => shot.sceneId === scene.sceneId);
+    if (!firstShot) continue;
+    const initiallyVisible = new Set(firstShot.frames.flatMap((frame) => frame.propIndexes));
+    const futureProps = scene.propIndexes.filter((index) => !initiallyVisible.has(index));
+    if (!futureProps.length) continue;
+    scene.propIndexes = scene.propIndexes.filter((index) => initiallyVisible.has(index));
+    const excludedTerms = futureProps.flatMap((index) => {
+      const name = String(props[index - 1]?.name || "").trim();
+      return [name, ...name.split(/[与和及、]/)].map((term) => term.trim()).filter((term) => term.length >= 2);
+    });
+    scene.imagePrompt = stripComicFutureAssetClauses(scene.imagePrompt, excludedTerms);
+    scene.environmentAnchors = scene.environmentAnchors.filter((anchor) => !excludedTerms.some((term) => anchor.includes(term)));
+    for (const shot of shots) {
+      if (shot.sceneId === scene.sceneId) shot.scenePrompt = scene.imagePrompt;
+    }
+  }
+  return scenes;
+}
+
+function comicAssetNameMentioned(evidence: string, name: string) {
+  const normalizedName = String(name || "").trim();
+  if (!normalizedName) return false;
+  if (evidence.includes(normalizedName)) return true;
+  return normalizedName.split(/[与和及、]/).some((term) => term.trim().length >= 2 && evidence.includes(term.trim()));
+}
+
+function stripComicFutureAssetClauses(value: string, terms: string[]) {
+  const cleaned = String(value || "")
+    .split(/([，；。])/)
+    .reduce<string[]>((parts, segment, index, source) => {
+      if (/^[，；。]$/.test(segment)) return parts;
+      if (terms.some((term) => segment.includes(term))) return parts;
+      const separator = source[index + 1];
+      parts.push(`${segment.trim()}${/^[，；。]$/.test(separator || "") ? separator : ""}`);
+      return parts;
+    }, [])
+    .join("")
+    .replace(/[，；。]{2,}/g, "；")
+    .replace(/^[，；。\s]+|[，；。\s]+$/g, "")
+    .trim();
+  return cleaned || "无人物初始场景基准图，保持固定空间结构、建筑方位与主光一致";
 }
 
 function estimateComicSpeechDuration(value: unknown) {
