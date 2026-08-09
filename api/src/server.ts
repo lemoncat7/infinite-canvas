@@ -1508,7 +1508,7 @@ app.post("/agents/comic", async (request, reply) => {
     completedBatches?: number;
     updatedAt?: string;
   };
-  const comicPipelineVersion = "compact-shot-plan-v3";
+  const comicPipelineVersion = "compact-shot-plan-v4";
   const checkpointFingerprint = createHash("sha256")
     // Resolved visual inputs contain expiring signed URLs. Fingerprinting them
     // makes the same request look new on every retry and discards checkpoints.
@@ -2562,6 +2562,12 @@ app.post("/agents/comic", async (request, reply) => {
             );
           return !negative.test(evidence);
         },
+        hasVisibleAnonymousCrowd = (evidence: string) => {
+          const normalized = evidence
+            .replace(/无人物|无人画面|单人|只出现[^\u3002；；,，]{0,18}/g, "")
+            .replace(/(?:禁止|不得|不出现|没有|不包含)[^\u3002；；,，]{0,20}(?:群众|人群|路人|围观者|修士|弟子)/g, "");
+          return /(?:匿名背景(?:人物|人群)|背景人群|围观群众|路人群|修士人群|众修士|弟子们)|(?:群众|人群|路人|围观者|修士们|弟子们)[^\u3002；；,，]{0,16}(?:聚集|围观|分散|站立|奔跑|后退|惊呼|交谈|涌入)/.test(normalized);
+        },
         normalizeFrameReferences = (value: Record<string, unknown>) => {
         const returned = Array.isArray(value.shots) ? value.shots : [],
           foundationCharacters = Array.isArray(foundation.characters)
@@ -2653,6 +2659,20 @@ app.post("/agents/comic", async (request, reply) => {
                 Number((raw as Record<string, unknown>).characterIndex),
               ),
           );
+          const crowdEvidence = frames
+            .map((rawFrame) => {
+              if (!rawFrame || typeof rawFrame !== "object") return "";
+              const frame = rawFrame as Record<string, unknown>;
+              return `${String(frame.title || "")} ${String(frame.imagePrompt || "")} ${String(frame.inherit || "")} ${String(frame.change || "")}`;
+            })
+            .join(" "),
+            hasAnonymousCrowd = hasVisibleAnonymousCrowd(crowdEvidence);
+          // Anonymous crowd layers are production dependencies. Derive them
+          // from visible frame evidence instead of trusting a stray model flag.
+          shot.hasAnonymousCrowd = hasAnonymousCrowd;
+          shot.crowdPrompt = hasAnonymousCrowd
+            ? String(shot.crowdPrompt || "匿名背景人群，个体外观与动作不重复，禁止复制具名角色").trim()
+            : "";
         });
         return value;
       };
@@ -5960,7 +5980,10 @@ async function executeQueuedJob(job: Record<string, unknown>) {
     const parameters = parseJsonObject(job.parameters);
     let updates = Promise.resolve(),
       lastError: unknown;
-    const attempts = kind === "image" ? 3 : 1;
+    // Both image and video providers may lose a response stream after the
+    // request has been accepted. Retry bounded transient transport failures;
+    // validation/authentication errors still fail immediately.
+    const attempts = kind === "image" ? 3 : kind === "video" ? 3 : 1;
     for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
         await provider.run(
@@ -6109,7 +6132,7 @@ function isTransientGenerationError(error: unknown) {
     )
   )
     return false;
-  return /ECONNRESET|ECONNREFUSED|fetch failed|socket|network|temporar|502|503|504/i.test(
+  return /ECONNRESET|ECONNREFUSED|fetch failed|socket|network|temporar|HTTP\/2 stream.*not closed cleanly|curl:\s*\(18\)|502|503|504/i.test(
     message,
   );
 }
