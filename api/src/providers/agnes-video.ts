@@ -211,7 +211,7 @@ function createBody(input: GenerationInput, images: string[], settings: Record<s
 }
 function withOrderedKeyframes(prompt: string, count: number) {
   const labels = Array.from({ length: count }, (_, index) => `Image ${index + 1}`).join(' → ')
-  return `${prompt}\n\nOrdered chronological keyframes: ${labels}. Animate the visual progression strictly in this order, beginning from Image 1 and ending at Image ${count}. Preserve character identity, clothing, props, environment, spatial layout, lighting, and art style between every keyframe. Do not swap, skip, or reinterpret the keyframe order.`
+  return `${prompt}\n\nOrdered chronological keyframes: ${labels}. Begin on Image 1 exactly and end on Image ${count} exactly. Interpolate only the shortest directly visible motion required to transform each image into the next image, strictly in this order. Every supplied image is a mandatory visual state, not a loose style reference. Preserve the exact character count, identity, face, clothing, hairstyle, props, environment, spatial layout, camera axis, lighting, and art style between keyframes. Do not swap, skip, reinterpret, redesign, or move beyond any keyframe. Do not invent intermediate events, extra attacks, gestures, turns, walking, facial performances, idle motion, secondary movement, scene changes, or camera movement unless explicitly required to reach the next supplied image. No action may continue after the final keyframe state is reached.`
 }
 function withNumberedReferences(prompt: string, count: number) {
   const labels = Array.from({ length: count }, (_, index) => `Image ${index + 1}`).join(', ')
