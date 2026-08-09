@@ -51,23 +51,24 @@ export class AgnesVideoProvider implements GenerationProvider {
     if (input.kind !== 'video') throw new Error('Agnes Video Adapter 仅支持视频任务')
     const credential = await acquireAgnesCredential()
     const settings = normalizeSettings(input.parameters)
+    const referenceMode = input.parameters?.reference_mode === 'keyframes' ? 'keyframes' : 'references'
     const imageSources = input.inputUrls ?? []
     let images = await Promise.all(imageSources.map(source => this.resolveImage(source)))
     onUpdate({ status: 'running', progress: 0 })
     console.info('[agnes-video] preparing ordered inputs', { internalJobId: input.internalJobId, imageCount: images.length, orderedInputIndexes: images.map((_, index) => index + 1) })
     console.info('[agnes-video] credential assigned', { internalJobId:input.internalJobId, channel:credential.channel, channelCount:agnesCredentialPool.length })
-    let response = await this.request('/v1/videos', { method: 'POST', body: createBody(input, images, settings, this.defaultModel) }, this.timeoutForImages(images), credential.key)
+    let response = await this.request('/v1/videos', { method: 'POST', body: createBody(input, images, settings, this.defaultModel, referenceMode) }, this.timeoutForImages(images), credential.key)
     let created = await readTask(response)
     if (!response.ok && imageSources.length && images.some(image => /^https?:\/\//i.test(image)) && /image URL|image.*download/i.test(taskError(created))) {
       console.info('[agnes-video] public image rejected, retrying with embedded images', { internalJobId: input.internalJobId, imageCount: imageSources.length })
       images = await Promise.all(imageSources.map(source => this.resolveImage(source, true)))
-      response = await this.request('/v1/videos', { method: 'POST', body: createBody(input, images, settings, this.defaultModel) }, this.timeoutForImages(images), credential.key)
+      response = await this.request('/v1/videos', { method: 'POST', body: createBody(input, images, settings, this.defaultModel, referenceMode) }, this.timeoutForImages(images), credential.key)
       created = await readTask(response)
     }
     if (!response.ok) throw new Error(taskError(created) || `Agnes 创建视频任务失败（${response.status}）`)
     const videoId = created.video_id || created.task_id || created.id
     if (!videoId) throw new Error('Agnes 创建任务响应中没有 video_id 或 task_id')
-    console.info('[agnes-video] task created', { internalJobId: input.internalJobId, videoId, model: input.model || this.defaultModel, imageCount: images.length, mode: images.length > 1 ? 'keyframes' : images.length ? 'ti2vid' : 'text' })
+    console.info('[agnes-video] task created', { internalJobId: input.internalJobId, videoId, model: input.model || this.defaultModel, imageCount: images.length, mode: images.length > 1 ? referenceMode : images.length ? 'ti2vid' : 'text' })
 
     const startedAt = Date.now()
     while (Date.now() - startedAt < this.timeout) {
@@ -201,12 +202,16 @@ async function readTask(response: Response) { try { return await response.json()
 function taskError(task: AgnesTask) { return typeof task.error === 'string' ? task.error : task.error?.message || task.message || '' }
 function wait(ms: number) { return new Promise(resolve => setTimeout(resolve, ms)) }
 function required(name: string) { const value = process.env[name]; if (!value) throw new Error(`${name} is required`); return value }
-function createBody(input: GenerationInput, images: string[], settings: Record<string, unknown>, defaultModel: string) {
+function createBody(input: GenerationInput, images: string[], settings: Record<string, unknown>, defaultModel: string, referenceMode: 'keyframes'|'references') {
   const media = images.length > 1
     ? { mode: 'keyframes', extra_body: { image: images, mode: 'keyframes' } }
     : images.length === 1 ? { image: images[0], mode: 'ti2vid' } : {}
-  const prompt = images.length > 1 ? withNumberedReferences(input.prompt, images.length) : input.prompt
+  const prompt = images.length > 1 ? referenceMode === 'keyframes' ? withOrderedKeyframes(input.prompt, images.length) : withNumberedReferences(input.prompt, images.length) : input.prompt
   return JSON.stringify({ model: input.model || defaultModel, prompt, ...media, ...settings })
+}
+function withOrderedKeyframes(prompt: string, count: number) {
+  const labels = Array.from({ length: count }, (_, index) => `Image ${index + 1}`).join(' → ')
+  return `${prompt}\n\nOrdered chronological keyframes: ${labels}. Animate the visual progression strictly in this order, beginning from Image 1 and ending at Image ${count}. Preserve character identity, clothing, props, environment, spatial layout, lighting, and art style between every keyframe. Do not swap, skip, or reinterpret the keyframe order.`
 }
 function withNumberedReferences(prompt: string, count: number) {
   const labels = Array.from({ length: count }, (_, index) => `Image ${index + 1}`).join(', ')
