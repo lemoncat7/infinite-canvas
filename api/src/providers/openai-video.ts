@@ -26,7 +26,8 @@ export class OpenAiVideoProvider implements GenerationProvider {
     const requestedResolution = String(parameters.resolution || '720p')
     const resolution = requestedResolution === '480p' ? '480p' : '720p'
     const referenceMode = parameters.reference_mode === 'keyframes' ? 'keyframes' : 'references'
-    const prompt = imageUrls.length > 1 ? referenceMode === 'keyframes' ? withOrderedKeyframes(input.prompt, imageUrls.length) : withNumberedReferences(input.prompt, imageUrls.length) : input.prompt
+    if (referenceMode === 'keyframes') throw new Error('Grok 当前接口没有原生连续帧参数，请改用参考图模式')
+    const prompt = imageUrls.length > 1 ? withNumberedReferences(input.prompt, imageUrls.length) : input.prompt
     console.info('[openai-video] creating task', { internalJobId: input.internalJobId, model: input.model, imageCount: imageUrls.length, orderedInputIndexes: imageUrls.map((_, index) => index + 1), mode: imageUrls.length > 1 ? referenceMode : imageUrls.length ? 'image-to-video' : 'text-to-video' })
     const created = await this.request('/v1/videos/generations', {
       method: 'POST',
@@ -97,8 +98,4 @@ const wait = (milliseconds: number) => new Promise(resolve => setTimeout(resolve
 function withNumberedReferences(prompt: string, count: number) {
   const labels = Array.from({ length: count }, (_, index) => `<IMAGE_${index + 1}>`).join(', ')
   return `${prompt}\n\nNumbered visual references available: ${labels}. The numbers identify the corresponding people, objects, environments, or visual styles mentioned in the prompt; they are not a chronological timeline. Match every IMAGE_n reference to the same numbered image, preserve its defining identity and appearance, and do not swap the numbered references.`
-}
-function withOrderedKeyframes(prompt: string, count: number) {
-  const labels = Array.from({ length: count }, (_, index) => `<IMAGE_${index + 1}>`).join(' → ')
-  return `${prompt}\n\nOrdered chronological keyframes: ${labels}. Animate the visual progression strictly in this order, beginning from IMAGE_1 and ending at IMAGE_${count}. Preserve character identity, clothing, props, environment, spatial layout, lighting, and art style between every keyframe. Do not swap, skip, or reinterpret the keyframe order.`
 }
