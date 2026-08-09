@@ -548,6 +548,13 @@ let domDrag: {
   nativeControl?: boolean;
 } | null = null;
 let domDragFrame: number | null = null;
+function syncDraggedNodeElements(ids: Iterable<number>) {
+  for (const id of ids) {
+    const node = nodes.find((item) => item.id === id),
+      element = nodeLayer.querySelector<HTMLElement>(`.flow-node[data-id="${id}"]`);
+    if (node && element) element.style.transform = `translate(${node.x}px, ${node.y}px)`;
+  }
+}
 let suppressNodeReleaseUntil = 0;
 let domResize: {
   id: number;
@@ -6428,8 +6435,11 @@ window.addEventListener("pointermove", (event) => {
         node.y = drag.initialY + dy;
       }
     }
+    syncDraggedNodeElements(
+      drag.groupInitial?.size ? drag.groupInitial.keys() : [drag.id],
+    );
     setSaveState("editing", "编辑中…");
-    draw();
+    draw(false);
     domDragFrame = null;
   });
 });
