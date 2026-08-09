@@ -8,7 +8,7 @@ export class GenerationRouter implements GenerationProvider {
     this.name = `router(image=${image.name},video=${video.name})`
     this.capabilities = {
       image: { provider: image.name, defaultModel: process.env.OPENAI_IMAGE_DEFAULT_MODEL || 'gpt-image-2' },
-      video: { provider: video.name, defaultModel: process.env.AGNES_VIDEO_DEFAULT_MODEL || 'agnes-video-v2.0', seconds: { min: 1, max: 18, default: 5 }, resolutions: ['480p', '720p', '1080p'], aspectRatios: ['1:1', '4:3', '16:9'] },
+      video: { provider: video.name, defaultModel: process.env.AGNES_VIDEO_DEFAULT_MODEL || 'agnes-video-v2.0', seconds: { min: 1, max: 18, default: 5 }, resolutions: ['480p', '720p', '1080p'], aspectRatios: ['1:1', '4:3', '3:4', '16:9', '9:16'] },
     }
   }
 

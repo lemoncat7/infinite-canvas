@@ -16,6 +16,7 @@ export type GenerationUpdate = {
   status: GenerationStatus
   progress: number
   resultUrl?: string
+  resultMetadata?: Record<string, unknown>
   error?: string
 }
 

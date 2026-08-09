@@ -8,7 +8,11 @@ type AgnesTask = {
   status?: string
   progress?: number
   url?: string
-  metadata?: { url?: string }
+  seconds?: string
+  size?: string
+  created_at?: number
+  completed_at?: number
+  metadata?: { url?: string; size_mapping?: Record<string, unknown> }
   error?: { message?: string } | string | null
   message?: string
   code?: string
@@ -50,23 +54,27 @@ export class AgnesVideoProvider implements GenerationProvider {
   async run(input: GenerationInput, onUpdate: (update: GenerationUpdate) => void) {
     if (input.kind !== 'video') throw new Error('Agnes Video Adapter 仅支持视频任务')
     const credential = await acquireAgnesCredential()
-    const settings = normalizeSettings(input.parameters)
+    const settings = normalizeAgnesSettings(input.parameters)
     const referenceMode = input.parameters?.reference_mode === 'keyframes' ? 'keyframes' : 'references'
     const imageSources = input.inputUrls ?? []
-    let images = await Promise.all(imageSources.map(source => this.resolveImage(source)))
+    if (referenceMode === 'keyframes' && imageSources.length < 2) throw new Error('Agnes 关键帧动画至少需要 2 张按时间顺序排列的图片')
+    if (referenceMode !== 'keyframes' && imageSources.length > 1) throw new Error('Agnes 官方接口不支持多图自由参考；多张图片请改用关键帧动画')
+    const requiresPublicUrls = referenceMode === 'keyframes'
+    let images = await Promise.all(imageSources.map(source => this.resolveImage(source, false, requiresPublicUrls)))
     onUpdate({ status: 'running', progress: 0 })
     console.info('[agnes-video] preparing ordered inputs', { internalJobId: input.internalJobId, imageCount: images.length, orderedInputIndexes: images.map((_, index) => index + 1) })
     console.info('[agnes-video] credential assigned', { internalJobId:input.internalJobId, channel:credential.channel, channelCount:agnesCredentialPool.length })
-    let response = await this.request('/v1/videos', { method: 'POST', body: createBody(input, images, settings, this.defaultModel, referenceMode) }, this.timeoutForImages(images), credential.key)
+    let response = await this.request('/v1/videos', { method: 'POST', body: createAgnesRequestBody(input, images, settings, this.defaultModel, referenceMode) }, this.timeoutForImages(images), credential.key)
     let created = await readTask(response)
     if (!response.ok && imageSources.length && images.some(image => /^https?:\/\//i.test(image)) && /image URL|image.*download/i.test(taskError(created))) {
       console.info('[agnes-video] public image rejected, retrying with embedded images', { internalJobId: input.internalJobId, imageCount: imageSources.length })
-      images = await Promise.all(imageSources.map(source => this.resolveImage(source, true)))
-      response = await this.request('/v1/videos', { method: 'POST', body: createBody(input, images, settings, this.defaultModel, referenceMode) }, this.timeoutForImages(images), credential.key)
+      images = await Promise.all(imageSources.map(source => this.resolveImage(source, true, requiresPublicUrls)))
+      response = await this.request('/v1/videos', { method: 'POST', body: createAgnesRequestBody(input, images, settings, this.defaultModel, referenceMode) }, this.timeoutForImages(images), credential.key)
       created = await readTask(response)
     }
     if (!response.ok) throw new Error(taskError(created) || `Agnes 创建视频任务失败（${response.status}）`)
     const videoId = created.video_id || created.task_id || created.id
+    const taskId = created.task_id || created.id || videoId
     if (!videoId) throw new Error('Agnes 创建任务响应中没有 video_id 或 task_id')
     console.info('[agnes-video] task created', { internalJobId: input.internalJobId, videoId, model: input.model || this.defaultModel, imageCount: images.length, mode: images.length > 1 ? referenceMode : images.length ? 'ti2vid' : 'text' })
 
@@ -74,8 +82,12 @@ export class AgnesVideoProvider implements GenerationProvider {
     while (Date.now() - startedAt < this.timeout) {
       await wait(this.pollInterval)
       const query = `/agnesapi?video_id=${encodeURIComponent(videoId)}&model_name=${encodeURIComponent(input.model || this.defaultModel)}`
-      const statusResponse = await this.request(query, {}, this.queryTimeout, credential.key)
-      const task = await readTask(statusResponse)
+      let statusResponse = await this.request(query, {}, this.queryTimeout, credential.key)
+      let task = await readTask(statusResponse)
+      if (statusResponse.status === 404 && taskId) {
+        statusResponse = await this.request(`/v1/videos/${encodeURIComponent(taskId)}`, {}, this.queryTimeout, credential.key)
+        task = await readTask(statusResponse)
+      }
       if (!statusResponse.ok) {
         if (statusResponse.status === 429 || /rate limit/i.test(taskError(task))) continue
         throw new Error(taskError(task) || `Agnes 查询视频任务失败（${statusResponse.status}）`)
@@ -84,7 +96,16 @@ export class AgnesVideoProvider implements GenerationProvider {
       if (task.status === 'completed') {
         const resultUrl = task.url || task.metadata?.url
         if (!resultUrl) throw new Error('Agnes 任务已完成，但响应中没有视频 URL')
-        const result: GenerationUpdate = { status: 'succeeded', progress: 100, resultUrl }; onUpdate(result); return result
+        const resultMetadata = {
+          ...(task.seconds ? { seconds:task.seconds } : {}),
+          ...(task.size ? { size:task.size } : {}),
+          ...(task.metadata?.size_mapping ? { sizeMapping:task.metadata.size_mapping } : {}),
+          ...(task.created_at ? { createdAt:task.created_at } : {}),
+          ...(task.completed_at ? { completedAt:task.completed_at } : {}),
+          videoId,
+          taskId,
+        }
+        const result: GenerationUpdate = { status: 'succeeded', progress: 100, resultUrl, resultMetadata }; onUpdate(result); return result
       }
       const progress = Math.min(99, Math.max(0, Number(task.progress || 0)))
       console.info('[agnes-video] task progress', { internalJobId: input.internalJobId, videoId, status: task.status, progress })
@@ -127,9 +148,26 @@ export class AgnesVideoProvider implements GenerationProvider {
     return images.some(image => image.startsWith('data:')) ? this.embeddedCreateTimeout : this.createTimeout
   }
 
-  private async resolveImage(source: string, forceEmbedded = false) {
-    if (source.startsWith('data:')) return source
-    if (/^https?:\/\//i.test(source)) return source
+  private async resolveImage(source: string, forceEmbedded = false, requirePublicUrl = false) {
+    if (source.startsWith('data:')) {
+      if (!requirePublicUrl) return source
+      if (!this.cdnUploadUrl) throw new Error('Agnes 关键帧需要公网图片 URL，当前未配置素材 CDN')
+      const match = /^data:([^;,]+);base64,(.+)$/s.exec(source)
+      if (!match) throw new Error('关键帧图片 Data URL 格式无效')
+      return this.uploadToCdn(Buffer.from(match[2], 'base64'), match[1])
+    }
+    if (/^https?:\/\//i.test(source) && !forceEmbedded) return source
+    if (/^https?:\/\//i.test(source) && forceEmbedded) {
+      const response = await fetch(source, { signal:AbortSignal.timeout(30000) })
+      if (!response.ok) throw new Error(`重新读取 Agnes 参考图片失败（${response.status}）`)
+      const mimeType = response.headers.get('content-type')?.split(';')[0] || 'image/png'
+      const bytes = Buffer.from(await response.arrayBuffer())
+      if (requirePublicUrl) {
+        if (!this.cdnUploadUrl) throw new Error('Agnes 关键帧需要公网图片 URL，当前未配置素材 CDN')
+        return this.uploadToCdn(bytes, mimeType)
+      }
+      return `data:${mimeType};base64,${bytes.toString('base64')}`
+    }
     if (source.startsWith('/api/')) {
       const publicUrl = `${this.publicBaseUrl}${source}`
       if (!forceEmbedded && this.assetMode === 'url' && this.hasPublicDomain()) return publicUrl
@@ -145,6 +183,7 @@ export class AgnesVideoProvider implements GenerationProvider {
         try { return await this.uploadToCdn(bytes, mimeType) }
         catch (error) { console.warn('[agnes-video] CDN upload failed, using data URL', { message: sanitizeError(error instanceof Error ? error.message : String(error)) }) }
       }
+      if (requirePublicUrl) throw new Error('Agnes 关键帧需要公网图片 URL，素材 CDN 上传失败或未配置')
       return `data:${mimeType};base64,${bytes.toString('base64')}`
     }
     if (!this.publicBaseUrl) throw new Error('图生视频需要公网图片 URL 或本地资产')
@@ -183,35 +222,47 @@ export class AgnesVideoProvider implements GenerationProvider {
   }
 }
 
-function normalizeSettings(parameters: Record<string, unknown> | undefined) {
+export function normalizeAgnesSettings(parameters: Record<string, unknown> | undefined) {
   const seconds = Math.min(18, Math.max(1, Number(parameters?.seconds || 5)))
-  const frameRate = 24
+  const requestedFrameRate = Number(parameters?.frame_rate)
+  const frameRate = Number.isFinite(requestedFrameRate) ? Math.min(60, Math.max(1, requestedFrameRate)) : 24
   const frames = Math.min(441, Math.max(25, Math.round((seconds * frameRate - 1) / 8) * 8 + 1))
   const resolution = String(parameters?.resolution || '720p')
   const ratio = String(parameters?.aspect_ratio || '16:9')
   const dimensions: Record<string, Record<string, [number, number]>> = {
-    '480p': { '1:1': [480, 480], '4:3': [640, 480], '16:9': [832, 448] },
-    '720p': { '1:1': [720, 720], '4:3': [960, 720], '16:9': [1280, 720] },
-    '1080p': { '1:1': [1080, 1080], '4:3': [1440, 1080], '16:9': [1920, 1080] },
+    '480p': { '1:1': [480, 480], '4:3': [640, 480], '3:4': [480, 640], '16:9': [832, 448], '9:16': [448, 832] },
+    '720p': { '1:1': [720, 720], '4:3': [960, 720], '3:4': [720, 960], '16:9': [1280, 720], '9:16': [720, 1280] },
+    '1080p': { '1:1': [1080, 1080], '4:3': [1440, 1080], '3:4': [1080, 1440], '16:9': [1920, 1080], '9:16': [1080, 1920] },
   }
   const [width, height] = dimensions[resolution]?.[ratio] || dimensions['720p']['16:9']
-  return { width, height, num_frames: frames, frame_rate: frameRate }
+  const seed = Number(parameters?.seed)
+  const inferenceSteps = Number(parameters?.num_inference_steps)
+  const negativePrompt = String(parameters?.negative_prompt || '').trim().slice(0, 1200)
+  return {
+    width, height, num_frames:frames, frame_rate:frameRate,
+    ...(Number.isSafeInteger(seed) && seed >= 0 ? { seed } : {}),
+    ...(Number.isSafeInteger(inferenceSteps) && inferenceSteps > 0 ? { num_inference_steps:Math.min(1000, inferenceSteps) } : {}),
+    ...(negativePrompt ? { negative_prompt:negativePrompt } : {}),
+  }
 }
 
 async function readTask(response: Response) { try { return await response.json() as AgnesTask } catch { return {} } }
 function taskError(task: AgnesTask) { return typeof task.error === 'string' ? task.error : task.error?.message || task.message || '' }
 function wait(ms: number) { return new Promise(resolve => setTimeout(resolve, ms)) }
 function required(name: string) { const value = process.env[name]; if (!value) throw new Error(`${name} is required`); return value }
-function createBody(input: GenerationInput, images: string[], settings: Record<string, unknown>, defaultModel: string, referenceMode: 'keyframes'|'references') {
+export function createAgnesRequestBody(input: GenerationInput, images: string[], settings: Record<string, unknown>, defaultModel: string, referenceMode: 'keyframes'|'references') {
   const media = images.length > 1
-    ? { mode: 'keyframes', extra_body: { image: images, mode: 'keyframes' } }
+    ? { extra_body: { image: images, mode: 'keyframes' } }
     : images.length === 1 ? { image: images[0], mode: 'ti2vid' } : {}
   const prompt = images.length > 1 ? referenceMode === 'keyframes' ? withOrderedKeyframes(input.prompt, images.length) : withNumberedReferences(input.prompt, images.length) : input.prompt
-  return JSON.stringify({ model: input.model || defaultModel, prompt, ...media, ...settings })
+  const generationSettings = referenceMode === 'keyframes' && images.length > 1 && !settings.negative_prompt
+    ? { ...settings, negative_prompt:'extra action, separate attack, pose reset, character redesign, identity change, clothing change, prop change, scene change, camera-axis break, text, subtitle, watermark' }
+    : settings
+  return JSON.stringify({ model: input.model || defaultModel, prompt, ...media, ...generationSettings })
 }
 function withOrderedKeyframes(prompt: string, count: number) {
   const labels = Array.from({ length: count }, (_, index) => `Image ${index + 1}`).join(' → ')
-  return `${prompt}\n\nOrdered chronological keyframes: ${labels}. Begin on Image 1 exactly and end on Image ${count} exactly. Interpolate only the shortest directly visible motion required to transform each image into the next image, strictly in this order. Every supplied image is a mandatory visual state, not a loose style reference. Preserve the exact character count, identity, face, clothing, hairstyle, props, environment, spatial layout, camera axis, lighting, and art style between keyframes. Do not swap, skip, reinterpret, redesign, or move beyond any keyframe. Do not invent intermediate events, extra attacks, gestures, turns, walking, facial performances, idle motion, secondary movement, scene changes, or camera movement unless explicitly required to reach the next supplied image. No action may continue after the final keyframe state is reached.`
+  return `${prompt}\n\nCreate one smooth chronological transition through ${labels}. Maintain character identity, scene continuity, and the camera progression shown by the supplied keyframes. Pass through every image in order and finish on Image ${count}.`
 }
 function withNumberedReferences(prompt: string, count: number) {
   const labels = Array.from({ length: count }, (_, index) => `Image ${index + 1}`).join(', ')

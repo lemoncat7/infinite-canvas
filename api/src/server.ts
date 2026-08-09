@@ -135,6 +135,7 @@ ensureColumn("jobs", "project_id", "TEXT");
 ensureColumn("jobs", "user_id", "TEXT");
 ensureColumn("jobs", "input_urls", "TEXT NOT NULL DEFAULT '[]'");
 ensureColumn("jobs", "parameters", "TEXT NOT NULL DEFAULT '{}'");
+ensureColumn("jobs", "result_metadata", "TEXT");
 ensureColumn("jobs", "custom_model_id", "TEXT");
 ensureColumn("assets", "is_public", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("users", "email", "TEXT");
@@ -436,7 +437,7 @@ app.get("/generation/capabilities", async () => {
       defaultModel: process.env.AGNES_VIDEO_DEFAULT_MODEL || "agnes-video-v2.0",
       seconds: { min: 1, max: 18, default: 5 },
       resolutions: ["480p", "720p", "1080p"],
-      aspectRatios: ["1:1", "4:3", "16:9"],
+      aspectRatios: ["1:1", "4:3", "3:4", "16:9", "9:16"],
     },
   };
   return {
@@ -2104,20 +2105,7 @@ app.post("/agents/comic", async (request, reply) => {
     });
     const assetSystem = `你是漫剧视觉设定师。只返回合法 JSON：{"characters":[{"name":"角色名","description":"稳定设定","voiceProfile":"中文声线","visualAsset":true,"imagePrompt":"180–420字角色设定板提示词","forms":[]}],"props":[{"name":"道具名","description":"固定设定","imagePrompt":"不超过160字的道具图提示词"}]}。只建立跨镜头需要保持一致的具名人物和关键道具，普通路人不建档。人物提示词的生成目标只能是单一角色设定板，展示固定外观、服饰、三视图与细节，禁止剧情场景、表演动作、多人互动、海报构图和复制角色。道具提示词的生成目标只能是单一道具设定素材，展示结构、材质、颜色与细节，禁止人物、人体、手持动作、剧情表演和复杂背景。角色 imagePrompt 与形态 imagePrompt 均不得超过420字，道具 imagePrompt 不得超过160字。${comicCharacterSheetRules}\n${comicStyleRules}`;
     const assetText = `已确认创作需求：\n${text}\n\n已校验剧情大纲：\n${JSON.stringify(story)}`;
-    const sceneSystem = `你是漫剧场景美术。只返回合法 JSON：{"scenes":[{"sceneId":"稳定地点与时段ID","name":"场景名","description":"空间结构与剧情用途","imagePrompt":"不超过160字的无人物场景设定图提示词"}]}。合并同一地点与时段，状态变化不得重复创建场景。每条 imagePrompt 必须明确写出“无人物场景基准图，禁止出现任何人物、人体、手部、角色剪影或人形主体”，只生成可供后续分镜合成使用的空环境、空间结构、UI界面、剧情明确要求的固定物体与光影素材。即使剧情中该场景原本有人，场景基准图也必须保持无人；人物只能在后续 frames 分镜合成阶段加入。未明确要求时禁止动物、车辆特写、可读文字、字幕、标牌、Logo 和水印，不能因为“无人知道、不为人知、人尽皆知”等修饰性语句生成任何人物或人群。每条 imagePrompt 不得超过160字，并继承统一风格。`;
-    // Scene assets are deliberately character-free, so they only depend on
-    // the approved story. Generate them alongside character/prop assets.
-    const sceneText = `已确认创作需求：\n${text}\n\n已校验剧情大纲：\n${JSON.stringify(story)}`,
-      sceneInitialPromise = checkpoint.sceneBible
-        ? Promise.resolve(checkpoint.sceneBible)
-        : readStage(
-            "正在并行生成人物、道具与场景…",
-            sceneSystem,
-            sceneText,
-            2600,
-            20,
-            34,
-          );
+    const sceneSystem = `你是漫剧场景美术。只返回合法 JSON：{"scenes":[{"sceneId":"稳定地点与时段ID","name":"场景名","description":"空间结构与剧情用途","propIndexes":[1],"environmentAnchors":["固定道具及建筑的方位、距离或朝向"],"imagePrompt":"不超过160字的无人物场景设定图提示词"}]}。propIndexes 使用已建档关键道具的1起始索引，只列场景结构中固定存在的道具、建筑标志或环境装置；角色手持、临时带入或只在单镜出现的剧情道具不得列入。石碑、雕像、祭坛、门、固定兵器等若已在道具表建档且属于场地组成，必须通过 propIndexes 引用，禁止在场景中另行重新设计。environmentAnchors 必须锁定这些固定资产及主要建筑的空间方位、距离、朝向和主光关系，同一 sceneId 只能有一套锚点。合并同一地点与时段，状态变化不得重复创建场景。每条 imagePrompt 必须明确写出“无人物场景基准图，禁止出现任何人物、人体、手部、角色剪影或人形主体”，只生成可供后续分镜合成使用的空环境、空间结构、UI界面、已连接的固定道具与光影素材；提示词不得重新描述或重造已连接道具的外观，只说明其位置和比例。即使剧情中该场景原本有人，场景基准图也必须保持无人；人物只能在后续 frames 分镜合成阶段加入。未明确要求时禁止动物、车辆特写、可读文字、字幕、标牌、Logo 和水印。每条 imagePrompt 不得超过160字，并继承统一风格。`;
     let assets = checkpoint.assets
       ? checkpoint.assets
       : await readStage(
@@ -2154,7 +2142,17 @@ app.post("/agents/comic", async (request, reply) => {
       phase: "人物与道具设定校验通过",
       receivedBytes: streamReceivedBytes,
     });
-    let sceneBible = await sceneInitialPromise;
+    const sceneText = `已确认创作需求：\n${text}\n\n已校验剧情大纲：\n${JSON.stringify(story)}\n\n已校验关键道具索引（场景必须引用而不得重新设计）：\n${JSON.stringify((Array.isArray(assets.props) ? assets.props : []).map((raw, index) => { const item = raw && typeof raw === "object" ? raw as Record<string, unknown> : {}; return { index: index + 1, name: item.name, description: item.description }; }))}`;
+    let sceneBible = checkpoint.sceneBible
+      ? checkpoint.sceneBible
+      : await readStage(
+          "正在建立场景与固定道具依赖…",
+          sceneSystem,
+          sceneText,
+          2600,
+          36,
+          48,
+        );
     sceneBible = await rewriteUntilValid(
       "场景设定",
       sceneBible,
@@ -2164,6 +2162,22 @@ app.post("/agents/comic", async (request, reply) => {
       48,
       2600,
     );
+    const availableProps = Array.isArray(assets.props) ? assets.props : [];
+    sceneBible.scenes = (Array.isArray(sceneBible.scenes) ? sceneBible.scenes : []).map((raw, index) => {
+      const scene = raw && typeof raw === "object" ? { ...(raw as Record<string, unknown>) } : {};
+      const evidence = `${String(scene.name || "")} ${String(scene.description || "")} ${String(scene.imagePrompt || scene.scenePrompt || "")}`;
+      const declared = Array.isArray(scene.propIndexes) ? scene.propIndexes.map(Number) : [];
+      const inferred = availableProps.map((propRaw, propIndex) => {
+        const prop = propRaw && typeof propRaw === "object" ? propRaw as Record<string, unknown> : {};
+        const name = String(prop.name || "").trim();
+        return name && evidence.includes(name) ? propIndex + 1 : 0;
+      }).filter(Boolean);
+      scene.propIndexes = [...new Set([...declared, ...inferred].filter((value) => Number.isInteger(value) && value >= 1 && value <= availableProps.length))];
+      scene.environmentAnchors = (Array.isArray(scene.environmentAnchors) ? scene.environmentAnchors : [])
+        .map((value) => String(value || "").trim().slice(0, 80)).filter(Boolean).slice(0, 8);
+      scene.sceneId = String(scene.sceneId || scene.id || `scene-${index + 1}`).trim().slice(0, 80);
+      return scene;
+    });
     if (!checkpoint.sceneBible) saveCheckpoint({ sceneBible });
     else
       emit({
@@ -2210,7 +2224,7 @@ app.post("/agents/comic", async (request, reply) => {
       }),
       scenes: (Array.isArray(foundation.scenes) ? foundation.scenes : []).map((raw) => {
         const item = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-        return { sceneId: item.sceneId || item.id, name: item.name, description: item.description || item.scene };
+        return { sceneId: item.sceneId || item.id, name: item.name, description: item.description || item.scene, propIndexes: item.propIndexes, environmentAnchors: item.environmentAnchors, imagePrompt: item.imagePrompt || item.scenePrompt };
       }),
     };
     const shotPlanText = `创作需求：\n${text}\n\n已校验的紧凑剧情与资产索引：\n${JSON.stringify(compactFoundation)}`;
@@ -3011,6 +3025,17 @@ app.post("/agents/comic", async (request, reply) => {
           ),
         };
       });
+    const scenes = (Array.isArray(plan.scenes) ? plan.scenes : []).slice(0, 24).map((value, index) => {
+      const scene = value && typeof value === "object" ? value as Record<string, unknown> : {};
+      return {
+        sceneId: String(scene.sceneId || scene.id || `scene-${index + 1}`).slice(0, 80),
+        name: String(scene.name || `场景 ${index + 1}`).slice(0, 60),
+        description: String(scene.description || scene.scene || "").slice(0, 800),
+        imagePrompt: compactImagePrompt(String(scene.imagePrompt || scene.scenePrompt || scene.description || ""), 160),
+        propIndexes: [...new Set((Array.isArray(scene.propIndexes) ? scene.propIndexes : []).map(Number).filter((number) => Number.isInteger(number) && number >= 1 && number <= props.length))],
+        environmentAnchors: (Array.isArray(scene.environmentAnchors) ? scene.environmentAnchors : []).map((item) => String(item || "").trim().slice(0, 80)).filter(Boolean).slice(0, 8),
+      };
+    });
     const shots = rawShots
       .slice(0, 48)
       .map((value, index) => {
@@ -3157,6 +3182,11 @@ app.post("/agents/comic", async (request, reply) => {
           visiblePropIndexes = [
             ...new Set(frames.flatMap((frame) => frame.propIndexes)),
           ];
+        const requestedSceneId = String(shot.sceneId || `scene-${index + 1}`).slice(0, 80),
+          sceneEvidence = `${scene} ${storyBeat} ${action} ${String(shot.scenePrompt || "")}`,
+          canonicalScene = scenes.find((item) => item.sceneId === requestedSceneId) ||
+            scenes.find((item) => item.name.length >= 2 && sceneEvidence.includes(item.name)),
+          sceneId = canonicalScene?.sceneId || requestedSceneId;
         return {
           number: index + 1,
           title: String(shot.title || `镜头 ${index + 1}`).slice(0, 50),
@@ -3164,10 +3194,10 @@ app.post("/agents/comic", async (request, reply) => {
           storyBeat,
           action,
           scene,
-          sceneId: String(shot.sceneId || `scene-${index + 1}`).slice(0, 80),
+          sceneId,
           scenePrompt: compactImagePrompt(
             sanitizeCharacterNamesFromScenePrompt(
-              String(shot.scenePrompt || "环境空间结构、陈设、界面与光影，保持统一美术风格"),
+              String(canonicalScene?.imagePrompt || shot.scenePrompt || "环境空间结构、陈设、界面与光影，保持统一美术风格"),
               characters.map((character) => character.name),
             ),
             160,
@@ -3267,6 +3297,7 @@ app.post("/agents/comic", async (request, reply) => {
           : aspectRatio,
       characters,
       props,
+      scenes,
       outline,
       shots,
       changeSummary: String(plan.changeSummary || "").slice(0, 300),
@@ -4357,7 +4388,7 @@ function reconcileCanvasJobs(
   if (!pending.length) return document;
 
   const jobs = getAll(
-    "SELECT id,node_id,kind,status,progress,result_url,error,updated_at FROM jobs WHERE project_id=? AND user_id=? ORDER BY updated_at DESC,rowid DESC",
+    "SELECT id,node_id,kind,status,progress,result_url,result_metadata,error,updated_at FROM jobs WHERE project_id=? AND user_id=? ORDER BY updated_at DESC,rowid DESC",
     [projectId, userId],
   );
   const byId = new Map(jobs.map((job) => [String(job.id), job]));
@@ -4377,6 +4408,10 @@ function reconcileCanvasJobs(
     node.status = String(job.status);
     node.progress = Number(job.progress) || 0;
     if (job.result_url) node.mediaUrl = String(job.result_url);
+    if (job.result_metadata) {
+      try { node.videoResult = JSON.parse(String(job.result_metadata)); }
+      catch { /* 保留旧任务兼容 */ }
+    }
     if (job.error) node.error = String(job.error);
     else delete node.error;
   }
@@ -5137,6 +5172,16 @@ app.post("/jobs", async (request, reply) => {
     return reply.code(400).send({ error: "自定义模型不存在或类型不匹配" });
   if (custom) model = String(custom.model);
   const inputUrls = input.inputUrls ?? [];
+  if (input.kind === "video" && model.startsWith("agnes-")) {
+    const referenceMode = input.parameters?.reference_mode === "keyframes" ? "keyframes" : "references";
+    if (referenceMode === "keyframes" && inputUrls.length < 2)
+      return reply.code(400).send({ error: "Agnes 关键帧动画至少需要 2 张按顺序连接的图片" });
+    if (referenceMode !== "keyframes" && inputUrls.length > 1)
+      return reply.code(400).send({ error: "Agnes 官方接口不支持多图自由参考，请改用关键帧动画" });
+    const ratio = String(input.parameters?.aspect_ratio || "16:9");
+    if (!["1:1", "4:3", "3:4", "16:9", "9:16"].includes(ratio))
+      return reply.code(400).send({ error: "Agnes 不支持当前视频画幅" });
+  }
   try {
     validateOwnedInputUrls(inputUrls, userId, input.kind);
   } catch (error) {
@@ -5629,7 +5674,7 @@ function resolveOwnedInputUrls(
   urls: string[],
   userId: string,
   kind: JobInput["kind"],
-  _model: string,
+  model: string,
 ) {
   return urls.map((source) => {
     const match = source.match(/^\/api\/assets\/([^/]+)\/content(?:\/|$)/);
@@ -5643,6 +5688,11 @@ function resolveOwnedInputUrls(
     const size = Number(asset.size ?? 0);
     if (kind === "video" && size > 15 * 1024 * 1024)
       throw new Error("参考图片超过 15MB");
+    if (kind === "video" && model.startsWith("agnes-")) {
+      if (!generationPublicBaseUrl)
+        throw new Error("Agnes 视频生成需要配置公网素材地址");
+      return signedGenerationInputUrl(assetId);
+    }
     const bytes = readFileSync(`${uploadDirectory}/${asset.storage_name}`);
     if (!bytes.length) throw new Error("输入素材为空");
     return `data:${String(asset.mime_type || "application/octet-stream")};base64,${bytes.toString("base64")}`;
@@ -6181,11 +6231,12 @@ async function updateJob(id: string, update: GenerationUpdate) {
     if (update.status === "succeeded" && resultUrl)
       resultUrl = await archiveJobResult(id, resultUrl);
     database.run(
-      "UPDATE jobs SET status = ?, progress = ?, result_url = COALESCE(?, result_url), error = ?, updated_at = ? WHERE id = ?",
+      "UPDATE jobs SET status = ?, progress = ?, result_url = COALESCE(?, result_url), result_metadata = COALESCE(?, result_metadata), error = ?, updated_at = ? WHERE id = ?",
       [
         update.status,
         update.progress,
         resultUrl ?? null,
+        update.resultMetadata ? JSON.stringify(update.resultMetadata) : null,
         update.error ?? null,
         new Date().toISOString(),
         id,
