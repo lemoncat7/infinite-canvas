@@ -26,6 +26,11 @@ const portrait = normalizeAgnesSettings({ resolution: "720p", aspect_ratio: "3:4
 assert.equal(portrait.width, 720);
 assert.equal(portrait.height, 960);
 
+const long1080p = normalizeAgnesSettings({ seconds:15, resolution:"1080p", aspect_ratio:"16:9" });
+assert.equal(long1080p.num_frames, 241);
+assert.equal(long1080p.frame_rate, 16);
+assert.equal(long1080p.num_frames % 8, 1);
+
 const input = {
   internalJobId: "test",
   projectId: "project",

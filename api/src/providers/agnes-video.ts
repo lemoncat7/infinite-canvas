@@ -72,6 +72,17 @@ export class AgnesVideoProvider implements GenerationProvider {
       response = await this.request('/v1/videos', { method: 'POST', body: createAgnesRequestBody(input, images, settings, this.defaultModel, referenceMode) }, this.timeoutForImages(images), credential.key)
       created = await readTask(response)
     }
+    if (!response.ok && /num_frames exceeds max frames/i.test(taskError(created))) {
+      const reducedSettings = reduceAgnesFrames(settings)
+      console.warn('[agnes-video] resolved resolution has a lower frame budget; retrying with adjusted frame rate', {
+        internalJobId:input.internalJobId,
+        requestedFrames:settings.num_frames,
+        adjustedFrames:reducedSettings.num_frames,
+        adjustedFrameRate:reducedSettings.frame_rate,
+      })
+      response = await this.request('/v1/videos', { method:'POST', body:createAgnesRequestBody(input, images, reducedSettings, this.defaultModel, referenceMode) }, this.timeoutForImages(images), credential.key)
+      created = await readTask(response)
+    }
     if (!response.ok) throw new Error(taskError(created) || `Agnes 创建视频任务失败（${response.status}）`)
     const videoId = created.video_id || created.task_id || created.id
     const taskId = created.task_id || created.id || videoId
@@ -225,10 +236,16 @@ export class AgnesVideoProvider implements GenerationProvider {
 export function normalizeAgnesSettings(parameters: Record<string, unknown> | undefined) {
   const seconds = Math.min(18, Math.max(1, Number(parameters?.seconds || 5)))
   const requestedFrameRate = Number(parameters?.frame_rate)
-  const frameRate = Number.isFinite(requestedFrameRate) ? Math.min(60, Math.max(1, requestedFrameRate)) : 24
-  const frames = Math.min(441, Math.max(25, Math.round((seconds * frameRate - 1) / 8) * 8 + 1))
   const resolution = String(parameters?.resolution || '720p')
   const ratio = String(parameters?.aspect_ratio || '16:9')
+  const maxFrames = resolution === '1080p' ? 241 : 441
+  let frameRate = Number.isFinite(requestedFrameRate) ? Math.min(60, Math.max(1, requestedFrameRate)) : 24
+  let frames = Math.max(25, Math.round((seconds * frameRate - 1) / 8) * 8 + 1)
+  while (frames > maxFrames && frameRate > 1) {
+    frameRate = Math.max(1, frameRate - 1)
+    frames = Math.max(25, Math.round((seconds * frameRate - 1) / 8) * 8 + 1)
+  }
+  frames = Math.min(maxFrames, frames)
   const dimensions: Record<string, Record<string, [number, number]>> = {
     '480p': { '1:1': [480, 480], '4:3': [640, 480], '3:4': [480, 640], '16:9': [832, 448], '9:16': [448, 832] },
     '720p': { '1:1': [720, 720], '4:3': [960, 720], '3:4': [720, 960], '16:9': [1280, 720], '9:16': [720, 1280] },
@@ -244,6 +261,19 @@ export function normalizeAgnesSettings(parameters: Record<string, unknown> | und
     ...(Number.isSafeInteger(inferenceSteps) && inferenceSteps > 0 ? { num_inference_steps:Math.min(1000, inferenceSteps) } : {}),
     ...(negativePrompt ? { negative_prompt:negativePrompt } : {}),
   }
+}
+
+function reduceAgnesFrames(settings: Record<string, unknown>) {
+  const requestedFrames = Number(settings.num_frames) || 121
+  const requestedRate = Number(settings.frame_rate) || 24
+  const seconds = requestedFrames / requestedRate
+  let frameRate = Math.max(1, requestedRate - 1)
+  let numFrames = Math.max(25, Math.round((seconds * frameRate - 1) / 8) * 8 + 1)
+  while (numFrames >= requestedFrames && frameRate > 1) {
+    frameRate -= 1
+    numFrames = Math.max(25, Math.round((seconds * frameRate - 1) / 8) * 8 + 1)
+  }
+  return { ...settings, frame_rate:frameRate, num_frames:Math.min(241, numFrames) }
 }
 
 async function readTask(response: Response) { try { return await response.json() as AgnesTask } catch { return {} } }
