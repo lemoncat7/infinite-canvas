@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
+    "test:comic": "npm run build && node scripts/test-comic-validation.mjs",
     "start": "node dist/server.js"
   },
   "dependencies": {
