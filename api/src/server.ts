@@ -32,7 +32,7 @@ import { promisify } from "node:util";
 import { isAbsolute, relative, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { gzipSync, gunzipSync } from "node:zlib";
-import { hasVisibleAnonymousCrowd } from "./comic-validation.js";
+import { comicAssetNameMentioned, finalizeComicSceneDependencies, hasVisibleAnonymousCrowd } from "./comic-validation.js";
 
 type CanvasPayload = {
   nodes: unknown[];
@@ -5484,55 +5484,6 @@ function normalizeComicDialogue(value: unknown): string {
     })
     .filter(Boolean)
     .join("\n");
-}
-
-export function finalizeComicSceneDependencies(
-  scenes: Array<{ sceneId:string; imagePrompt:string; propIndexes:number[]; environmentAnchors:string[] }>,
-  shots: Array<{ sceneId:string; scenePrompt:string; frames:Array<{ propIndexes:number[] }> }>,
-  props: Array<{ name:string }>,
-) {
-  for (const scene of scenes) {
-    const firstShot = shots.find((shot) => shot.sceneId === scene.sceneId);
-    if (!firstShot) continue;
-    const initiallyVisible = new Set(firstShot.frames.flatMap((frame) => frame.propIndexes));
-    const futureProps = scene.propIndexes.filter((index) => !initiallyVisible.has(index));
-    if (!futureProps.length) continue;
-    scene.propIndexes = scene.propIndexes.filter((index) => initiallyVisible.has(index));
-    const excludedTerms = futureProps.flatMap((index) => {
-      const name = String(props[index - 1]?.name || "").trim();
-      return [name, ...name.split(/[与和及、]/)].map((term) => term.trim()).filter((term) => term.length >= 2);
-    });
-    scene.imagePrompt = stripComicFutureAssetClauses(scene.imagePrompt, excludedTerms);
-    scene.environmentAnchors = scene.environmentAnchors.filter((anchor) => !excludedTerms.some((term) => anchor.includes(term)));
-    for (const shot of shots) {
-      if (shot.sceneId === scene.sceneId) shot.scenePrompt = scene.imagePrompt;
-    }
-  }
-  return scenes;
-}
-
-function comicAssetNameMentioned(evidence: string, name: string) {
-  const normalizedName = String(name || "").trim();
-  if (!normalizedName) return false;
-  if (evidence.includes(normalizedName)) return true;
-  return normalizedName.split(/[与和及、]/).some((term) => term.trim().length >= 2 && evidence.includes(term.trim()));
-}
-
-function stripComicFutureAssetClauses(value: string, terms: string[]) {
-  const cleaned = String(value || "")
-    .split(/([，；。])/)
-    .reduce<string[]>((parts, segment, index, source) => {
-      if (/^[，；。]$/.test(segment)) return parts;
-      if (terms.some((term) => segment.includes(term))) return parts;
-      const separator = source[index + 1];
-      parts.push(`${segment.trim()}${/^[，；。]$/.test(separator || "") ? separator : ""}`);
-      return parts;
-    }, [])
-    .join("")
-    .replace(/[，；。]{2,}/g, "；")
-    .replace(/^[，；。\s]+|[，；。\s]+$/g, "")
-    .trim();
-  return cleaned || "无人物初始场景基准图，保持固定空间结构、建筑方位与主光一致";
 }
 
 function estimateComicSpeechDuration(value: unknown) {

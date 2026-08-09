@@ -1,4 +1,5 @@
-import { hasVisibleAnonymousCrowd } from "../dist/comic-validation.js";
+import assert from "node:assert/strict";
+import { comicAssetNameMentioned, finalizeComicSceneDependencies, hasVisibleAnonymousCrowd } from "../dist/comic-validation.js";
 
 const cases = [
   [false, "古城空巷全景，无人物，禁止群众和路人。"],
@@ -20,3 +21,32 @@ if (failures.length) {
 }
 console.log(`comic crowd validation: ${cases.length}/${cases.length} passed`);
 
+const props = [
+  { name:"镇谷石碑" },
+  { name:"祭坛火盆" },
+  { name:"召唤后的天门与巨眼" },
+  { name:"破碎后的封印核心" },
+];
+const scenes = [
+  { sceneId:"valley", imagePrompt:"荒谷与镇谷石碑；天门位于上空。", propIndexes:[1,3], environmentAnchors:["镇谷石碑固定在左后方","天门位于正上空"] },
+  { sceneId:"temple", imagePrompt:"地下神殿与祭坛火盆；封印核心悬浮中央。", propIndexes:[2,4], environmentAnchors:["祭坛火盆位于两侧","封印核心悬浮中央"] },
+];
+const shots = [
+  { sceneId:"valley", scenePrompt:"旧", frames:[{ propIndexes:[1] }] },
+  { sceneId:"temple", scenePrompt:"旧", frames:[{ propIndexes:[2] }] },
+  { sceneId:"valley", scenePrompt:"旧", frames:[{ propIndexes:[1,3] }] },
+  { sceneId:"temple", scenePrompt:"旧", frames:[{ propIndexes:[2,4] }] },
+];
+finalizeComicSceneDependencies(scenes, shots, props);
+assert.deepEqual(scenes[0].propIndexes, [1]);
+assert.deepEqual(scenes[1].propIndexes, [2]);
+assert.doesNotMatch(scenes[0].imagePrompt, /天门|巨眼/);
+assert.doesNotMatch(scenes[1].imagePrompt, /封印核心/);
+assert.match(scenes[0].imagePrompt, /镇谷石碑/);
+assert.match(scenes[1].imagePrompt, /祭坛火盆/);
+assert.equal(shots[0].scenePrompt, scenes[0].imagePrompt);
+assert.equal(shots[2].scenePrompt, scenes[0].imagePrompt);
+assert.equal(shots[1].scenePrompt, scenes[1].imagePrompt);
+assert.equal(shots[3].scenePrompt, scenes[1].imagePrompt);
+assert.equal(comicAssetNameMentioned("青铜门与巨大眼睛首次开启", "远古青铜门与巨大眼睛"), true);
+console.log("comic multi-scene dependency validation: 4/4 passed");
