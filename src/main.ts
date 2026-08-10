@@ -2,6 +2,7 @@ import "./style.css";
 import { CanvasPerformanceMonitor } from "./canvas/performance-monitor";
 import { CanvasSpatialIndex } from "./canvas/spatial-index";
 import { CanvasStore } from "./canvas/store";
+import { MediaLruCache } from "./canvas/media-cache";
 
 const canvasPerformance = new CanvasPerformanceMonitor(
   new URLSearchParams(location.search).has("canvasPerf"),
@@ -1262,37 +1263,29 @@ let zoomTarget = camera.zoom;
 let zoomAnchor: Point = { x: innerWidth / 2, y: innerHeight / 2 };
 const canvasTouches = new Map<number, Point>();
 let pinchGesture: { distance: number; center: Point } | null = null;
-const imageCache = new Map<string, HTMLImageElement>();
 const pendingMediaLoads = new Set<string>();
 const thumbnailLoadRetries = new Map<string, number>();
-const MAX_THUMBNAIL_CACHE_SIZE = 32;
 function releaseCachedImage(url: string, image: HTMLImageElement) {
   pendingMediaLoads.delete(url);
   image.onload = null;
   image.onerror = null;
   image.removeAttribute("src");
 }
+const imageCache = new MediaLruCache<HTMLImageElement>(
+  innerWidth <= 780 ? 24 : 48,
+  releaseCachedImage,
+  (url) => pendingMediaLoads.has(url),
+);
 function clearThumbnailCache() {
-  imageCache.forEach((image, url) => releaseCachedImage(url, image));
   imageCache.clear();
   pendingMediaLoads.clear();
   thumbnailLoadRetries.clear();
 }
 function trimThumbnailCache() {
-  while (imageCache.size > MAX_THUMBNAIL_CACHE_SIZE) {
-    const oldest = [...imageCache.keys()].find(
-      (url) => !pendingMediaLoads.has(url),
-    );
-    if (!oldest) return;
-    const evicted = imageCache.get(oldest);
-    imageCache.delete(oldest);
-    if (evicted) releaseCachedImage(oldest, evicted);
-  }
+  imageCache.trim();
 }
 function rememberCachedImage(url: string, image: HTMLImageElement) {
-  imageCache.delete(url);
   imageCache.set(url, image);
-  trimThumbnailCache();
 }
 function releaseFullResolutionPreviews() {
   document
