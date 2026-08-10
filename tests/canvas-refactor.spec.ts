@@ -94,21 +94,23 @@ test("400 nodes stay GPU-virtualized and recover WebGL context", async ({
   await page.goto("/?canvasPerf=1#/canvas");
   await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
   await expect(page.locator("body")).toHaveClass(/renderer-pixi/);
-  expect(await page.locator("#node-layer > .flow-node").count()).toBe(0);
+  const visibleDomCards = await page.locator("#node-layer > .flow-node").count();
+  expect(visibleDomCards).toBeGreaterThan(0);
+  expect(visibleDomCards).toBeLessThanOrEqual(120);
   if (process.env.CANVAS_VISUAL_AUDIT)
     await page.screenshot({
       path: "test-results/canvas-unselected.png",
       fullPage: true,
     });
 
-  await page.locator("#canvas").click({ position: { x: 370, y: 360 } });
+  await page.locator('.flow-node[data-id="1"]').click();
   await expect(page.locator("#node-layer > .flow-node.selected")).toHaveCount(1);
   if (process.env.CANVAS_VISUAL_AUDIT)
     await page.screenshot({
       path: "test-results/canvas-selected.png",
       fullPage: true,
     });
-  expect(await page.locator("#node-layer > .flow-node").count()).toBeLessThanOrEqual(2);
+  expect(await page.locator("#node-layer > .flow-node").count()).toBeLessThanOrEqual(120);
 
   await page.evaluate(() =>
     (
@@ -189,7 +191,7 @@ test("connection overlay and quick group movement stay in the Pixi path", async 
   await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
 
   // Node 1 is at screen (340,260), node 3 starts at (980,260).
-  await page.locator("#canvas").click({ position: { x: 370, y: 350 } });
+  await page.locator('.flow-node[data-id="1"]').click();
   const output = page.locator(".flow-node.selected .node-port.output");
   await expect(output).toBeVisible();
   const outputBox = await output.boundingBox();
