@@ -57,6 +57,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
   >();
   private readonly textures = new PixiTextureCache(innerWidth <= 780 ? 12 : 32);
   private lost = false;
+  private suspended = false;
   private lastSnapshot?: CanvasRenderSnapshot;
   private backgroundKey = "";
   private linksKey = "";
@@ -101,7 +102,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
 
   render(snapshot: CanvasRenderSnapshot) {
     this.lastSnapshot = snapshot;
-    if (this.lost) return;
+    if (this.lost || this.suspended) return;
     this.world.position.set(
       innerWidth / 2 + snapshot.camera.x,
       innerHeight / 2 + snapshot.camera.y,
@@ -314,12 +315,12 @@ export class PixiCanvasRenderer implements CanvasRenderer {
   }
 
   suspend() {
-    this.app.stop();
+    this.suspended = true;
   }
 
   resume() {
-    this.app.start();
-    this.app.stop();
+    this.suspended = false;
+    if (this.lastSnapshot) this.render(this.lastSnapshot);
   }
 
   destroy() {
@@ -362,6 +363,13 @@ export class PixiCanvasRenderer implements CanvasRenderer {
 
   private readonly onContextRestored = () => {
     this.lost = false;
+    this.linksKey = "";
+    this.backgroundKey = "";
+    this.textures.clear();
+    for (const view of this.cardViews.values()) {
+      this.detachMedia(view);
+      view.key = "";
+    }
     document.body.classList.remove("canvas-context-lost");
     if (this.lastSnapshot) this.render(this.lastSnapshot);
   };

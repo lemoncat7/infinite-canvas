@@ -1304,6 +1304,8 @@ function releaseFullResolutionPreviews() {
 }
 document.addEventListener("visibilitychange", () => {
   const backgrounded = document.hidden;
+  if (backgrounded) pixiRenderer?.suspend();
+  else pixiRenderer?.resume();
   document.body.classList.toggle("page-backgrounded", backgrounded);
   if (backgrounded) {
     window.clearTimeout(animatedLinkTimer);
@@ -3275,6 +3277,14 @@ const linkGeometryCache = new WeakMap<
     cb: Point;
   }
 >();
+canvasStore.subscribe((change) => {
+  if (change.type === "node-position")
+    change.nodeIds.forEach((id) => {
+      const node = nodes.find((candidate) => candidate.id === id);
+      if (node) canvasSpatialIndex.update(node);
+    });
+  else if (change.type === "structure") canvasSpatialIndex.rebuild(nodes);
+});
 function rebuildPaintIndexes() {
   paintNodeIndex = new Map(nodes.map((node) => [node.id, node]));
   canvasSpatialIndex.rebuild(nodes);
@@ -8661,12 +8671,13 @@ canvas.addEventListener("pointermove", (e) => {
   const dx = e.clientX - pointer.x,
     dy = e.clientY - pointer.y;
   if (pointer.draggingNode) {
-    const node = nodes.find((n) => n.id === pointer.draggingNode)!;
-    node.x += dx / camera.zoom;
-    node.y += dy / camera.zoom;
+    canvasStore.moveNodeById(
+      pointer.draggingNode,
+      dx / camera.zoom,
+      dy / camera.zoom,
+    );
   } else {
-    camera.x += dx;
-    camera.y += dy;
+    canvasStore.panCamera(dx, dy);
   }
   pointer.x = e.clientX;
   pointer.y = e.clientY;
