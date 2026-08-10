@@ -39,6 +39,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
   private readonly app = new Application();
   private readonly background = new Graphics();
   private grid?: TilingSprite;
+  private lineGrid?: TilingSprite;
   private readonly world = new Container();
   private readonly links = new Graphics();
   private readonly activeLinks = new Graphics();
@@ -89,13 +90,35 @@ export class PixiCanvasRenderer implements CanvasRenderer {
     tileContext.beginPath();
     tileContext.arc(21, 21, 1, 0, Math.PI * 2);
     tileContext.fill();
+    const lineTile = document.createElement("canvas");
+    lineTile.width = 42;
+    lineTile.height = 42;
+    const lineContext = lineTile.getContext("2d")!;
+    lineContext.strokeStyle = "#fff";
+    lineContext.lineWidth = 1;
+    lineContext.beginPath();
+    lineContext.moveTo(0.5, 0);
+    lineContext.lineTo(0.5, 42);
+    lineContext.moveTo(0, 0.5);
+    lineContext.lineTo(42, 0.5);
+    lineContext.stroke();
     this.grid = new TilingSprite({
       texture: Texture.from(tile),
       width: innerWidth,
       height: innerHeight,
     });
+    this.lineGrid = new TilingSprite({
+      texture: Texture.from(lineTile),
+      width: innerWidth,
+      height: innerHeight,
+    });
     this.world.addChild(this.links, this.activeLinks, this.cards);
-    this.app.stage.addChild(this.background, this.grid, this.world);
+    this.app.stage.addChild(
+      this.background,
+      this.grid,
+      this.lineGrid,
+      this.world,
+    );
     this.app.canvas.addEventListener("webglcontextlost", this.onContextLost);
     this.app.canvas.addEventListener(
       "webglcontextrestored",
@@ -128,12 +151,27 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         this.grid.tint = snapshot.dark ? 0x8fc5c5 : 0x4a6f65;
         this.grid.alpha = snapshot.dark ? 0.24 : 0.27;
       }
+      if (this.lineGrid) {
+        this.lineGrid.width = innerWidth;
+        this.lineGrid.height = innerHeight;
+        this.lineGrid.tint = snapshot.dark ? 0x8fc5c5 : 0x4a6f65;
+        this.lineGrid.alpha = snapshot.dark ? 0.105 : 0.13;
+      }
     }
     if (this.grid) {
+      this.grid.visible = snapshot.backgroundMode === "dots";
       this.grid.tileScale.set(snapshot.camera.zoom);
       this.grid.tilePosition.set(
         innerWidth / 2 + snapshot.camera.x - 21 * snapshot.camera.zoom,
         innerHeight / 2 + snapshot.camera.y - 21 * snapshot.camera.zoom,
+      );
+    }
+    if (this.lineGrid) {
+      this.lineGrid.visible = snapshot.backgroundMode === "lines";
+      this.lineGrid.tileScale.set(snapshot.camera.zoom);
+      this.lineGrid.tilePosition.set(
+        innerWidth / 2 + snapshot.camera.x,
+        innerHeight / 2 + snapshot.camera.y,
       );
     }
     const byId = new Map(snapshot.nodes.map((node) => [node.id, node]));
@@ -155,6 +193,8 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       mix(link.to);
     }
     mix(snapshot.selectedId);
+    mix(snapshot.hoveredLinkIndex + 2);
+    mix(snapshot.touchSelectedLinkIndex + 2);
     mix(snapshot.dark ? 1 : 0);
     const linksKey = `${linkHash}:${snapshot.links.length}`;
     if (linksKey !== this.linksKey) {
@@ -162,17 +202,20 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       this.links.clear();
       this.activeLinks.clear();
       let activeCount = 0;
-      for (const link of snapshot.links) {
+      snapshot.links.forEach((link, index) => {
       const from = byId.get(link.from),
         to = byId.get(link.to);
-      if (!from || !to) continue;
+      if (!from || !to) return;
       const a = port(from, link.fromSide),
         b = port(to, link.toSide),
         curve = Math.max(55, Math.hypot(b.x - a.x, b.y - a.y) * 0.35),
         ca = control(a, link.fromSide, curve),
         cb = control(b, link.toSide, curve),
         highlighted =
-          link.from === snapshot.selectedId || link.to === snapshot.selectedId,
+          link.from === snapshot.selectedId ||
+          link.to === snapshot.selectedId ||
+          index === snapshot.hoveredLinkIndex ||
+          index === snapshot.touchSelectedLinkIndex,
         active =
           from.status === "queued" ||
           from.status === "running" ||
@@ -193,7 +236,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
           alpha: highlighted ? 0.94 : 0.64,
           width: highlighted ? 3 : 2.25,
         });
-      }
+      });
       this.setActiveLinkAnimation(activeCount > 0);
     }
     const selectedIds = new Set(snapshot.selectedIds);

@@ -27,6 +27,9 @@ export type CanvasRenderSnapshot = {
   selectedId: number;
   selectedIds: readonly number[];
   dark: boolean;
+  backgroundMode: "dots" | "lines" | "blank";
+  hoveredLinkIndex: number;
+  touchSelectedLinkIndex: number;
 };
 
 export interface CanvasRenderer {

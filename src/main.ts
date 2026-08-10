@@ -9,11 +9,10 @@ const canvasPerformance = new CanvasPerformanceMonitor(
 );
 if (canvasPerformance.enabled)
   Object.assign(window, { __canvasPerformance: canvasPerformance });
-const pixiRendererRequested =
-  new URLSearchParams(location.search).get("renderer") === "pixi";
 let pixiRenderer:
   | import("./canvas/pixi-renderer").PixiCanvasRenderer
   | undefined;
+document.body.classList.add("renderer-pixi");
 
 type Point = { x: number; y: number };
 type NodeKind =
@@ -179,10 +178,7 @@ function loadTtsVoices(providerId = "easyvoice-local") {
 }
 
 const canvas = document.querySelector<HTMLCanvasElement>("#canvas")!;
-let ctx = canvas.getContext("2d")!;
-const staticLinksCanvas =
-    document.querySelector<HTMLCanvasElement>("#canvas-links")!,
-  staticLinksCtx = staticLinksCanvas.getContext("2d")!;
+const ctx = canvas.getContext("2d")!;
 const nodeViewport = document.querySelector<HTMLElement>("#node-viewport")!;
 const nodeLayer = document.querySelector<HTMLElement>("#node-layer")!;
 const zoomSlider = document.querySelector<HTMLInputElement>("#zoom-slider")!;
@@ -1257,10 +1253,10 @@ let promptAgentContextSelection = new Set<number>();
 let promptAgentSelecting = false;
 let saveTimer: number | undefined;
 let drawFrame: number | null = null;
-let drawNeedsDomSync = true,
-  animatedLinkTimer = 0;
+let drawNeedsDomSync = true;
 const nodeDomStates = new Map<number, unknown[]>();
 const pixiDetachedNodeCache = new Map<number, HTMLElement>();
+let pixiEditorWarmScheduled = false;
 function cacheDetachedPixiNode(id: number, element: HTMLElement) {
   pixiDetachedNodeCache.delete(id);
   pixiDetachedNodeCache.set(id, element);
@@ -1273,6 +1269,41 @@ function cacheDetachedPixiNode(id: number, element: HTMLElement) {
     pixiDetachedNodeCache.delete(oldestId);
     nodeDomStates.delete(oldestId);
   }
+}
+function schedulePixiEditorWarmup() {
+  if (pixiEditorWarmScheduled || pixiDetachedNodeCache.size >= 2 || !nodes.length)
+    return;
+  pixiEditorWarmScheduled = true;
+  const warm = () => {
+    pixiEditorWarmScheduled = false;
+    const center = world({ x: innerWidth / 2, y: innerHeight / 2 }),
+      offsetX = innerWidth / 2 + camera.x,
+      offsetY = innerHeight / 2 + camera.y,
+      candidates = canvasSpatialIndex
+        .search({
+          minX: -offsetX / camera.zoom,
+          minY: -offsetY / camera.zoom,
+          maxX: (innerWidth - offsetX) / camera.zoom,
+          maxY: (innerHeight - offsetY) / camera.zoom,
+        })
+        .map((id) => nodes.find((node) => node.id === id))
+        .filter((node): node is FlowNode => Boolean(node))
+        .sort(
+          (left, right) =>
+            Math.hypot(left.x - center.x, left.y - center.y) -
+            Math.hypot(right.x - center.x, right.y - center.y),
+        );
+    for (const node of candidates) {
+      if (pixiDetachedNodeCache.has(node.id) || node.id === selectedId) continue;
+      cacheDetachedPixiNode(node.id, createDomNode(node));
+      if (pixiDetachedNodeCache.size >= 2) break;
+    }
+  };
+  const requestIdle = Reflect.get(window, "requestIdleCallback") as
+    | ((callback: () => void, options: { timeout: number }) => number)
+    | undefined;
+  if (requestIdle) requestIdle(warm, { timeout: 1200 });
+  else globalThis.setTimeout(warm, 180);
 }
 let cameraFrame: number | null = null;
 let zoomTarget = camera.zoom;
@@ -1324,8 +1355,6 @@ document.addEventListener("visibilitychange", () => {
   else pixiRenderer?.resume();
   document.body.classList.toggle("page-backgrounded", backgrounded);
   if (backgrounded) {
-    window.clearTimeout(animatedLinkTimer);
-    animatedLinkTimer = 0;
     clearThumbnailCache();
     releaseFullResolutionPreviews();
     nodeDomStates.clear();
@@ -3129,65 +3158,6 @@ const world = (p: Point): Point => ({
   y: (p.y - innerHeight / 2 - camera.y) / camera.zoom,
 });
 
-function roundedRect(x: number, y: number, w: number, h: number, r: number) {
-  ctx.beginPath();
-  ctx.roundRect(x, y, w, h, r);
-}
-
-let gridPatternCache:
-  | { key: string; tileSize: number; pattern: CanvasPattern }
-  | undefined;
-function drawGrid() {
-  if (backgroundMode === "blank") return;
-  const gap = 42 * camera.zoom;
-  if (gap < 10) return;
-  const tileSize = Math.max(10, Math.round(gap)),
-    key = `${backgroundMode}:${colorTheme}:${tileSize}:${camera.zoom.toFixed(3)}`;
-  if (!gridPatternCache || gridPatternCache.key !== key) {
-    const tile = document.createElement("canvas");
-    tile.width = tileSize;
-    tile.height = tileSize;
-    const tileContext = tile.getContext("2d")!;
-    if (backgroundMode === "lines") {
-      tileContext.strokeStyle =
-        colorTheme === "dark"
-          ? "rgba(143,197,197,.105)"
-          : "rgba(74,111,101,.13)";
-      tileContext.lineWidth = 1;
-      tileContext.beginPath();
-      tileContext.moveTo(0.5, 0);
-      tileContext.lineTo(0.5, tileSize);
-      tileContext.moveTo(0, 0.5);
-      tileContext.lineTo(tileSize, 0.5);
-      tileContext.stroke();
-    } else {
-      tileContext.fillStyle =
-        colorTheme === "dark"
-          ? "rgba(143,197,197,.24)"
-          : "rgba(74,111,101,.27)";
-      tileContext.beginPath();
-      tileContext.arc(
-        tileSize / 2,
-        tileSize / 2,
-        Math.max(0.65, camera.zoom),
-        0,
-        Math.PI * 2,
-      );
-      tileContext.fill();
-    }
-    const pattern = ctx.createPattern(tile, "repeat");
-    if (pattern) gridPatternCache = { key, tileSize, pattern };
-  }
-  if (!gridPatternCache) return;
-  const origin = screen({ x: 0, y: 0 }),
-    offset = backgroundMode === "dots" ? gridPatternCache.tileSize / 2 : 0;
-  gridPatternCache.pattern.setTransform(
-    new DOMMatrix().translate(origin.x - offset, origin.y - offset),
-  );
-  ctx.fillStyle = gridPatternCache.pattern;
-  ctx.fillRect(0, 0, innerWidth, innerHeight);
-}
-
 function portWorld(node: FlowNode, side: PortSide): Point {
   if (side === "top") return { x: node.x + node.width / 2, y: node.y };
   if (side === "right")
@@ -3230,12 +3200,6 @@ function nodeFeedsActiveGeneration(nodeId: number) {
 }
 function nodeIsGenerationProtected(node: FlowNode) {
   return nodeIsActivelyGenerating(node) || nodeFeedsActiveGeneration(node.id);
-}
-let generatingLinkNodeIds = new Set<number>();
-function linkIsGenerating(link: FlowLink) {
-  return (
-    generatingLinkNodeIds.has(link.from) || generatingLinkNodeIds.has(link.to)
-  );
 }
 function orderedImageInputs(targetId: number) {
   return links
@@ -3328,18 +3292,6 @@ function rebuildPaintIndexes() {
     paintTargetLinkIndex.set(targetId, targetLinks);
   }
 }
-function visibleSpatialNodeIds(marginPx = 0) {
-  const offsetX = innerWidth / 2 + camera.x,
-    offsetY = innerHeight / 2 + camera.y;
-  return new Set(
-    canvasSpatialIndex.search({
-      minX: (-marginPx - offsetX) / camera.zoom,
-      minY: (-marginPx - offsetY) / camera.zoom,
-      maxX: (innerWidth + marginPx - offsetX) / camera.zoom,
-      maxY: (innerHeight + marginPx - offsetY) / camera.zoom,
-    }),
-  );
-}
 function linkPathGeometry(link: FlowLink) {
   const from =
       paintNodeIndex.get(link.from) ??
@@ -3402,79 +3354,9 @@ function linkPathGeometry(link: FlowLink) {
     cb: translate(relative.cb),
   };
 }
-let selectedFlowLinks = new Set<FlowLink>();
 function canvasInteractionActive() {
   return Boolean(pointer.down || domDrag || marquee?.active || pinchGesture);
 }
-function collectSelectedFlowLinks() {
-  const highlighted = new Set<FlowLink>();
-  if (!selectedId) return highlighted;
-  for (const link of links)
-    if (link.from === selectedId || link.to === selectedId)
-      highlighted.add(link);
-  return highlighted;
-}
-function drawLink(link: FlowLink, index: number) {
-  const geometry = linkPathGeometry(link);
-  if (!geometry) return;
-  const { a, b, ca, cb } = geometry;
-  const margin = 72;
-  if (
-    Math.max(a.x, b.x, ca.x, cb.x) < -margin ||
-    Math.min(a.x, b.x, ca.x, cb.x) > innerWidth + margin ||
-    Math.max(a.y, b.y, ca.y, cb.y) < -margin ||
-    Math.min(a.y, b.y, ca.y, cb.y) > innerHeight + margin
-  )
-    return;
-  ctx.beginPath();
-  ctx.moveTo(a.x, a.y);
-  ctx.bezierCurveTo(ca.x, ca.y, cb.x, cb.y, b.x, b.y);
-  const generating = linkIsGenerating(link),
-    hovered = index === hoveredLinkIndex || index === touchSelectedLinkIndex,
-    selectedFlow = selectedFlowLinks.has(link);
-  ctx.save();
-  if (generating) {
-    if (!canvasInteractionActive()) {
-      ctx.setLineDash([10 * camera.zoom, 8 * camera.zoom]);
-      ctx.lineDashOffset = -(performance.now() / 28) % (18 * camera.zoom);
-    }
-    ctx.strokeStyle = selectedFlow
-      ? colorTheme === "dark"
-        ? "rgba(137,232,228,.96)"
-        : "rgba(24,111,103,.9)"
-      : colorTheme === "dark"
-        ? "rgba(111,199,195,.72)"
-        : "rgba(72,137,122,.64)";
-    ctx.lineWidth = (selectedFlow ? 3 : 2.25) * camera.zoom;
-  } else if (hovered) {
-    ctx.strokeStyle =
-      colorTheme === "dark" ? "rgba(178,222,218,.72)" : "rgba(42,76,67,.76)";
-    ctx.lineWidth = 3 * camera.zoom;
-    ctx.shadowColor =
-      colorTheme === "dark" ? "rgba(88,190,186,.2)" : "rgba(38,76,66,.13)";
-    ctx.shadowBlur = 5 * camera.zoom;
-  } else if (selectedFlow) {
-    ctx.strokeStyle =
-      colorTheme === "dark" ? "rgba(132,220,218,.88)" : "rgba(31,105,99,.82)";
-    ctx.lineWidth = 2.8 * camera.zoom;
-    ctx.shadowColor =
-      colorTheme === "dark" ? "rgba(82,202,198,.24)" : "rgba(34,105,98,.15)";
-    ctx.shadowBlur = 6 * camera.zoom;
-  } else {
-    ctx.strokeStyle = "rgba(183,190,201,.5)";
-    ctx.lineWidth = 2 * camera.zoom;
-  }
-  ctx.stroke();
-  ctx.restore();
-  if (!(pointer.down && pointer.blankCanvas && pointer.moved))
-    for (const p of [a, b]) {
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 5 * camera.zoom, 0, Math.PI * 2);
-      ctx.fillStyle = "#aab1ba";
-      ctx.fill();
-    }
-}
-
 function hitNode(sx: number, sy: number) {
   const p = world({ x: sx, y: sy }),
     candidates = new Set(
@@ -3704,89 +3586,8 @@ function drawPendingLink() {
     ctx.fill();
   }
 }
-let lastStaticLinksLayerKey = "";
-function staticLinksLayerKey() {
-  let hash = 2166136261;
-  const mix = (value: number) => {
-    hash ^= value | 0;
-    hash = Math.imul(hash, 16777619);
-  };
-  mix(Math.round(camera.x * 10));
-  mix(Math.round(camera.y * 10));
-  mix(Math.round(camera.zoom * 1000));
-  mix(innerWidth);
-  mix(innerHeight);
-  mix(colorTheme === "dark" ? 1 : 2);
-  mix(backgroundMode === "blank" ? 1 : backgroundMode === "lines" ? 2 : 3);
-  mix(selectedId);
-  mix(hoveredLinkIndex + 2);
-  mix(touchSelectedLinkIndex + 2);
-  for (const node of nodes) {
-    mix(node.id);
-    mix(Math.round(node.x * 10));
-    mix(Math.round(node.y * 10));
-    mix(Math.round(node.width * 10));
-    mix(Math.round(node.height * 10));
-    if (generatingLinkNodeIds.has(node.id)) mix(-node.id);
-  }
-  for (const link of links) {
-    mix(link.from);
-    mix(link.to);
-    mix(link.inputOrder ?? 0);
-    mix(link.fromSide.charCodeAt(0));
-    mix(link.toSide.charCodeAt(0));
-  }
-  return `${hash}:${nodes.length}:${links.length}`;
-}
-function linkUsesDynamicLayer(link: FlowLink, index: number) {
-  return (
-    linkIsGenerating(link) ||
-    selectedFlowLinks.has(link) ||
-    index === hoveredLinkIndex ||
-    index === touchSelectedLinkIndex
-  );
-}
-let stableCardPanMode = false;
 function positionCardLayerForFrame() {
-  const useStablePan = Boolean(
-    !pixiRenderer &&
-    pointer.down &&
-      pointer.blankCanvas &&
-      canvasHasActiveGeneration() &&
-      !document.hidden &&
-      document.hasFocus(),
-  );
-  if (useStablePan) {
-    nodeViewport.style.transform = "translate3d(0,0,0)";
-    const visibleIds = visibleSpatialNodeIds(320);
-    nodeLayer
-      .querySelectorAll<HTMLElement>(".flow-node[data-id]")
-      .forEach((element) => {
-        const node = paintNodeIndex.get(Number(element.dataset.id));
-        if (!node) return;
-        const visible = visibleIds.has(node.id),
-          point = visible ? screen(node) : null;
-        element.style.visibility = visible ? "visible" : "hidden";
-        if (point) {
-          element.style.transformOrigin = "0 0";
-          element.style.transform = `translate3d(${point.x}px,${point.y}px,0) scale(${camera.zoom})`;
-        }
-      });
-    stableCardPanMode = true;
-    return;
-  }
   nodeViewport.style.transform = `translate3d(${innerWidth / 2 + camera.x}px, ${innerHeight / 2 + camera.y}px,0) scale(${camera.zoom})`;
-  if (!stableCardPanMode) return;
-  nodeLayer
-    .querySelectorAll<HTMLElement>(".flow-node[data-id]")
-    .forEach((element) => {
-      const node = paintNodeIndex.get(Number(element.dataset.id));
-      if (!node) return;
-      element.style.visibility = "visible";
-      element.style.transformOrigin = "";
-      element.style.transform = `translate(${node.x}px, ${node.y}px)`;
-    });
-  stableCardPanMode = false;
 }
 function paint() {
   const performanceFrame = canvasPerformance.beginFrame();
@@ -3796,42 +3597,11 @@ function paint() {
   if (syncUi) drawNeedsDomSync = false;
   if (syncUi || paintNodeIndex.size !== nodes.length) rebuildPaintIndexes();
   positionCardLayerForFrame();
-  if (syncUi) {
-    selectedFlowLinks = collectSelectedFlowLinks();
-    generatingLinkNodeIds = new Set<number>();
-    for (const node of nodes) {
-      if (!nodeIsActivelyGenerating(node)) continue;
-      generatingLinkNodeIds.add(node.id);
-      if (node.sourceNodeId) generatingLinkNodeIds.add(node.sourceNodeId);
-    }
-  }
-  const dynamicCtx = canvas.getContext("2d")!;
-  if (!pixiRenderer) {
-    const staticKey = staticLinksLayerKey();
-    if (staticKey !== lastStaticLinksLayerKey) {
-      ctx = staticLinksCtx;
-      ctx.clearRect(0, 0, innerWidth, innerHeight);
-      ctx.fillStyle = colorTheme === "dark" ? "#0b1113" : "#eef3ef";
-      ctx.fillRect(0, 0, innerWidth, innerHeight);
-      drawGrid();
-      links.forEach((link, index) => {
-        if (!linkUsesDynamicLayer(link, index)) drawLink(link, index);
-      });
-      lastStaticLinksLayerKey = staticKey;
-    }
-    ctx = dynamicCtx;
-    ctx.clearRect(0, 0, innerWidth, innerHeight);
-    links.forEach((link, index) => {
-      if (linkUsesDynamicLayer(link, index)) drawLink(link, index);
-    });
-    drawPendingLink();
-  } else {
-    ctx = dynamicCtx;
-    ctx.clearRect(0, 0, innerWidth, innerHeight);
-    if (connecting) drawPendingLink();
-  }
+  ctx.clearRect(0, 0, innerWidth, innerHeight);
+  if (connecting) drawPendingLink();
   if (syncUi) {
     syncDomNodes();
+    schedulePixiEditorWarmup();
     updateTaskMonitor();
     updateCancelPendingButton();
     updateHistoryControls();
@@ -3840,24 +3610,6 @@ function paint() {
     zoomPercent.value = `${Math.round(camera.zoom * 100)}%`;
     nodeCount.textContent = String(nodes.length);
   }
-  if (
-    generatingLinkNodeIds.size &&
-    !pixiRenderer &&
-    !interacting &&
-    !document.hidden &&
-    !animatedLinkTimer
-  ) {
-    const animationDelay = !document.hasFocus()
-      ? 300
-      : innerWidth <= 780
-        ? 140
-        : 80;
-    animatedLinkTimer = window.setTimeout(() => {
-      animatedLinkTimer = 0;
-      if (canvasInteractionActive()) return;
-      draw(false);
-    }, animationDelay);
-  }
   pixiRenderer?.render({
     nodes,
     links,
@@ -3865,6 +3617,9 @@ function paint() {
     selectedId,
     selectedIds: [...batchSelectedIds],
     dark: colorTheme === "dark",
+    backgroundMode,
+    hoveredLinkIndex,
+    touchSelectedLinkIndex,
   });
   canvasPerformance.endFrame(performanceFrame);
 }
@@ -3874,18 +3629,11 @@ function draw(syncDom = true) {
 }
 function resize() {
   const ratio = Math.min(devicePixelRatio || 1, innerWidth <= 780 ? 1.15 : 1.5);
-  for (const [target, context] of [
-    [staticLinksCanvas, staticLinksCtx],
-    [canvas, canvas.getContext("2d")!],
-  ] as Array<[HTMLCanvasElement, CanvasRenderingContext2D]>) {
-    target.width = innerWidth * ratio;
-    target.height = innerHeight * ratio;
-    target.style.width = `${innerWidth}px`;
-    target.style.height = `${innerHeight}px`;
-    context.setTransform(ratio, 0, 0, ratio, 0, 0);
-  }
-  ctx = canvas.getContext("2d")!;
-  lastStaticLinksLayerKey = "";
+  canvas.width = innerWidth * ratio;
+  canvas.height = innerHeight * ratio;
+  canvas.style.width = `${innerWidth}px`;
+  canvas.style.height = `${innerHeight}px`;
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   draw();
 }
 function setZoom(
@@ -4221,18 +3969,16 @@ function addMediaNode(
 
 function syncDomNodes() {
   nodeViewport.style.transform = `translate3d(${innerWidth / 2 + camera.x}px, ${innerHeight / 2 + camera.y}px,0) scale(${camera.zoom})`;
-  const requiredPixiDomIds = pixiRenderer
-      ? new Set<number>([
+  const requiredPixiDomIds = new Set<number>([
           ...(selectedId ? [selectedId] : []),
           ...promptAgentContextSelection,
           ...(editingTextNodeId ? [editingTextNodeId] : []),
           ...(domDrag ? [domDrag.id] : []),
-        ])
-      : null,
+        ]),
     allNodeIds = new Set(nodes.map((node) => String(node.id))),
     live = new Set(
       nodes
-        .filter((node) => !requiredPixiDomIds || requiredPixiDomIds.has(node.id))
+        .filter((node) => requiredPixiDomIds.has(node.id))
         .map((node) => String(node.id)),
     );
   for (const id of pixiDetachedNodeCache.keys())
@@ -4243,7 +3989,7 @@ function syncDomNodes() {
   nodeLayer.querySelectorAll<HTMLElement>(".flow-node").forEach((element) => {
     if (!live.has(element.dataset.id!)) {
       const id = Number(element.dataset.id);
-      if (pixiRenderer && allNodeIds.has(String(id)))
+      if (allNodeIds.has(String(id)))
         cacheDetachedPixiNode(id, element);
       else {
         nodeDomStates.delete(id);
@@ -4280,7 +4026,7 @@ function syncDomNodes() {
       node.width = 290;
       node.height = 225;
     }
-    if (requiredPixiDomIds && !requiredPixiDomIds.has(node.id)) continue;
+    if (!requiredPixiDomIds.has(node.id)) continue;
     let element = nodeLayer.querySelector<HTMLElement>(
       `.flow-node[data-id="${node.id}"]`,
     );
@@ -7173,6 +6919,7 @@ async function loadCanvas(keepLoadingStatus = false) {
     });
     nodeLayer.replaceChildren();
     pixiDetachedNodeCache.clear();
+    pixiEditorWarmScheduled = false;
     nodes.splice(0, nodes.length, ...(document.nodes ?? []));
     nodes.forEach((node) => {
       if (node.kind === "prompt" && node.title === "文本") node.title = "标签";
@@ -8571,7 +8318,7 @@ canvas.addEventListener("pointerdown", (e) => {
   pointer.draggingGroup = null;
   pointer.toggleBatchOnRelease = 0;
   pointer.blankCanvas = true;
-  if (pixiRenderer) {
+  {
     const hit = hitNode(e.clientX, e.clientY);
     if (hit) {
       if (multiSelectMode) {
@@ -8604,7 +8351,7 @@ canvas.addEventListener("pointermove", (e) => {
     Math.hypot(e.clientX - pointer.startX, e.clientY - pointer.startY) > 4
   ) {
     pointer.moved = true;
-    if (pixiRenderer && pointer.draggingNode === selectedId) {
+    if (pointer.draggingNode === selectedId) {
       nodeLayer
         .querySelector<HTMLElement>(
           `.flow-node[data-id="${pointer.draggingNode}"]`,
@@ -8702,7 +8449,7 @@ canvas.addEventListener("pointercancel", () => {
   draw();
 });
 function cancelCanvasPanOnPageInterruption() {
-  if (!pointer.down && !stableCardPanMode) return;
+  if (!pointer.down) return;
   pointer.down = false;
   pointer.draggingNode = null;
   pointer.draggingGroup = null;
@@ -13710,13 +13457,18 @@ async function bootstrapApplication() {
 }
 window.addEventListener("resize", resize);
 resize();
-if (pixiRendererRequested)
-  void import("./canvas/pixi-renderer").then(async ({ PixiCanvasRenderer }) => {
+void import("./canvas/pixi-renderer")
+  .then(async ({ PixiCanvasRenderer }) => {
     const renderer = new PixiCanvasRenderer();
     await renderer.mount(document.body);
     pixiRenderer = renderer;
-    document.body.classList.add("renderer-pixi");
     draw(false);
+  })
+  .catch((error) => {
+    document.body.classList.add("canvas-context-lost");
+    clientLog("pixi-renderer-init-failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
   });
 updateEditor();
 void bootstrapApplication();

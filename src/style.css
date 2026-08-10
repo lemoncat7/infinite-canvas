@@ -42,10 +42,8 @@ body.edge-theme-return { transition:opacity .14s ease,transform .14s ease; }
 button { font: inherit; }
 canvas { position:fixed; inset:0; display: block; cursor: grab; touch-action: none; }
 .canvas-render-layer { pointer-events:none; cursor:default; }
-#canvas-links { z-index:0; }
 #canvas { z-index:0; }
 #canvas-pixi { z-index:0; }
-body.renderer-pixi #canvas-links { visibility:hidden; }
 body.renderer-pixi #node-layer > .flow-node:not(.selected):not(.batch-selected) { visibility:hidden; pointer-events:none; }
 body.canvas-context-lost::after { content:"正在恢复画布…"; position:fixed; z-index:200; inset:0; display:grid; place-items:center; color:var(--ws-text,#dfe8e6); background:rgba(10,17,19,.72); backdrop-filter:blur(10px); font:600 14px/1 system-ui,sans-serif; letter-spacing:.08em; pointer-events:none; }
 canvas.dragging { cursor: grabbing; }
