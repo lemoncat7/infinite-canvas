@@ -41,6 +41,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
   private grid?: TilingSprite;
   private readonly world = new Container();
   private readonly links = new Graphics();
+  private readonly activeLinks = new Graphics();
   private readonly cards = new Container();
   private readonly cardViews = new Map<
     number,
@@ -61,6 +62,8 @@ export class PixiCanvasRenderer implements CanvasRenderer {
   private lastSnapshot?: CanvasRenderSnapshot;
   private backgroundKey = "";
   private linksKey = "";
+  private activeLinkTimer = 0;
+  private hasActiveLinks = false;
 
   async mount(parent: HTMLElement) {
     await this.app.init({
@@ -91,7 +94,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       width: innerWidth,
       height: innerHeight,
     });
-    this.world.addChild(this.links, this.cards);
+    this.world.addChild(this.links, this.activeLinks, this.cards);
     this.app.stage.addChild(this.background, this.grid, this.world);
     this.app.canvas.addEventListener("webglcontextlost", this.onContextLost);
     this.app.canvas.addEventListener(
@@ -145,6 +148,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       mix(Math.round(node.y * 10));
       mix(Math.round(node.width * 10));
       mix(Math.round(node.height * 10));
+      mix(node.status === "queued" || node.status === "running" ? 1 : 0);
     }
     for (const link of snapshot.links) {
       mix(link.from);
@@ -156,6 +160,8 @@ export class PixiCanvasRenderer implements CanvasRenderer {
     if (linksKey !== this.linksKey) {
       this.linksKey = linksKey;
       this.links.clear();
+      this.activeLinks.clear();
+      let activeCount = 0;
       for (const link of snapshot.links) {
       const from = byId.get(link.from),
         to = byId.get(link.to);
@@ -166,8 +172,14 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         ca = control(a, link.fromSide, curve),
         cb = control(b, link.toSide, curve),
         highlighted =
-          link.from === snapshot.selectedId || link.to === snapshot.selectedId;
-      this.links
+          link.from === snapshot.selectedId || link.to === snapshot.selectedId,
+        active =
+          from.status === "queued" ||
+          from.status === "running" ||
+          to.status === "queued" ||
+          to.status === "running";
+      if (active) activeCount++;
+      (active ? this.activeLinks : this.links)
         .moveTo(a.x, a.y)
         .bezierCurveTo(ca.x, ca.y, cb.x, cb.y, b.x, b.y)
         .stroke({
@@ -182,18 +194,23 @@ export class PixiCanvasRenderer implements CanvasRenderer {
           width: highlighted ? 3 : 2.25,
         });
       }
+      this.setActiveLinkAnimation(activeCount > 0);
     }
-    const live = new Set(snapshot.nodes.map((node) => node.id));
     const selectedIds = new Set(snapshot.selectedIds);
-    for (const [id, view] of this.cardViews)
-      if (!live.has(id)) {
-        this.detachMedia(view);
-        view.container.destroy({ children: true });
-        this.cardViews.delete(id);
-      }
     const offsetX = innerWidth / 2 + snapshot.camera.x,
-      offsetY = innerHeight / 2 + snapshot.camera.y;
+      offsetY = innerHeight / 2 + snapshot.camera.y,
+      activeCardIds = new Set<number>(),
+      margin = 520;
     for (const node of snapshot.nodes) {
+      const screenX = node.x * snapshot.camera.zoom + offsetX,
+        screenY = node.y * snapshot.camera.zoom + offsetY,
+        visible =
+          screenX + node.width * snapshot.camera.zoom > -margin &&
+          screenX < innerWidth + margin &&
+          screenY + node.height * snapshot.camera.zoom > -margin &&
+          screenY < innerHeight + margin;
+      if (!visible) continue;
+      activeCardIds.add(node.id);
       let view = this.cardViews.get(node.id);
       if (!view) {
         const container = new Container(),
@@ -227,18 +244,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         this.cardViews.set(node.id, view);
       }
       view.container.position.set(node.x, node.y);
-      const screenX = node.x * snapshot.camera.zoom + offsetX,
-        screenY = node.y * snapshot.camera.zoom + offsetY,
-        margin = 520;
-      view.container.visible =
-        screenX + node.width * snapshot.camera.zoom > -margin &&
-        screenX < innerWidth + margin &&
-        screenY + node.height * snapshot.camera.zoom > -margin &&
-        screenY < innerHeight + margin;
-      if (!view.container.visible) {
-        this.detachMedia(view);
-        continue;
-      }
+      view.container.visible = true;
       const mediaUrl = node.mediaUrl ? this.thumbnailUrl(node.mediaUrl) : undefined;
       if (mediaUrl !== view.mediaUrl) {
         this.detachMedia(view);
@@ -317,19 +323,29 @@ export class PixiCanvasRenderer implements CanvasRenderer {
           .fill({ color: node.accent });
       }
     }
+    for (const [id, view] of this.cardViews)
+      if (!activeCardIds.has(id)) {
+        this.detachMedia(view);
+        view.container.destroy({ children: true });
+        this.cardViews.delete(id);
+      }
     this.app.renderer.render(this.app.stage);
   }
 
   suspend() {
     this.suspended = true;
+    window.clearTimeout(this.activeLinkTimer);
+    this.activeLinkTimer = 0;
   }
 
   resume() {
     this.suspended = false;
+    this.setActiveLinkAnimation(this.hasActiveLinks);
     if (this.lastSnapshot) this.render(this.lastSnapshot);
   }
 
   destroy() {
+    window.clearTimeout(this.activeLinkTimer);
     this.app.canvas.removeEventListener(
       "webglcontextlost",
       this.onContextLost,
@@ -340,6 +356,26 @@ export class PixiCanvasRenderer implements CanvasRenderer {
     );
     this.textures.clear();
     this.app.destroy(true, { children: true });
+  }
+
+  private setActiveLinkAnimation(active: boolean) {
+    this.hasActiveLinks = active;
+    if (!active) {
+      window.clearTimeout(this.activeLinkTimer);
+      this.activeLinkTimer = 0;
+      this.activeLinks.alpha = 1;
+      return;
+    }
+    if (this.activeLinkTimer || this.suspended || this.lost) return;
+    const animate = () => {
+      this.activeLinkTimer = 0;
+      if (this.suspended || this.lost || !this.hasActiveLinks) return;
+      this.activeLinks.alpha =
+        0.66 + (Math.sin(performance.now() / 420) + 1) * 0.15;
+      this.app.renderer.render(this.app.stage);
+      this.activeLinkTimer = window.setTimeout(animate, 80);
+    };
+    this.activeLinkTimer = window.setTimeout(animate, 80);
   }
 
   private detachMedia(view: {

@@ -1260,6 +1260,20 @@ let drawFrame: number | null = null;
 let drawNeedsDomSync = true,
   animatedLinkTimer = 0;
 const nodeDomStates = new Map<number, unknown[]>();
+const pixiDetachedNodeCache = new Map<number, HTMLElement>();
+function cacheDetachedPixiNode(id: number, element: HTMLElement) {
+  pixiDetachedNodeCache.delete(id);
+  pixiDetachedNodeCache.set(id, element);
+  element.remove();
+  while (pixiDetachedNodeCache.size > 2) {
+    const oldestId = pixiDetachedNodeCache.keys().next().value as
+      | number
+      | undefined;
+    if (oldestId === undefined) break;
+    pixiDetachedNodeCache.delete(oldestId);
+    nodeDomStates.delete(oldestId);
+  }
+}
 let cameraFrame: number | null = null;
 let zoomTarget = camera.zoom;
 let zoomAnchor: Point = { x: innerWidth / 2, y: innerHeight / 2 };
@@ -3735,6 +3749,7 @@ function linkUsesDynamicLayer(link: FlowLink, index: number) {
 let stableCardPanMode = false;
 function positionCardLayerForFrame() {
   const useStablePan = Boolean(
+    !pixiRenderer &&
     pointer.down &&
       pointer.blankCanvas &&
       canvasHasActiveGeneration() &&
@@ -3791,24 +3806,30 @@ function paint() {
     }
   }
   const dynamicCtx = canvas.getContext("2d")!;
-  const staticKey = staticLinksLayerKey();
-  if (staticKey !== lastStaticLinksLayerKey) {
-    ctx = staticLinksCtx;
+  if (!pixiRenderer) {
+    const staticKey = staticLinksLayerKey();
+    if (staticKey !== lastStaticLinksLayerKey) {
+      ctx = staticLinksCtx;
+      ctx.clearRect(0, 0, innerWidth, innerHeight);
+      ctx.fillStyle = colorTheme === "dark" ? "#0b1113" : "#eef3ef";
+      ctx.fillRect(0, 0, innerWidth, innerHeight);
+      drawGrid();
+      links.forEach((link, index) => {
+        if (!linkUsesDynamicLayer(link, index)) drawLink(link, index);
+      });
+      lastStaticLinksLayerKey = staticKey;
+    }
+    ctx = dynamicCtx;
     ctx.clearRect(0, 0, innerWidth, innerHeight);
-    ctx.fillStyle = colorTheme === "dark" ? "#0b1113" : "#eef3ef";
-    ctx.fillRect(0, 0, innerWidth, innerHeight);
-    drawGrid();
     links.forEach((link, index) => {
-      if (!linkUsesDynamicLayer(link, index)) drawLink(link, index);
+      if (linkUsesDynamicLayer(link, index)) drawLink(link, index);
     });
-    lastStaticLinksLayerKey = staticKey;
+    drawPendingLink();
+  } else {
+    ctx = dynamicCtx;
+    ctx.clearRect(0, 0, innerWidth, innerHeight);
+    if (connecting) drawPendingLink();
   }
-  ctx = dynamicCtx;
-  ctx.clearRect(0, 0, innerWidth, innerHeight);
-  links.forEach((link, index) => {
-    if (linkUsesDynamicLayer(link, index)) drawLink(link, index);
-  });
-  drawPendingLink();
   if (syncUi) {
     syncDomNodes();
     updateTaskMonitor();
@@ -3821,6 +3842,7 @@ function paint() {
   }
   if (
     generatingLinkNodeIds.size &&
+    !pixiRenderer &&
     !interacting &&
     !document.hidden &&
     !animatedLinkTimer
@@ -4207,15 +4229,27 @@ function syncDomNodes() {
           ...(domDrag ? [domDrag.id] : []),
         ])
       : null,
+    allNodeIds = new Set(nodes.map((node) => String(node.id))),
     live = new Set(
       nodes
         .filter((node) => !requiredPixiDomIds || requiredPixiDomIds.has(node.id))
         .map((node) => String(node.id)),
     );
+  for (const id of pixiDetachedNodeCache.keys())
+    if (!allNodeIds.has(String(id))) {
+      pixiDetachedNodeCache.delete(id);
+      nodeDomStates.delete(id);
+    }
   nodeLayer.querySelectorAll<HTMLElement>(".flow-node").forEach((element) => {
     if (!live.has(element.dataset.id!)) {
-      nodeDomStates.delete(Number(element.dataset.id));
-      element.remove();
+      const id = Number(element.dataset.id);
+      if (pixiRenderer && allNodeIds.has(String(id)))
+        cacheDetachedPixiNode(id, element);
+      else {
+        nodeDomStates.delete(id);
+        pixiDetachedNodeCache.delete(id);
+        element.remove();
+      }
     }
   });
   const imageStates = new Map(
@@ -4250,6 +4284,13 @@ function syncDomNodes() {
     let element = nodeLayer.querySelector<HTMLElement>(
       `.flow-node[data-id="${node.id}"]`,
     );
+    if (!element) {
+      element = pixiDetachedNodeCache.get(node.id) ?? null;
+      if (element) {
+        pixiDetachedNodeCache.delete(node.id);
+        nodeLayer.append(element);
+      }
+    }
     if (!element) {
       element = createDomNode(node);
       nodeLayer.append(element);
@@ -7131,6 +7172,7 @@ async function loadCanvas(keepLoadingStatus = false) {
       }
     });
     nodeLayer.replaceChildren();
+    pixiDetachedNodeCache.clear();
     nodes.splice(0, nodes.length, ...(document.nodes ?? []));
     nodes.forEach((node) => {
       if (node.kind === "prompt" && node.title === "文本") node.title = "标签";
