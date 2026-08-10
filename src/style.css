@@ -41,9 +41,12 @@ body.edge-theme-return { transition:opacity .14s ease,transform .14s ease; }
 ::view-transition-new(root) { z-index:2; }
 button { font: inherit; }
 canvas { position:fixed; inset:0; display: block; cursor: grab; touch-action: none; }
+.canvas-render-layer { pointer-events:none; cursor:default; }
+#canvas-links { z-index:0; }
+#canvas { z-index:0; }
 canvas.dragging { cursor: grabbing; }
-#node-viewport { position:fixed; z-index:1; left:0; top:0; width:0; height:0; transform-origin:0 0; pointer-events:none; }
-#node-layer { position:absolute; left:0; top:0; width:0; height:0; overflow:visible; }
+#node-viewport { position:fixed; z-index:1; left:0; top:0; width:2px; height:2px; overflow:visible; transform-origin:0 0; pointer-events:none; backface-visibility:hidden; }
+#node-layer { position:absolute; left:0; top:0; width:2px; height:2px; overflow:visible; backface-visibility:hidden; }
 .flow-node { --accent:#8ee7ff; position:absolute; display:flex; flex-direction:column; overflow:visible; color:#222522; background:#f7f7f4; border:1px solid rgba(24,28,24,.14); border-radius:14px; box-shadow:0 10px 28px rgba(0,0,0,.2); pointer-events:auto; touch-action:none; user-select:none; -webkit-user-drag:none; transition:border-color .16s,box-shadow .16s; cursor:grab; }
 .flow-node.dragging { cursor:grabbing; transition:none; will-change:transform; }
 .flow-node img,.flow-node video,.flow-node canvas { -webkit-user-drag:none; user-select:none; }
