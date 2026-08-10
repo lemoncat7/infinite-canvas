@@ -7,7 +7,8 @@ export default defineConfig({
     reuseExistingServer: true,
   },
   use: {
-    baseURL: "http://127.0.0.1:4174",
+    baseURL:
+      process.env.CANVAS_TEST_BASE_URL || "http://127.0.0.1:4174",
     browserName: "chromium",
     headless: true,
     launchOptions: process.env.PLAYWRIGHT_CHROMIUM_PATH
