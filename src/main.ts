@@ -12,7 +12,31 @@ if (canvasPerformance.enabled)
 let pixiRenderer:
   | import("./canvas/pixi-renderer").PixiCanvasRenderer
   | undefined;
-document.body.classList.add("renderer-pixi");
+let pixiRendererPromise: Promise<void> | null = null;
+
+function ensurePixiRenderer() {
+  if (pixiRenderer) return Promise.resolve();
+  if (pixiRendererPromise) return pixiRendererPromise;
+  pixiRendererPromise = import("./canvas/pixi-renderer")
+    .then(async ({ PixiCanvasRenderer }) => {
+      const renderer = new PixiCanvasRenderer();
+      await renderer.mount(document.body);
+      pixiRenderer = renderer;
+      document.body.classList.add("renderer-pixi");
+      document.body.classList.remove("canvas-context-lost");
+      draw(false);
+    })
+    .catch((error) => {
+      pixiRendererPromise = null;
+      document.body.classList.remove("renderer-pixi");
+      document.body.classList.add("canvas-context-lost");
+      clientLog("pixi-renderer-init-failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    });
+  return pixiRendererPromise;
+}
 
 type Point = { x: number; y: number };
 type NodeKind =
@@ -2010,6 +2034,7 @@ async function synchronizeCanvasAfterAuthentication(force = false) {
   if (!authUser) return false;
   if (!force && location.hash !== "#/canvas" && authMode === "login")
     return ensureCurrentUserProject();
+  await ensurePixiRenderer();
   canvasSaveBlocked = true;
   window.clearTimeout(saveTimer);
   canvasSaveQueued = false;
@@ -2044,6 +2069,7 @@ async function enterWorkspace() {
   let finalStatus = workspaceBootStatusVersion,
     completed = false;
   try {
+    await ensurePixiRenderer();
     if (!ready && !(await synchronizeCanvasAfterAuthentication(true)))
       throw new Error("画布尚未完整同步，请检查网络后重试");
     setWorkspaceBootStatus("正在加载资产索引与创作模型");
@@ -13457,19 +13483,6 @@ async function bootstrapApplication() {
 }
 window.addEventListener("resize", resize);
 resize();
-void import("./canvas/pixi-renderer")
-  .then(async ({ PixiCanvasRenderer }) => {
-    const renderer = new PixiCanvasRenderer();
-    await renderer.mount(document.body);
-    pixiRenderer = renderer;
-    draw(false);
-  })
-  .catch((error) => {
-    document.body.classList.add("canvas-context-lost");
-    clientLog("pixi-renderer-init-failed", {
-      message: error instanceof Error ? error.message : String(error),
-    });
-  });
 updateEditor();
 void bootstrapApplication();
 
