@@ -3996,8 +3996,12 @@ function syncDomNodes() {
       )
       .slice(0, visibleLimit)
       .map((node) => node.id),
+    stableVisibleDomIds =
+      canvasHasActiveGeneration() && mountedDomNodeIds.size
+        ? [...mountedDomNodeIds]
+        : visibleDomIds,
     requiredPixiDomIds = new Set<number>([
-          ...visibleDomIds,
+          ...stableVisibleDomIds,
           ...(selectedId ? [selectedId] : []),
           ...promptAgentContextSelection,
           ...(editingTextNodeId ? [editingTextNodeId] : []),

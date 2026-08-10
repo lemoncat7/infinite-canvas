@@ -124,6 +124,33 @@ test("400 nodes stay GPU-virtualized and recover WebGL context", async ({
     });
   expect(await page.locator("#node-layer > .flow-node").count()).toBeLessThanOrEqual(120);
 
+  const primaryImage = page.locator('.flow-node[data-id="1"]');
+  const domIdsBeforeGeneration = await page
+    .locator("#node-layer > .flow-node")
+    .evaluateAll((elements) => elements.map((element) => element.getAttribute("data-id")));
+  await primaryImage
+    .locator('[data-image-field="description"]')
+    .fill("大规模画布生成回归测试");
+  await primaryImage.locator("[data-image-generate]").dispatchEvent("click");
+  await expect(primaryImage).toHaveClass(/generating/);
+  const domIdsAfterGeneration = await page
+    .locator("#node-layer > .flow-node")
+    .evaluateAll((elements) => elements.map((element) => element.getAttribute("data-id")));
+  expect(domIdsAfterGeneration.sort()).toEqual(domIdsBeforeGeneration.sort());
+  const blankDomCards = await page
+    .locator("#node-layer > .flow-node")
+    .evaluateAll((elements) =>
+      elements
+        .filter((element) => {
+          const style = getComputedStyle(element);
+          return style.display !== "none" && style.visibility !== "hidden";
+        })
+        .filter((element) => !(element.textContent || "").trim()).length,
+    );
+  expect(blankDomCards).toBe(0);
+  await primaryImage.click({ position: { x: 24, y: 24 } });
+  await expect(primaryImage).toHaveClass(/selected/);
+
   await page.evaluate(() =>
     (
       window as typeof window & {
@@ -276,6 +303,8 @@ test("card creation, generation and repeated dragging never reveal foreign panel
   const audioCountBefore = await page.locator(".flow-node.kind-audio").count();
   await generatedImage.locator("[data-image-generate]").dispatchEvent("click");
   await expect(generatedImage).toHaveClass(/generating/);
+  if (process.env.CANVAS_VISUAL_AUDIT)
+    await page.screenshot({ path: "test-results/generation-before-pan.png" });
 
   // Repeated panning while the task status changes used to expose the Pixi
   // fallback and DOM card at once, making status and audio panels flash.
@@ -291,6 +320,8 @@ test("card creation, generation and repeated dragging never reveal foreign panel
   await expect(
     page.locator(".flow-node:not(.kind-audio) > .audio-result-panel:visible"),
   ).toHaveCount(0);
+  if (process.env.CANVAS_VISUAL_AUDIT)
+    await page.screenshot({ path: "test-results/generation-after-pan.png" });
 
   // Drag the generating card repeatedly as well; it must remain one complete
   // DOM card and must not swap to another card type while moving.
