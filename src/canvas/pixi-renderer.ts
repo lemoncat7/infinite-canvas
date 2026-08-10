@@ -501,6 +501,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         JSON.stringify(node.ttsSettings),
         node.id === snapshot.selectedId,
         selectedIds.has(node.id),
+        view.media.visible,
         snapshot.dark,
       ].join("|");
       if (view.key === key) continue;
@@ -515,7 +516,12 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       view.subtitle.text = presentation.subtitle;
       view.body.text = presentation.body.replace(/\s+/g, " ").slice(0, 92);
       view.meta.text = presentation.meta;
-      const mediaOnly = Boolean(mediaUrl);
+      // Keep the textual card presentation until the asynchronous texture is
+      // actually attached. Hiding it merely because a URL exists produces a
+      // blank light shell while images decode, reload, or miss the LRU cache.
+      const mediaOnly = Boolean(
+        mediaUrl && view.media.visible && view.media.texture !== Texture.EMPTY,
+      );
       view.title.visible = !mediaOnly;
       view.icon.visible = !mediaOnly && Boolean(presentation.icon);
       view.subtitle.visible = !mediaOnly && Boolean(presentation.subtitle);
