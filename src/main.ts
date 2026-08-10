@@ -8595,6 +8595,21 @@ canvas.addEventListener("pointerdown", (e) => {
   pointer.moved = false;
   pointer.draggingNode = null;
   pointer.blankCanvas = true;
+  if (pixiRenderer) {
+    const hit = hitNode(e.clientX, e.clientY);
+    if (hit) {
+      if (multiSelectMode) {
+        pointer.down = false;
+        pointer.blankCanvas = false;
+        toggleBatchNode(hit.id);
+        return;
+      }
+      selectedId = hit.id;
+      pointer.draggingNode = hit.id;
+      pointer.blankCanvas = false;
+      updateEditor();
+    }
+  }
   canvas.setPointerCapture(e.pointerId);
   canvas.classList.add("dragging");
   draw(false);
@@ -8606,6 +8621,10 @@ canvas.addEventListener("pointermove", (e) => {
     Math.hypot(e.clientX - pointer.startX, e.clientY - pointer.startY) > 4
   ) {
     pointer.moved = true;
+    if (pixiRenderer && pointer.draggingNode === selectedId) {
+      selectedId = 0;
+      updateEditor();
+    }
     if (!pointer.blankCanvas) setSaveState("editing", "编辑中…");
     if (pointer.blankCanvas && selectedId) {
       canvasPanSelectedElement = nodeLayer.querySelector<HTMLElement>(

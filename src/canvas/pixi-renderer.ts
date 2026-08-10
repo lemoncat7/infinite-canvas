@@ -1,10 +1,11 @@
-import { Application, Container, Graphics } from "pixi.js";
+import { Application, Container, Graphics, Sprite, Text, Texture } from "pixi.js";
 import type {
   CanvasRenderer,
   CanvasRenderSnapshot,
   RenderLink,
   RenderNode,
 } from "./renderer";
+import { PixiTextureCache } from "./pixi-texture-cache";
 
 function port(node: RenderNode, side: RenderLink["fromSide"]) {
   if (side === "top") return { x: node.x + node.width / 2, y: node.y };
@@ -28,10 +29,27 @@ function control(
 
 export class PixiCanvasRenderer implements CanvasRenderer {
   private readonly app = new Application();
+  private readonly background = new Graphics();
   private readonly world = new Container();
   private readonly links = new Graphics();
+  private readonly cards = new Container();
+  private readonly cardViews = new Map<
+    number,
+    {
+      container: Container;
+      shell: Graphics;
+      title: Text;
+      body: Text;
+      media: Sprite;
+      mediaUrl?: string;
+      mediaRequest: number;
+      key: string;
+    }
+  >();
+  private readonly textures = new PixiTextureCache(innerWidth <= 780 ? 12 : 32);
   private lost = false;
   private lastSnapshot?: CanvasRenderSnapshot;
+  private backgroundKey = "";
 
   async mount(parent: HTMLElement) {
     await this.app.init({
@@ -49,8 +67,8 @@ export class PixiCanvasRenderer implements CanvasRenderer {
     this.app.canvas.id = "canvas-pixi";
     this.app.canvas.className = "canvas-render-layer";
     parent.prepend(this.app.canvas);
-    this.world.addChild(this.links);
-    this.app.stage.addChild(this.world);
+    this.world.addChild(this.links, this.cards);
+    this.app.stage.addChild(this.background, this.world);
     this.app.canvas.addEventListener("webglcontextlost", this.onContextLost);
     this.app.canvas.addEventListener(
       "webglcontextrestored",
@@ -66,6 +84,33 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       innerHeight / 2 + snapshot.camera.y,
     );
     this.world.scale.set(snapshot.camera.zoom);
+    const backgroundKey = [
+      innerWidth,
+      innerHeight,
+      snapshot.dark,
+      Math.round(snapshot.camera.x),
+      Math.round(snapshot.camera.y),
+      Math.round(snapshot.camera.zoom * 1000),
+    ].join(":");
+    if (backgroundKey !== this.backgroundKey) {
+      this.backgroundKey = backgroundKey;
+      const gap = Math.max(12, 42 * snapshot.camera.zoom),
+        originX =
+          ((innerWidth / 2 + snapshot.camera.x) % gap + gap) % gap,
+        originY =
+          ((innerHeight / 2 + snapshot.camera.y) % gap + gap) % gap;
+      this.background
+        .clear()
+        .rect(0, 0, innerWidth, innerHeight)
+        .fill({ color: snapshot.dark ? 0x0b1113 : 0xeef3ef });
+      for (let x = originX; x < innerWidth; x += gap)
+        for (let y = originY; y < innerHeight; y += gap)
+          this.background.circle(x, y, Math.max(0.7, snapshot.camera.zoom));
+      this.background.fill({
+        color: snapshot.dark ? 0x8fc5c5 : 0x4a6f65,
+        alpha: snapshot.dark ? 0.24 : 0.27,
+      });
+    }
     const byId = new Map(snapshot.nodes.map((node) => [node.id, node]));
     this.links.clear();
     for (const link of snapshot.links) {
@@ -94,6 +139,134 @@ export class PixiCanvasRenderer implements CanvasRenderer {
           width: highlighted ? 3 : 2.25,
         });
     }
+    const live = new Set(snapshot.nodes.map((node) => node.id));
+    for (const [id, view] of this.cardViews)
+      if (!live.has(id)) {
+        this.detachMedia(view);
+        view.container.destroy({ children: true });
+        this.cardViews.delete(id);
+      }
+    const offsetX = innerWidth / 2 + snapshot.camera.x,
+      offsetY = innerHeight / 2 + snapshot.camera.y;
+    for (const node of snapshot.nodes) {
+      let view = this.cardViews.get(node.id);
+      if (!view) {
+        const container = new Container(),
+          shell = new Graphics(),
+          title = new Text({
+            style: {
+              fill: snapshot.dark ? 0xe8efee : 0x25302d,
+              fontFamily: "system-ui, sans-serif",
+              fontSize: 14,
+              fontWeight: "600",
+            },
+          }),
+          body = new Text({
+            style: {
+              fill: snapshot.dark ? 0xa9b8b5 : 0x66736f,
+              fontFamily: "system-ui, sans-serif",
+              fontSize: 11,
+              lineHeight: 16,
+              wordWrap: true,
+              wordWrapWidth: Math.max(80, node.width - 28),
+            },
+          }),
+          media = new Sprite(Texture.EMPTY);
+        title.position.set(14, 13);
+        body.position.set(14, 43);
+        media.position.set(12, 66);
+        media.visible = false;
+        container.addChild(shell, media, title, body);
+        this.cards.addChild(container);
+        view = { container, shell, title, body, media, mediaRequest: 0, key: "" };
+        this.cardViews.set(node.id, view);
+      }
+      view.container.position.set(node.x, node.y);
+      const screenX = node.x * snapshot.camera.zoom + offsetX,
+        screenY = node.y * snapshot.camera.zoom + offsetY,
+        margin = 520;
+      view.container.visible =
+        screenX + node.width * snapshot.camera.zoom > -margin &&
+        screenX < innerWidth + margin &&
+        screenY + node.height * snapshot.camera.zoom > -margin &&
+        screenY < innerHeight + margin;
+      if (!view.container.visible) {
+        this.detachMedia(view);
+        continue;
+      }
+      const mediaUrl = node.mediaUrl ? this.thumbnailUrl(node.mediaUrl) : undefined;
+      if (mediaUrl !== view.mediaUrl) {
+        this.detachMedia(view);
+        if (mediaUrl) {
+          view.mediaUrl = mediaUrl;
+          const mediaRequest = ++view.mediaRequest;
+          void this.textures
+            .acquire(mediaUrl)
+            .then((texture) => {
+              if (
+                view?.mediaUrl !== mediaUrl ||
+                view.mediaRequest !== mediaRequest ||
+                !view.container.visible
+              ) return;
+              view.media.texture = texture;
+              view.media.visible = true;
+              view.media.width = Math.max(1, node.width - 24);
+              view.media.height = Math.max(1, node.height - 82);
+              if (this.lastSnapshot) this.render(this.lastSnapshot);
+            })
+            .catch(() => {
+              if (
+                view?.mediaUrl === mediaUrl &&
+                view.mediaRequest === mediaRequest
+              ) this.detachMedia(view);
+            });
+        }
+      }
+      const key = [
+        node.width,
+        node.height,
+        node.title,
+        node.body,
+        node.status,
+        node.progress,
+        node.id === snapshot.selectedId,
+        snapshot.dark,
+      ].join("|");
+      if (view.key === key) continue;
+      view.key = key;
+      view.title.text = node.title || "未命名卡片";
+      view.body.visible = !node.mediaUrl;
+      view.body.text = (node.body || "暂无描述").replace(/\s+/g, " ").slice(0, 92);
+      view.body.style.wordWrapWidth = Math.max(80, node.width - 28);
+      view.shell
+        .clear()
+        .roundRect(0, 0, node.width, node.height, 14)
+        .fill({ color: snapshot.dark ? 0x121a1c : 0xf7f7f4, alpha: 1 })
+        .stroke({
+          color:
+            node.id === snapshot.selectedId
+              ? node.accent
+              : snapshot.dark
+                ? 0x344247
+                : 0xc9d0cc,
+          width: node.id === snapshot.selectedId ? 2 : 1,
+        })
+        .roundRect(0, 0, node.width, 4, 2)
+        .fill({ color: node.accent, alpha: 0.75 })
+        .circle(0, node.height / 2, 5)
+        .circle(node.width, node.height / 2, 5)
+        .fill({
+          color: node.id === snapshot.selectedId ? node.accent : 0x7b8985,
+        });
+      if (node.status === "queued" || node.status === "running") {
+        const progress = Math.max(0, Math.min(100, node.progress || 0));
+        view.shell
+          .rect(0, node.height - 3, node.width, 3)
+          .fill({ color: snapshot.dark ? 0x273337 : 0xe1e7e4 })
+          .rect(0, node.height - 3, (node.width * progress) / 100, 3)
+          .fill({ color: node.accent });
+      }
+    }
     this.app.renderer.render(this.app.stage);
   }
 
@@ -115,7 +288,27 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       "webglcontextrestored",
       this.onContextRestored,
     );
+    this.textures.clear();
     this.app.destroy(true, { children: true });
+  }
+
+  private detachMedia(view: {
+    media: Sprite;
+    mediaUrl?: string;
+    mediaRequest: number;
+  }) {
+    if (view.mediaUrl) this.textures.release(view.mediaUrl);
+    view.mediaUrl = undefined;
+    view.mediaRequest++;
+    view.media.texture = Texture.EMPTY;
+    view.media.visible = false;
+  }
+
+  private thumbnailUrl(url: string) {
+    return url.replace(
+      /^(\/api\/(?:public\/)?assets\/[^/]+)\/content(?:\/.*)?$/,
+      "$1/thumbnail",
+    );
   }
 
   private readonly onContextLost = (event: Event) => {

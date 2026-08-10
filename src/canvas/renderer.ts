@@ -5,6 +5,12 @@ export type RenderNode = {
   width: number;
   height: number;
   accent: string;
+  kind: string;
+  title: string;
+  body: string;
+  status?: string;
+  progress?: number;
+  mediaUrl?: string;
 };
 
 export type RenderLink = {
