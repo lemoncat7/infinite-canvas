@@ -4281,7 +4281,20 @@ function addMediaNode(
 
 function syncDomNodes() {
   nodeViewport.style.transform = `translate3d(${innerWidth / 2 + camera.x}px, ${innerHeight / 2 + camera.y}px,0) scale(${camera.zoom})`;
-  const live = new Set(nodes.map((node) => String(node.id)));
+  const requiredPixiDomIds = pixiRenderer
+      ? new Set<number>([
+          ...(selectedId ? [selectedId] : []),
+          ...batchSelectedIds,
+          ...promptAgentContextSelection,
+          ...(editingTextNodeId ? [editingTextNodeId] : []),
+          ...(domDrag ? [domDrag.id] : []),
+        ])
+      : null,
+    live = new Set(
+      nodes
+        .filter((node) => !requiredPixiDomIds || requiredPixiDomIds.has(node.id))
+        .map((node) => String(node.id)),
+    );
   nodeLayer.querySelectorAll<HTMLElement>(".flow-node").forEach((element) => {
     if (!live.has(element.dataset.id!)) {
       nodeDomStates.delete(Number(element.dataset.id));
@@ -4316,6 +4329,7 @@ function syncDomNodes() {
       node.width = 290;
       node.height = 225;
     }
+    if (requiredPixiDomIds && !requiredPixiDomIds.has(node.id)) continue;
     let element = nodeLayer.querySelector<HTMLElement>(
       `.flow-node[data-id="${node.id}"]`,
     );
@@ -8622,6 +8636,11 @@ canvas.addEventListener("pointermove", (e) => {
   ) {
     pointer.moved = true;
     if (pixiRenderer && pointer.draggingNode === selectedId) {
+      nodeLayer
+        .querySelector<HTMLElement>(
+          `.flow-node[data-id="${pointer.draggingNode}"]`,
+        )
+        ?.classList.remove("selected");
       selectedId = 0;
       updateEditor();
     }
