@@ -8,6 +8,11 @@ const canvasPerformance = new CanvasPerformanceMonitor(
 );
 if (canvasPerformance.enabled)
   Object.assign(window, { __canvasPerformance: canvasPerformance });
+const pixiRendererRequested =
+  new URLSearchParams(location.search).get("renderer") === "pixi";
+let pixiRenderer:
+  | import("./canvas/pixi-renderer").PixiCanvasRenderer
+  | undefined;
 
 type Point = { x: number; y: number };
 type NodeKind =
@@ -3921,6 +3926,13 @@ function paint() {
       draw(false);
     }, animationDelay);
   }
+  pixiRenderer?.render({
+    nodes,
+    links,
+    camera,
+    selectedId,
+    dark: colorTheme === "dark",
+  });
   canvasPerformance.endFrame(performanceFrame);
 }
 function draw(syncDom = true) {
@@ -13690,6 +13702,14 @@ async function bootstrapApplication() {
 }
 window.addEventListener("resize", resize);
 resize();
+if (pixiRendererRequested)
+  void import("./canvas/pixi-renderer").then(async ({ PixiCanvasRenderer }) => {
+    const renderer = new PixiCanvasRenderer();
+    await renderer.mount(document.body);
+    pixiRenderer = renderer;
+    document.body.classList.add("renderer-pixi");
+    draw(false);
+  });
 updateEditor();
 void bootstrapApplication();
 

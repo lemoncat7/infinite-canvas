@@ -44,6 +44,8 @@ canvas { position:fixed; inset:0; display: block; cursor: grab; touch-action: no
 .canvas-render-layer { pointer-events:none; cursor:default; }
 #canvas-links { z-index:0; }
 #canvas { z-index:0; }
+#canvas-pixi { z-index:0; }
+body.renderer-pixi #canvas-links { visibility:hidden; }
 canvas.dragging { cursor: grabbing; }
 #node-viewport { position:fixed; z-index:1; left:0; top:0; width:2px; height:2px; overflow:visible; transform-origin:0 0; pointer-events:none; backface-visibility:hidden; }
 #node-layer { position:absolute; left:0; top:0; width:2px; height:2px; overflow:visible; backface-visibility:hidden; }
