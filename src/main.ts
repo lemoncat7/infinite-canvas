@@ -1,4 +1,13 @@
 import "./style.css";
+import { CanvasPerformanceMonitor } from "./canvas/performance-monitor";
+import { CanvasSpatialIndex } from "./canvas/spatial-index";
+import { CanvasStore } from "./canvas/store";
+
+const canvasPerformance = new CanvasPerformanceMonitor(
+  new URLSearchParams(location.search).has("canvasPerf"),
+);
+if (canvasPerformance.enabled)
+  Object.assign(window, { __canvasPerformance: canvasPerformance });
 
 type Point = { x: number; y: number };
 type NodeKind =
@@ -217,7 +226,12 @@ taskMonitorPanel.insertAdjacentHTML(
 const jobLabel = document.querySelector<HTMLSpanElement>("#job-label")!;
 const jobProgress = document.querySelector<HTMLElement>("#job-progress")!;
 const generateButton = document.querySelector<HTMLButtonElement>("#generate")!;
-const camera = { x: 80, y: 10, zoom: 0.9 };
+const canvasStore = new CanvasStore<FlowNode, FlowLink>({
+    x: 80,
+    y: 10,
+    zoom: 0.9,
+  }),
+  camera = canvasStore.camera;
 const pointer = {
   down: false,
   x: 0,
@@ -586,8 +600,8 @@ let domResize: {
   height: number;
 } | null = null;
 
-const nodes: FlowNode[] = [];
-const links: FlowLink[] = [];
+const nodes = canvasStore.nodes;
+const links = canvasStore.links;
 type CanvasHistorySnapshot = {
   nodes: FlowNode[];
   links: FlowLink[];
@@ -3252,6 +3266,7 @@ function orderedTargetLinks(targetId: number) {
 }
 let paintNodeIndex = new Map<number, FlowNode>();
 let paintTargetLinkIndex = new Map<number, FlowLink[]>();
+const canvasSpatialIndex = new CanvasSpatialIndex();
 const linkGeometryCache = new WeakMap<
   FlowLink,
   {
@@ -3264,6 +3279,7 @@ const linkGeometryCache = new WeakMap<
 >();
 function rebuildPaintIndexes() {
   paintNodeIndex = new Map(nodes.map((node) => [node.id, node]));
+  canvasSpatialIndex.rebuild(nodes);
   paintTargetLinkIndex = new Map();
   const grouped = new Map<number, FlowLink[]>(),
     linkOrder = new Map(links.map((link, index) => [link, index]));
@@ -3287,6 +3303,18 @@ function rebuildPaintIndexes() {
     });
     paintTargetLinkIndex.set(targetId, targetLinks);
   }
+}
+function visibleSpatialNodeIds(marginPx = 0) {
+  const offsetX = innerWidth / 2 + camera.x,
+    offsetY = innerHeight / 2 + camera.y;
+  return new Set(
+    canvasSpatialIndex.search({
+      minX: (-marginPx - offsetX) / camera.zoom,
+      minY: (-marginPx - offsetY) / camera.zoom,
+      maxX: (innerWidth + marginPx - offsetX) / camera.zoom,
+      maxY: (innerHeight + marginPx - offsetY) / camera.zoom,
+    }),
+  );
 }
 function linkPathGeometry(link: FlowLink) {
   const from =
@@ -3800,20 +3828,16 @@ function positionCardLayerForFrame() {
   );
   if (useStablePan) {
     nodeViewport.style.transform = "translate3d(0,0,0)";
-    const margin = 320;
+    const visibleIds = visibleSpatialNodeIds(320);
     nodeLayer
       .querySelectorAll<HTMLElement>(".flow-node[data-id]")
       .forEach((element) => {
         const node = paintNodeIndex.get(Number(element.dataset.id));
         if (!node) return;
-        const point = screen(node),
-          visible =
-            point.x + node.width * camera.zoom > -margin &&
-            point.x < innerWidth + margin &&
-            point.y + node.height * camera.zoom > -margin &&
-            point.y < innerHeight + margin;
+        const visible = visibleIds.has(node.id),
+          point = visible ? screen(node) : null;
         element.style.visibility = visible ? "visible" : "hidden";
-        if (visible) {
+        if (point) {
           element.style.transformOrigin = "0 0";
           element.style.transform = `translate3d(${point.x}px,${point.y}px,0) scale(${camera.zoom})`;
         }
@@ -3835,6 +3859,7 @@ function positionCardLayerForFrame() {
   stableCardPanMode = false;
 }
 function paint() {
+  const performanceFrame = canvasPerformance.beginFrame();
   drawFrame = null;
   const interacting = canvasInteractionActive(),
     syncUi = drawNeedsDomSync && !interacting;
@@ -3896,6 +3921,7 @@ function paint() {
       draw(false);
     }, animationDelay);
   }
+  canvasPerformance.endFrame(performanceFrame);
 }
 function draw(syncDom = true) {
   if (syncDom) drawNeedsDomSync = true;
