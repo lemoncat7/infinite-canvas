@@ -31,6 +31,9 @@ export class PixiTextureCache {
           }
           live.texture = texture;
           live.loading = undefined;
+          // A card can leave the viewport while its image is decoding. Trim
+          // again after resolution so those now-idle textures cannot build up.
+          this.trim();
           return texture;
         })
         .catch((error) => {

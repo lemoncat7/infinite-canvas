@@ -201,8 +201,7 @@ function loadTtsVoices(providerId = "easyvoice-local") {
   return task;
 }
 
-const canvas = document.querySelector<HTMLCanvasElement>("#canvas")!;
-const ctx = canvas.getContext("2d")!;
+const canvas = document.querySelector<HTMLElement>("#canvas")!;
 const nodeViewport = document.querySelector<HTMLElement>("#node-viewport")!;
 const nodeLayer = document.querySelector<HTMLElement>("#node-layer")!;
 const zoomSlider = document.querySelector<HTMLInputElement>("#zoom-slider")!;
@@ -3578,40 +3577,6 @@ function hitLink(sx: number, sy: number, tolerance = 9) {
   }
   return -1;
 }
-function drawPendingLink() {
-  if (!connecting) return;
-  const node = nodes.find((item) => item.id === connecting!.nodeId);
-  if (!node) return;
-  const a = screen(portWorld(node, connecting.side)),
-    b = connecting.pointer;
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(a.x, a.y);
-  const distance = Math.max(55, Math.hypot(b.x - a.x, b.y - a.y) * 0.3),
-    control = controlPoint(a, connecting.side, distance);
-  ctx.quadraticCurveTo(control.x, control.y, b.x, b.y);
-  ctx.strokeStyle =
-    colorTheme === "dark" ? "rgba(132,226,235,.96)" : "rgba(24,112,132,.96)";
-  ctx.shadowColor =
-    colorTheme === "dark" ? "rgba(77,205,218,.34)" : "rgba(20,105,127,.2)";
-  ctx.shadowBlur = 6;
-  ctx.lineWidth = 2.4;
-  ctx.setLineDash([7, 5]);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  ctx.restore();
-  if (connectionSnap) {
-    ctx.beginPath();
-    ctx.arc(b.x, b.y, 11, 0, Math.PI * 2);
-    ctx.fillStyle =
-      colorTheme === "dark" ? "rgba(111,220,229,.2)" : "rgba(20,112,132,.18)";
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(b.x, b.y, 5, 0, Math.PI * 2);
-    ctx.fillStyle = colorTheme === "dark" ? "#8de3ea" : "#176f83";
-    ctx.fill();
-  }
-}
 function positionCardLayerForFrame() {
   nodeViewport.style.transform = `translate3d(${innerWidth / 2 + camera.x}px, ${innerHeight / 2 + camera.y}px,0) scale(${camera.zoom})`;
 }
@@ -3623,8 +3588,6 @@ function paint() {
   if (syncUi) drawNeedsDomSync = false;
   if (syncUi || paintNodeIndex.size !== nodes.length) rebuildPaintIndexes();
   positionCardLayerForFrame();
-  ctx.clearRect(0, 0, innerWidth, innerHeight);
-  if (connecting) drawPendingLink();
   if (syncUi) {
     syncDomNodes();
     schedulePixiEditorWarmup();
@@ -3636,6 +3599,10 @@ function paint() {
     zoomPercent.value = `${Math.round(camera.zoom * 100)}%`;
     nodeCount.textContent = String(nodes.length);
   }
+  const pendingNode = connecting
+    ? paintNodeIndex.get(connecting.nodeId) ??
+      nodes.find((node) => node.id === connecting!.nodeId)
+    : undefined;
   pixiRenderer?.render({
     nodes,
     links,
@@ -3646,6 +3613,14 @@ function paint() {
     backgroundMode,
     hoveredLinkIndex,
     touchSelectedLinkIndex,
+    pendingConnection: connecting && pendingNode
+      ? {
+          from: screen(portWorld(pendingNode, connecting.side)),
+          to: connecting.pointer,
+          fromSide: connecting.side,
+          snapped: Boolean(connectionSnap),
+        }
+      : undefined,
   });
   canvasPerformance.endFrame(performanceFrame);
 }
@@ -3654,12 +3629,6 @@ function draw(syncDom = true) {
   if (drawFrame === null) drawFrame = requestAnimationFrame(paint);
 }
 function resize() {
-  const ratio = Math.min(devicePixelRatio || 1, innerWidth <= 780 ? 1.15 : 1.5);
-  canvas.width = innerWidth * ratio;
-  canvas.height = innerHeight * ratio;
-  canvas.style.width = `${innerWidth}px`;
-  canvas.style.height = `${innerHeight}px`;
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   draw();
 }
 function setZoom(

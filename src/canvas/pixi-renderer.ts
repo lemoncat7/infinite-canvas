@@ -43,6 +43,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
   private readonly world = new Container();
   private readonly links = new Graphics();
   private readonly activeLinks = new Graphics();
+  private readonly interaction = new Graphics();
   private readonly cards = new Container();
   private readonly cardViews = new Map<
     number,
@@ -118,6 +119,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       this.grid,
       this.lineGrid,
       this.world,
+      this.interaction,
     );
     this.app.canvas.addEventListener("webglcontextlost", this.onContextLost);
     this.app.canvas.addEventListener(
@@ -174,6 +176,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         innerHeight / 2 + snapshot.camera.y,
       );
     }
+    this.renderPendingConnection(snapshot);
     const byId = new Map(snapshot.nodes.map((node) => [node.id, node]));
     let linkHash = 2166136261;
     const mix = (value: number) => {
@@ -438,6 +441,29 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       /^(\/api\/(?:public\/)?assets\/[^/]+)\/content(?:\/.*)?$/,
       "$1/thumbnail",
     );
+  }
+
+  private renderPendingConnection(snapshot: CanvasRenderSnapshot) {
+    this.interaction.clear();
+    const pending = snapshot.pendingConnection;
+    if (!pending) return;
+    const distance = Math.max(
+        55,
+        Math.hypot(pending.to.x - pending.from.x, pending.to.y - pending.from.y) *
+          0.3,
+      ),
+      curve = control(pending.from, pending.fromSide, distance),
+      color = snapshot.dark ? 0x84e2eb : 0x187084;
+    this.interaction
+      .moveTo(pending.from.x, pending.from.y)
+      .quadraticCurveTo(curve.x, curve.y, pending.to.x, pending.to.y)
+      .stroke({ color, alpha: 0.96, width: 2.4 });
+    if (pending.snapped)
+      this.interaction
+        .circle(pending.to.x, pending.to.y, 11)
+        .fill({ color, alpha: 0.18 })
+        .circle(pending.to.x, pending.to.y, 5)
+        .fill({ color, alpha: 1 });
   }
 
   private readonly onContextLost = (event: Event) => {

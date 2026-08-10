@@ -4,3 +4,5 @@ dist
 *.local
 .env
 test-output/**/*.wav
+test-results/
+playwright-report/

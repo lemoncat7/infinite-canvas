@@ -1,0 +1,214 @@
+import { expect, test, type Page } from "@playwright/test";
+
+const projectId = "canvas-stress-project";
+
+function stressCanvas(count = 400) {
+  const nodes = Array.from({ length: count }, (_, index) => {
+    const column = index % 20;
+    const row = Math.floor(index / 20);
+    return {
+      id: index + 1,
+      publicId: `stress-${index + 1}`,
+      kind: index % 3 === 0 ? "image" : "note",
+      x: -300 + column * 320,
+      y: -100 + row * 250,
+      width: 240,
+      height: 180,
+      title: `压力节点 ${index + 1}`,
+      body: `用于验证视口虚拟化与空间索引的节点 ${index + 1}`,
+      accent: "#7da9df",
+      status: "idle",
+      progress: 0,
+    };
+  });
+  return {
+    nodes,
+    links: nodes.slice(1).map((node, index) => ({
+      from: nodes[index].id,
+      to: node.id,
+      fromSide: "right",
+      toSide: "left",
+    })),
+    camera: { x: 0, y: 0, zoom: 1 },
+    version: 1,
+    updatedAt: "2026-08-10T00:00:00.000Z",
+  };
+}
+
+async function mockApi(page: Page, count = 400) {
+  const canvas = stressCanvas(count);
+  const syncPayloads: unknown[] = [];
+  await page.route("**/api/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    let body: unknown = {};
+    if (path === "/api/users/me")
+      body = {
+        id: "stress-user",
+        name: "压力测试",
+        username: "stress",
+        email: "stress@example.invalid",
+        inviteCode: "TEST",
+        credits: 100,
+        reservedCredits: 0,
+      };
+    else if (path === "/api/projects") body = [{ id: projectId }];
+    else if (path === `/api/projects/${projectId}/canvas`) body = canvas;
+    else if (path === `/api/projects/${projectId}/canvas/id-block`)
+      body = { projectId, start: count + 1, end: count + 10_000 };
+    else if (path === "/api/assets" || path === "/api/user-api-models")
+      body = [];
+    else if (path === "/api/generation/capabilities") body = {};
+    else if (path.includes("/canvas/sync")) {
+      syncPayloads.push(request.postDataJSON());
+      body = { ...canvas, version: 2, updatedAt: new Date().toISOString() };
+    }
+    else if (path.includes("notifications")) body = [];
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(body),
+    });
+  });
+  return { canvas, syncPayloads };
+}
+
+test("homepage defers Pixi until the workspace is opened", async ({ page }) => {
+  await mockApi(page, 20);
+  const pixiRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("pixi-renderer")) pixiRequests.push(request.url());
+  });
+  await page.goto("/?canvasPerf=1");
+  await expect(page.locator(".home-page")).toBeVisible();
+  expect(pixiRequests).toHaveLength(0);
+});
+
+test("400 nodes stay GPU-virtualized and recover WebGL context", async ({
+  page,
+}) => {
+  await mockApi(page);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/?canvasPerf=1#/canvas");
+  await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator("body")).toHaveClass(/renderer-pixi/);
+  expect(await page.locator("#node-layer > .flow-node").count()).toBe(0);
+
+  await page.locator("#canvas").click({ position: { x: 370, y: 360 } });
+  await expect(page.locator("#node-layer > .flow-node.selected")).toHaveCount(1);
+  expect(await page.locator("#node-layer > .flow-node").count()).toBeLessThanOrEqual(2);
+
+  await page.evaluate(() =>
+    (
+      window as typeof window & {
+        __canvasPerformance?: { reset(): void };
+      }
+    ).__canvasPerformance?.reset(),
+  );
+
+  await page.mouse.move(900, 700);
+  await page.mouse.down();
+  await page.mouse.move(700, 570, { steps: 24 });
+  await page.mouse.up();
+  // Panning intentionally preserves selection so upstream/downstream links
+  // remain highlighted while the user searches the graph.
+  await expect(page.locator("#node-layer > .flow-node.selected")).toHaveCount(1);
+
+  const perf = await page.evaluate(() =>
+    (
+      window as typeof window & {
+        __canvasPerformance?: { snapshot(): { averagePaintMs: number } };
+      }
+    ).__canvasPerformance?.snapshot(),
+  );
+  expect(perf).toBeTruthy();
+  // Headless Chromium uses software WebGL in CI. This threshold is a
+  // regression guard; real GPU-backed browser measurements are lower.
+  expect(perf!.averagePaintMs).toBeLessThan(30);
+
+  const contextRecovery = await page.evaluate(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>("#canvas-pixi")!;
+    const gl = canvas.getContext("webgl2") || canvas.getContext("webgl");
+    const extension = gl?.getExtension("WEBGL_lose_context");
+    if (!extension) return false;
+    extension.loseContext();
+    window.setTimeout(() => extension.restoreContext(), 80);
+    return true;
+  });
+  expect(contextRecovery).toBe(true);
+  await expect(page.locator("body")).not.toHaveClass(/canvas-context-lost/, {
+    timeout: 5_000,
+  });
+
+  expect(errors).toEqual([]);
+});
+
+test("mobile uses bounded DPR and touch selection", async ({ browser }) => {
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+  });
+  const page = await context.newPage();
+  await mockApi(page, 300);
+  await page.goto("/?canvasPerf=1#/canvas");
+  const pixi = page.locator("#canvas-pixi");
+  await expect(pixi).toBeVisible({ timeout: 15_000 });
+  const dimensions = await pixi.evaluate((canvas: HTMLCanvasElement) => ({
+    cssWidth: canvas.clientWidth,
+    cssHeight: canvas.clientHeight,
+    width: canvas.width,
+    height: canvas.height,
+  }));
+  expect(dimensions.width / dimensions.cssWidth).toBeLessThanOrEqual(1.5);
+  expect(dimensions.height / dimensions.cssHeight).toBeLessThanOrEqual(1.5);
+  await page.touchscreen.tap(65, 322);
+  await expect(page.locator("#node-layer > .flow-node.selected")).toHaveCount(1);
+  await context.close();
+});
+
+test("connection overlay and quick group movement stay in the Pixi path", async ({
+  page,
+}) => {
+  const { syncPayloads } = await mockApi(page, 40);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/#/canvas");
+  await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
+
+  // Node 1 is at screen (340,260), node 3 starts at (980,260).
+  await page.locator("#canvas").click({ position: { x: 370, y: 350 } });
+  const output = page.locator(".flow-node.selected .node-port.output");
+  await expect(output).toBeVisible();
+  const outputBox = await output.boundingBox();
+  expect(outputBox).toBeTruthy();
+  await page.mouse.move(outputBox!.x + outputBox!.width / 2, outputBox!.y + outputBox!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(980, 350, { steps: 12 });
+  await page.mouse.up();
+  await page.waitForTimeout(700);
+  expect(
+    syncPayloads.some((payload) =>
+      JSON.stringify(payload).includes('"from":1') &&
+      JSON.stringify(payload).includes('"to":3'),
+    ),
+  ).toBe(true);
+
+  // Ctrl-drag is the temporary marquee shortcut and must leave a usable
+  // multi-selection that moves as one group.
+  await page.keyboard.down("Control");
+  await page.mouse.move(325, 245);
+  await page.mouse.down();
+  await page.mouse.move(915, 455, { steps: 10 });
+  await page.mouse.up();
+  await page.keyboard.up("Control");
+  await expect(page.locator("[data-batch-count]")).toContainText("2");
+  await page.mouse.move(370, 350);
+  await page.mouse.down();
+  await page.mouse.move(470, 430, { steps: 10 });
+  await page.mouse.up();
+  await expect(page.locator("[data-batch-count]")).toContainText("2");
+  expect(errors).toEqual([]);
+});

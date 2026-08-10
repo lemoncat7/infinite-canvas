@@ -30,6 +30,12 @@ export type CanvasRenderSnapshot = {
   backgroundMode: "dots" | "lines" | "blank";
   hoveredLinkIndex: number;
   touchSelectedLinkIndex: number;
+  pendingConnection?: {
+    from: { x: number; y: number };
+    to: { x: number; y: number };
+    fromSide: "top" | "right" | "bottom" | "left";
+    snapped: boolean;
+  };
 };
 
 export interface CanvasRenderer {
