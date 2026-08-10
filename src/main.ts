@@ -3580,6 +3580,7 @@ function hitLink(sx: number, sy: number, tolerance = 9) {
 function positionCardLayerForFrame() {
   nodeViewport.style.transform = `translate3d(${innerWidth / 2 + camera.x}px, ${innerHeight / 2 + camera.y}px,0) scale(${camera.zoom})`;
 }
+const mountedDomNodeIds = new Set<number>();
 function paint() {
   const performanceFrame = canvasPerformance.beginFrame();
   drawFrame = null;
@@ -3606,6 +3607,7 @@ function paint() {
   pixiRenderer?.render({
     nodes,
     links,
+    domNodeIds: [...mountedDomNodeIds],
     camera,
     selectedId,
     selectedIds: [...batchSelectedIds],
@@ -4007,6 +4009,8 @@ function syncDomNodes() {
         .filter((node) => requiredPixiDomIds.has(node.id))
         .map((node) => String(node.id)),
     );
+  mountedDomNodeIds.clear();
+  for (const id of live) mountedDomNodeIds.add(Number(id));
   for (const id of pixiDetachedNodeCache.keys())
     if (!allNodeIds.has(String(id))) {
       pixiDetachedNodeCache.delete(id);

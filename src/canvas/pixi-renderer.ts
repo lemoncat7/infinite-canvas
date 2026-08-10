@@ -367,12 +367,16 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       });
       this.setActiveLinkAnimation(activeCount > 0);
     }
-    const selectedIds = new Set(snapshot.selectedIds);
+    const selectedIds = new Set(snapshot.selectedIds),
+      domNodeIds = new Set(snapshot.domNodeIds);
     const offsetX = innerWidth / 2 + snapshot.camera.x,
       offsetY = innerHeight / 2 + snapshot.camera.y,
       activeCardIds = new Set<number>(),
       margin = 520;
     for (const node of snapshot.nodes) {
+      // A full DOM card and its lightweight Pixi fallback must never be
+      // visible together. Links stay in Pixi; only the duplicate card skips.
+      if (domNodeIds.has(node.id)) continue;
       const screenX = node.x * snapshot.camera.zoom + offsetX,
         screenY = node.y * snapshot.camera.zoom + offsetY,
         visible =
