@@ -6249,7 +6249,8 @@ function mediaThumbnailUrl(url: string) {
 }
 function drawMediaImage(target: HTMLCanvasElement, image: HTMLImageElement) {
   const context = target.getContext("2d")!;
-  const fill = colorTheme === "dark" ? "#111a1c" : "#e7efeb";
+  const dark = colorTheme === "dark",
+    fill = dark ? "#111a1c" : "#e7efeb";
   context.fillStyle = fill;
   context.fillRect(0, 0, target.width, target.height);
   if (image.complete && image.naturalWidth) {
@@ -6266,11 +6267,29 @@ function drawMediaImage(target: HTMLCanvasElement, image: HTMLImageElement) {
       width,
       height,
     );
-  } else if (image.complete) {
-    context.fillStyle = "#777";
-    context.font = "24px system-ui";
+  } else {
+    // Resizing a canvas clears its pixels. Always paint a visible fallback
+    // while the thumbnail decodes (or fails), otherwise light mode flashes a
+    // featureless white card whenever DOM cards are remounted.
+    const centerX = target.width / 2,
+      centerY = target.height / 2,
+      size = Math.max(24, Math.min(42, target.width * 0.11));
+    context.strokeStyle = dark ? "#607579" : "#8ba19a";
+    context.lineWidth = Math.max(2, target.width / 180);
+    context.strokeRect(centerX - size / 2, centerY - size, size, size);
+    context.beginPath();
+    context.moveTo(centerX - size * 0.34, centerY - size * 0.18);
+    context.lineTo(centerX - size * 0.08, centerY - size * 0.48);
+    context.lineTo(centerX + size * 0.34, centerY - size * 0.08);
+    context.stroke();
+    context.fillStyle = dark ? "#8fa4a7" : "#60736d";
+    context.font = `${Math.max(12, Math.min(18, target.width / 22))}px system-ui`;
     context.textAlign = "center";
-    context.fillText("图片加载失败", target.width / 2, target.height / 2);
+    context.fillText(
+      image.complete ? "缩略图加载失败" : "缩略图加载中",
+      centerX,
+      centerY + Math.max(18, size * 0.45),
+    );
   }
 }
 function paintNodeVideo(target: HTMLCanvasElement, url: string) {

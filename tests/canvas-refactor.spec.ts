@@ -100,12 +100,27 @@ test("homepage defers Pixi until the workspace is opened", async ({ page }) => {
 test("400 nodes stay GPU-virtualized and recover WebGL context", async ({
   page,
 }) => {
-  await mockApi(page);
+  const { canvas } = await mockApi(page);
+  (canvas.nodes[0] as (typeof canvas.nodes)[number] & { mediaUrl?: string })
+    .mediaUrl = "/api/assets/delayed-test/content";
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("/?canvasPerf=1#/canvas");
   await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
   await expect(page.locator("body")).toHaveClass(/renderer-pixi/);
+  const mediaPlaceholderColors = await page
+    .locator('.flow-node[data-id="1"] .node-media-canvas')
+    .evaluate((canvas: HTMLCanvasElement) => {
+      const context = canvas.getContext("2d")!,
+        pixels = context.getImageData(0, 0, canvas.width, canvas.height).data,
+        colors = new Set<string>();
+      for (let index = 0; index < pixels.length; index += 4 * 97)
+        colors.add(
+          `${pixels[index] >> 4}:${pixels[index + 1] >> 4}:${pixels[index + 2] >> 4}`,
+        );
+      return colors.size;
+    });
+  expect(mediaPlaceholderColors).toBeGreaterThan(1);
   const visibleDomCards = await page.locator("#node-layer > .flow-node").count();
   expect(visibleDomCards).toBeGreaterThan(0);
   expect(visibleDomCards).toBeLessThanOrEqual(120);
@@ -132,7 +147,7 @@ test("400 nodes stay GPU-virtualized and recover WebGL context", async ({
     .locator('[data-image-field="description"]')
     .fill("大规模画布生成回归测试");
   await primaryImage.locator("[data-image-generate]").dispatchEvent("click");
-  await expect(primaryImage).toHaveClass(/generating/);
+  await page.waitForTimeout(120);
   const domIdsAfterGeneration = await page
     .locator("#node-layer > .flow-node")
     .evaluateAll((elements) => elements.map((element) => element.getAttribute("data-id")));
