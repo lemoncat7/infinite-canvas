@@ -1461,7 +1461,7 @@ app.post("/agents/comic", async (request, reply) => {
   const comicProductionRules =
     '补充硬性规则：characters 中必须返回 visualAsset 布尔值。只有具有稳定可见外形、需要跨镜头保持一致的实体人物才是 true；系统声音、旁白、意识、文字提示、无实体光效必须为 false，且不得为它们生成定妆图。角色存在换装、战斗服、受伤、变身、年龄阶段等明显视觉状态时，在对应 character 中返回 forms 数组，格式为 [{"name":"形态名","description":"相对 Base 基准形态发生的外观变化","imagePrompt":"严格基于 Base 人物基准图，只改变该形态服饰或状态的设定图提示词"}]；Base 形态仍由 character 本身表示，不得在 forms 重复创建。每个镜头必须返回 characterForms 数组，格式为 [{"characterIndex":1,"form":"形态名"}]，只在该镜头确实使用非 Base 形态时填写；未列出的角色默认使用 Base。不得在同一分镜混用同一角色的 Base 与其他形态。characterIndexes 只能列出该镜头画面中明确出镜的具名角色；仅在对白、前后剧情或场外存在但画面不可见的角色不得加入。路人、群众、行人、围观者等匿名背景人物绝不能借用任何具名配角的 characterIndexes 或 Base 设定。包含匿名人群时必须返回 hasAnonymousCrowd=true 和 crowdPrompt，crowdPrompt 只描述匿名群演的人数范围、分布、行为和差异性，不得写入任何具名角色外观；没有匿名人群时必须为 false。每个具名角色在单帧中默认只出现一个实例，禁止把角色 Base 复制成多个群众。sceneId 表示地点与时段的稳定身份，不是镜头编号；同一地点即使出现变暗、破坏、天气、光效或剧情状态变化，也必须沿用相同 sceneId 和同一张无人物场景基准图，把变化写入 frames.imagePrompt。只有真正切换到不同地点或时段才创建新 sceneId。';
   const comicContinuityRules =
-    "跨镜头连续性规则：相邻制作镜头若 sceneId 相同且时间连续，后一镜头第一张 frame 必须明确承接前一镜头最后一张 frame 的人物站位、动作结束姿态、视线方向、服饰形态、道具状态、环境光线和左右空间关系；continuity 必须写清继承项与本镜头新增变化。只有明确切换地点、时段或蒙太奇段落时才允许重置构图。不要让每个镜头都从人物正面站立的初始状态重新开始。frames 中每项必须包含 keyframe、inherit、change、lock：keyframe 只能是 start、middle、end；inherit 写从上一关键帧继承的可见状态；change 只写当前帧发生的动作、机位、景别或状态变化；lock 写绝对不能改变的人物身份、服饰、道具、左右站位与环境锚点。换角度或景别不等于重置人物和场景。每次最终生图最多使用 2 张参考图，优先级是上一连续分镜、当前新人物或新形态、首次出现的关键道具、场景基准；超过 2 张时由画布逐层合成，不得要求单次模型同时理解全部素材。若上一分镜已包含同一场景、人物或道具，不要重复依赖其 Base，上一分镜就是这些既有状态的合成参考。";
+    "跨镜头连续性规则：相邻制作镜头若 sceneId 相同且时间连续，后一镜头第一张 frame 必须明确承接前一镜头最后一张 frame 的人物站位、动作结束姿态、视线方向、服饰形态、道具状态、环境光线和左右空间关系；continuity 必须写清继承项与本镜头新增变化。只有明确切换地点、时段或蒙太奇段落时才允许重置构图。不要让每个镜头都从人物正面站立的初始状态重新开始。frames 中每项必须包含 keyframe、inherit、change、lock：keyframe 只能是 start、middle、end；inherit 写从上一关键帧继承的可见状态；change 只写当前帧发生的动作、机位、景别或状态变化；lock 写绝对不能改变的人物身份、服饰、道具、左右站位与环境锚点。若 frame.change 没有明确写换机位、景别、焦段或重新构图，frame.lock 必须明确写“固定镜头”，并锁定相机位置、取景范围、透视关系、摄影轴线和画面边界；人物动作或随身物品变化不能被解释为相机变化。换角度或景别不等于重置人物和场景。每次最终生图最多使用 2 张参考图，优先级是上一连续分镜、当前新人物或新形态、首次出现的关键道具、场景基准；超过 2 张时由画布逐层合成，不得要求单次模型同时理解全部素材。若上一分镜已包含同一场景、人物或道具，不要重复依赖其 Base，上一分镜就是这些既有状态的合成参考。";
   const comicTransitionRules =
     "剧情过渡硬规则：每个镜头必须在 storyBeat 中说明它承接上一镜的原因和为下一镜提供的信息、动作或情绪结果，禁止彼此独立的画面堆砌。transition 不得为空，必须明确使用动作承接、视线匹配、声音先行、反应镜头、环境空镜、道具特写、时间提示或建立镜头中的一种自然过渡。地点、时段、人物状态或剧情目标发生变化时，必须增加必要的建立镜头或过渡镜头，不能直接跳切；但不得为了凑数量生成无剧情作用的重复镜头。相邻镜头的对白必须问答、反应或信息递进，上一镜提出的信息必须在后续镜头得到承接。分段生成时，下一段第一镜必须继承上一段末镜的地点时段、角色形态、道具状态、未完成动作、情绪和悬念，除非先用明确过渡完成转换。";
   const comicDialogueRules =
@@ -2140,6 +2140,7 @@ app.post("/agents/comic", async (request, reply) => {
     const assetSystem = `你是漫剧视觉设定师。只返回合法 JSON：{"characters":[{"name":"角色名","description":"稳定设定","voiceProfile":"中文声线","visualAsset":true,"imagePrompt":"180–420字角色设定板提示词","forms":[]}],"props":[{"name":"道具名","description":"固定设定","imagePrompt":"不超过160字的道具图提示词"}]}。只建立跨镜头需要保持一致的具名人物和关键道具，普通路人不建档。人物提示词的生成目标只能是单一角色设定板，展示固定外观、服饰、三视图与细节，禁止剧情场景、表演动作、多人互动、海报构图和复制角色。道具提示词的生成目标只能是单一道具设定素材，展示结构、材质、颜色与细节，禁止人物、人体、手持动作、剧情表演和复杂背景。角色 imagePrompt 与形态 imagePrompt 均不得超过420字，道具 imagePrompt 不得超过160字。${comicCharacterSheetRules}\n${comicStyleRules}`;
     const assetText = `已确认创作需求：\n${text}\n\n已校验剧情大纲：\n${JSON.stringify(story)}`;
     const sceneSystem = `你是漫剧场景美术。只返回合法 JSON：{"scenes":[{"sceneId":"稳定地点与时段ID","baseSceneId":"父场景ID或空字符串","variantType":"base|area|state|time","name":"场景名","description":"空间结构与剧情用途","propIndexes":[1],"environmentAnchors":["固定道具及建筑的方位、距离或朝向"],"imagePrompt":"不超过160字的无人物场景设定图提示词"}]}。每个独立地点先建 variantType=base 的基准场景，baseSceneId 留空。同一大地点的屋顶、大厅、廊道等不同区域必须建为 variantType=area 并用 baseSceneId 指向所属基准；昼夜转换用 time；只有破坏、开启、淹没等足以需要后续多镜复用的大型空间变化才建 state 变体并指向变化前场景。单镜光效、天气或局部破损不新建场景，直接沿用原 sceneId 写入分镜。返回旧地点必须复用已有 sceneId，禁止创建“返回版”。子场景 imagePrompt 只写相对父场景的区域、时间或结构变化，必须明确继承父场景的建筑语言、标志物方位、材质、色彩和空间方向，禁止重新设计。propIndexes 使用已建档关键道具的1起始索引，只列从该场景第一镜开始就固定存在、后续持续作为空间组成的道具、建筑标志或环境装置。角色手持、临时带入、只在单镜出现，以及封印解除后才出现、召唤后才出现、开启后才出现、破坏后才形成的剧情状态资产，绝不能提前列入场景 propIndexes、environmentAnchors 或 imagePrompt；它们必须留给首次可见的后续分镜单独引用。石碑、雕像、祭坛等若从首镜起属于场地组成，必须通过 propIndexes 引用，禁止在场景中另行重新设计。environmentAnchors 必须锁定固定资产及主要建筑的空间方位、距离、朝向和主光关系，同一 sceneId 只能有一套锚点。每条 imagePrompt 必须明确写出“无人物场景基准图，禁止出现任何人物、人体、手部、角色剪影或人形主体”，只生成可供后续分镜合成使用的初始空环境、空间结构、已连接的固定道具与光影素材；提示词不得重新描述已连接道具的外观，只说明其位置和比例。即使剧情中该场景原本有人，场景基准图也必须保持无人。未明确要求时禁止动物、车辆特写、可读文字、字幕、标牌、Logo 和水印。每条 imagePrompt 不得超过160字，并继承统一风格。`;
+    const sceneViewSystem = `${sceneSystem}\n场景方位硬性规则：每个 scenes 项必须增加 views 数组，格式为 [{"id":"main|reverse|left|right|top","name":"方位名","imagePrompt":"相对主视角的机位与可见空间，不超过120字"}]。必须提供 main、reverse、top：main 是空间主视角，reverse 是同一空间反向机位，top 是锁定建筑、通道和固定道具方位的俯视布局。只有复杂走位、横向追逐或侧向出入场才增加 left、right。除 main 外必须继承同一场景的建筑尺寸、标志物、道具位置、材质、主光方向和空间轴线，只改变摄影机方位，禁止重新设计；所有方位均为无人环境图。`;
     let assets = checkpoint.assets
       ? checkpoint.assets
       : await readStage(
@@ -2181,7 +2182,7 @@ app.post("/agents/comic", async (request, reply) => {
       ? checkpoint.sceneBible
       : await readStage(
           "正在建立场景与固定道具依赖…",
-          sceneSystem,
+          sceneViewSystem,
           sceneText,
           2600,
           36,
@@ -2191,7 +2192,7 @@ app.post("/agents/comic", async (request, reply) => {
       "场景设定",
       sceneBible,
       "scenes",
-      sceneSystem,
+      sceneViewSystem,
       sceneText,
       48,
       2600,
@@ -2203,6 +2204,29 @@ app.post("/agents/comic", async (request, reply) => {
       scene.propIndexes = [...new Set(declared.filter((value) => Number.isInteger(value) && value >= 1 && value <= availableProps.length))];
       scene.environmentAnchors = (Array.isArray(scene.environmentAnchors) ? scene.environmentAnchors : [])
         .map((value) => String(value || "").trim().slice(0, 80)).filter(Boolean).slice(0, 8);
+      const rawViews = Array.isArray(scene.views) ? scene.views : [],
+        viewMap = new Map(rawViews.map((raw) => {
+          const view = raw && typeof raw === "object" ? raw as Record<string, unknown> : {},
+            id = String(view.id || "").trim();
+          return [id, view] as const;
+        })),
+        requiredViews = [
+          { id: "main", name: "主视角", fallback: "保持场景完整空间结构的主建立机位" },
+          { id: "reverse", name: "反向视角", fallback: "相对主视角旋转约180度，展示同一空间反向区域" },
+          { id: "top", name: "俯视布局", fallback: "俯视展示建筑边界、通道与固定道具的准确方位关系" },
+        ];
+      scene.views = requiredViews.map((fallback) => {
+        const view = viewMap.get(fallback.id) || {};
+        return {
+          id: fallback.id,
+          name: String(view.name || fallback.name).trim().slice(0, 30),
+          imagePrompt: String(view.imagePrompt || fallback.fallback).trim().slice(0, 120),
+        };
+      });
+      for (const id of ["left", "right"]) {
+        const view = viewMap.get(id);
+        if (view) (scene.views as Array<Record<string, unknown>>).push({ id, name: String(view.name || (id === "left" ? "左侧视角" : "右侧视角")).slice(0, 30), imagePrompt: String(view.imagePrompt || "").slice(0, 120) });
+      }
       scene.sceneId = String(scene.sceneId || scene.id || `scene-${index + 1}`).trim().slice(0, 80);
       scene.baseSceneId = String(scene.baseSceneId || "").trim().slice(0, 80) || undefined;
       scene.variantType = ["base", "area", "state", "time"].includes(String(scene.variantType)) ? String(scene.variantType) : scene.baseSceneId ? "area" : "base";
@@ -2237,8 +2261,8 @@ app.post("/agents/comic", async (request, reply) => {
         ? [...checkpoint.shots]
         : [];
     let shotPlanSystem =
-      '你是漫剧镜头规划师。本阶段只输出“紧凑镜头状态表”，确定镜头数、真实对白和连续性状态；禁止生成图片提示词、视频提示词、frames，也不要重述资产外观。只返回合法 JSON：{"plannedShots":[{"number":1,"outlineIndex":1,"title":"镜头名","duration":5,"motionLevel":"static|simple|complex","stateChanges":["可见变化"],"frameCount":1,"storyBeat":"因果与结果","sceneId":"场景ID","characterIndexes":[1],"propIndexes":[1],"hasAnonymousCrowd":false,"dialogue":"可直接配音的台词或无对白","transition":"过渡方式","entryState":"开镜可见状态","exitState":"结束可见状态","transitionAnchor":"前后镜锚点","cameraAxis":"左右关系与动作方向"}]}。hasAnonymousCrowd 必须按该镜画面是否实际出现不具名人物填写；拍卖观众、宗门弟子、街市行人、宴会宾客、战场士兵等即使没有台词也必须为 true；空场、单人镜头以及“无人知道”等修饰语必须为 false。motionLevel 严格分级：static=对白、旁白、反应、空镜或单一结果；simple=一次明确动作或机位变化；complex=必须表达开始、转折、结果的连续复杂动作。stateChanges 只列实际可见的状态变化，最多3项、每项≤18字；台词、情绪、镜头目的不算状态变化。严格限长：title≤18字，storyBeat≤55字，transition≤20字，entryState/exitState各≤45字，transitionAnchor/cameraAxis各≤30字。状态只写可验证的差异，不重复剧情、对白和资产设定。镜头数由剧情节拍和真实播音时长决定，不得固定数量。按自然中文每秒约3.6个汉字计算，说话人切换留0.35秒，并至少留1.2秒给动作；duration 为3–8秒整数，超时对白必须拆镜且不得删减因果。必须覆盖所有大纲并完成起承转合。相邻镜头 entryState 必须承接上一镜 exitState；转场必须用建立镜头、声音先行、动作匹配或道具特写桥接。sceneId 不变时锁定空间布局、主光、人物左右关系和180度轴线；相邻镜头必须有动作、信息、情绪或观察角度增量，禁止重复正面中景。';
-    shotPlanSystem += ' 每个 plannedShot 必须增加 frameCount 整数：静态对白、单一反应、旁白空镜为1；简单动作或一次机位变化为2；明显走位、道具状态变化或动作转折为3；只有无法用3帧表达的关键复杂动作才为4。不得机械地让每镜都使用相同帧数。每个镜头只允许一个核心事件；复杂过程必须拆成“动作开始→动作变化→动作结果”等多个相邻简单镜头。相邻视频必须至少通过动作结果、视线、声音、道具状态或同场景不同角度中的一项明确承接。';
+      '你是漫剧镜头规划师。本阶段只输出极紧凑的镜头状态表；禁止生成图片提示词、视频提示词、frames、资产外观、title、entryState、motionLevel 或 frameCount。只返回合法 JSON：{"plannedShots":[{"number":1,"outlineIndex":1,"duration":5,"stateChanges":["可见变化"],"storyBeat":"核心因果与结果","sceneId":"场景ID","characterIndexes":[1],"propIndexes":[1],"hasAnonymousCrowd":false,"dialogue":"可直接配音的台词或无对白","transition":"过渡方式","exitState":"结束可见状态","transitionAnchor":"前后镜锚点","cameraAxis":"仅在场景或轴线变化时填写，否则空字符串"}]}。程序会用上一镜 exitState 自动构造下一镜 entryState，并根据 stateChanges 自动计算运动等级和帧数，严禁重复输出这些字段。hasAnonymousCrowd 必须按该镜画面是否实际出现不具名人物填写；拍卖观众、宗门弟子、街市行人、宴会宾客、战场士兵等即使没有台词也必须为 true；空场、单人镜头以及“无人知道”等修饰语必须为 false。stateChanges 只列实际可见的状态变化，最多3项、每项≤14字；台词、情绪、镜头目的不算状态变化。严格限长：storyBeat≤38字，transition≤12字，exitState≤30字，transitionAnchor≤18字，cameraAxis≤20字。状态只写可验证差异，不重复剧情、对白和资产设定。镜头数由剧情节拍和真实播音时长决定，不得固定数量。按自然中文每秒约3.6个汉字计算，说话人切换留0.35秒，并至少留1.2秒给动作；duration 为3–8秒整数，超时对白必须拆镜且不得删减因果。必须覆盖所有大纲并完成起承转合。相邻镜头必须由上一镜结束状态自然进入本镜事件；转场使用建立镜头、声音先行、动作匹配或道具特写桥接。sceneId 不变时锁定空间布局、主光、人物左右关系和180度轴线；相邻镜头必须有动作、信息、情绪或观察角度增量，禁止重复正面中景。每镜只允许一个核心事件，复杂过程拆为连续简单镜头。';
+    shotPlanSystem += ' 每个 plannedShots 项必须返回 sceneView，值只能是 main、reverse、left、right、top，并且必须是该 sceneId 的 views 中已有方位。建立场景优先 main；正反打使用 main/reverse；大范围走位或空间交代可用 top；只有场景提供对应方位时才用 left/right。相邻镜头换角度时选择目标方位，不得把换机位误写成新 sceneId。';
     const compactFoundation = {
       title: foundation.title,
       logline: foundation.logline,
@@ -2302,10 +2326,10 @@ app.post("/agents/comic", async (request, reply) => {
           requestedDuration = Number(item.duration);
         item.number = index + 1;
         item.outlineIndex = outlineIndex;
-        item.title =
-          String(item.title || "").trim() || `镜头 ${index + 1}`;
+        item.title = String(item.title || "").trim() ||
+          String(item.storyBeat || outline?.content || `镜头 ${index + 1}`).trim().slice(0, 18);
         const compactText = (input: unknown, max: number) => String(input || "").trim().slice(0, max);
-        item.storyBeat = compactText(item.storyBeat, 55) || compactText(outline?.content, 55);
+        item.storyBeat = compactText(item.storyBeat, 38) || compactText(outline?.content, 38);
         item.dialogue = dialogue;
         item.duration = Math.max(
           3,
@@ -2319,12 +2343,23 @@ app.post("/agents/comic", async (request, reply) => {
             ),
           ),
         );
-        item.transition = compactText(item.transition, 20) ||
+        item.transition = compactText(item.transition, 12) ||
           (index === 0 ? "黑场淡入" : "承接上一镜连续切入");
-        item.entryState = compactText(item.entryState || item.continuity, 45) || "承接上一镜结束状态";
-        item.exitState = compactText(item.exitState || item.storyBeat, 45);
-        item.transitionAnchor = compactText(item.transitionAnchor || item.transition, 30);
-        item.cameraAxis = compactText(item.cameraAxis, 30) || "保持左右关系、轴线与动作方向";
+        const previous = index > 0 && value.plannedShots && Array.isArray(value.plannedShots)
+          ? value.plannedShots[index - 1] as Record<string, unknown>
+          : undefined;
+        item.entryState = index > 0
+          ? compactText(previous?.exitState, 30) || "承接上一镜结束状态"
+          : compactText(item.entryState || item.continuity, 30) || "故事开场状态";
+        item.exitState = compactText(item.exitState || item.storyBeat, 30);
+        item.transitionAnchor = compactText(item.transitionAnchor || item.transition, 18);
+        item.cameraAxis = compactText(item.cameraAxis, 20) ||
+          (previous && String(previous.sceneId || "") === String(item.sceneId || "")
+            ? compactText(previous.cameraAxis, 20)
+            : "保持左右关系与180度轴线");
+        item.sceneView = ["main", "reverse", "left", "right", "top"].includes(String(item.sceneView))
+          ? String(item.sceneView)
+          : "main";
         item.continuity = `入：${item.entryState}；出：${item.exitState}`;
         const requestedFrameCount = Number(item.frameCount),
           complexityText = `${item.storyBeat} ${item.transition} ${item.entryState} ${item.exitState}`,
@@ -2498,8 +2533,9 @@ app.post("/agents/comic", async (request, reply) => {
       receivedBytes: streamReceivedBytes,
       totalShots,
     });
-    const shotsSystem = `你是漫剧分镜导演。严格按照本批轻量镜头规划逐镜扩写，只返回合法 JSON：{"shots":[完整镜头数组]}，返回数量和 number 必须与本批规划完全一致，不得合并、删除或新增镜头。每项必须包含 number、title、duration、storyBeat、action、sceneId、scene、scenePrompt、characterIndexes、characterForms、propIndexes、hasAnonymousCrowd、crowdPrompt、dialogue、frames、imagePrompt、videoPrompt、transition、continuity、referenceIndexes。frames 每项必须包含 title、imagePrompt、keyframe、inherit、change、lock、stateChangeIndexes、characterIndexes、characterForms、propIndexes、characterStates。characterStates 必须为当前帧每个可见角色各返回一项：{"characterIndex":1,"posture":"standing|walking|crouching|kneeling|sitting|lying|airborne|other","positionAnchor":"角色在场景中的固定物理站位，如黑棺左侧","facingTarget":"character:2|prop:1|scene:院门|camera|other","heldPropIndexes":[],"transitionAction":"相对上一帧或上一镜的可见过渡动作；状态完全不变时留空"}。同一角色没有实际移动时 positionAnchor 必须逐字沿用；姿态、站位、朝向或手持道具变化时 transitionAction 必须明确写出停步、走近、转身、俯身、蹲下、起身、拾取或放下等过程，禁止只写变化后的静态结果。stateChangeIndexes 使用0起始索引，声明该帧落实了镜头规划 stateChanges 中的哪些可见变化。规划中的每个状态变化必须恰好被一帧认领，不得遗漏或重复。这些帧级索引只列当前画面实际可见的人物、形态和关键道具，不得把下一帧才出现的素材提前列入上一帧。必须把镜头规划的 entryState 写入首帧 inherit，把 exitState 落实到末帧 change/lock，并严格遵守 transitionAnchor 与 cameraAxis；不得在扩写时重新解释或丢失这些连续性状态。imagePrompt 与每个 frame.imagePrompt 不得超过100字，scenePrompt 和 crowdPrompt 不得超过160字，videoPrompt 不得超过125字；角色和道具索引严格引用视觉基座。必须沿用镜头规划中的实际对白和已计算 duration，不得在扩写阶段添加放不下的新台词。自然中文按每秒约3.6个汉字计算，每段台词或说话人切换留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；3–5秒以一句短台词为主，6–8秒最多两句。scenePrompt 只能描述无人物环境、空间、UI界面和光影素材，禁止人物、人体、手部和角色剪影。frame.imagePrompt 才是完整剧情分镜：必须明确当前出镜人物、动作、景别、构图、场景状态和必要道具，且与该帧 characterIndexes、characterForms、propIndexes 一一对应；禁止三视图、设定板、素材拼贴、重复人物和无关元素。若本帧参考上一分镜或其他图片，inherit 必须列出保持不变的可见项，change 只能列本帧相对参考图的主要变化，lock 必须列出不得改变的人物数量与身份、服饰发型、道具、场景结构、光线和空间关系。hasAnonymousCrowd 只能根据画面是否真的需要匿名人物取值；“无人知道、不为人知、人尽皆知、鲜为人知”等修饰词绝不表示有人群。仅当画面明确出现路人、群众或围观者时才设 true 并填写 crowdPrompt，否则必须为 false、crowdPrompt 为空，并禁止模型自行增加背景人物。未明确要求时禁止动物或车辆特写、可读文字、字幕、标牌、Logo、水印和无关装饰。相邻分镜必须延续人物身份、站位、视线、动作结果和场景锚点，但不能只是复制上一张：change 必须写清本帧新增动作、表情、景别、机位或焦点变化。禁止连续三个镜头使用相同景别、相同正面机位、相同人物尺寸和相同中心构图；在特写、近景、中景、全景、过肩、侧面或高低机位之间按剧情目的变化，避免为了变化而越轴。视频提示词只保留主要动作、运镜、结束状态和必要对白，让连接分镜按既定人物身份与场景演进，禁止重新设计人物、换装、换场景或切换画风。${comicProductionRules}\n${comicContinuityRules}\n${comicTransitionRules}\n${comicDialogueRules}\n${comicStyleRules}`;
+    const shotsSystem = `你是漫剧分镜导演。严格按照本批轻量镜头规划逐镜扩写，只返回合法 JSON：{"shots":[完整镜头数组]}，返回数量和 number 必须与本批规划完全一致，不得合并、删除或新增镜头。每项必须包含 number、title、duration、storyBeat、action、sceneId、scene、scenePrompt、characterIndexes、characterForms、propIndexes、hasAnonymousCrowd、crowdPrompt、dialogue、frames、imagePrompt、videoPrompt、transition、continuity、referenceIndexes。frames 每项必须包含 title、imagePrompt、keyframe、inherit、change、lock、stateChangeIndexes、characterIndexes、characterForms、propIndexes、characterStates。为减少传输体积，characterStates 必须为当前帧每个可见角色各返回一个六项数组：[角色ID,"standing|walking|crouching|kneeling|sitting|lying|airborne|other","固定物理站位","character:2|prop:1|scene:院门|camera|other",[手持道具ID],"可见过渡动作或空字符串"]，禁止返回带字段名的对象；服务端会立即还原为可读对象。同一角色没有实际移动时站位必须逐字沿用；姿态、站位、朝向或手持道具变化时最后一项必须明确写出停步、走近、转身、俯身、蹲下、起身、拾取或放下等过程；状态完全不变时最后一项必须为空字符串，禁止重复解释静止状态。stateChangeIndexes 使用0起始索引，声明该帧落实了镜头规划 stateChanges 中的哪些可见变化。规划中的每个状态变化必须恰好被一帧认领，不得遗漏或重复。这些帧级索引只列当前画面实际可见的人物、形态和关键道具，不得把下一帧才出现的素材提前列入上一帧。必须把镜头规划的 entryState 写入首帧 inherit，把 exitState 落实到末帧 change/lock，并严格遵守 transitionAnchor 与 cameraAxis；不得在扩写时重新解释或丢失这些连续性状态。imagePrompt 与每个 frame.imagePrompt 不得超过100字，scenePrompt 和 crowdPrompt 不得超过160字，videoPrompt 不得超过125字；角色和道具索引严格引用视觉基座。必须沿用镜头规划中的实际对白和已计算 duration，不得在扩写阶段添加放不下的新台词。自然中文按每秒约3.6个汉字计算，每段台词或说话人切换留0.35秒停顿，并至少留1.2秒给开场、动作和运镜；3–5秒以一句短台词为主，6–8秒最多两句。scenePrompt 只能描述无人物环境、空间、UI界面和光影素材，禁止人物、人体、手部和角色剪影。frame.imagePrompt 才是完整剧情分镜：必须明确当前出镜人物、动作、景别、构图、场景状态和必要道具，且与该帧 characterIndexes、characterForms、propIndexes 一一对应；禁止三视图、设定板、素材拼贴、重复人物和无关元素。若本帧参考上一分镜或其他图片，inherit 必须列出保持不变的可见项，change 只能列本帧相对参考图的主要变化，lock 必须列出不得改变的人物数量与身份、服饰发型、道具、场景结构、光线和空间关系。hasAnonymousCrowd 只能根据画面是否真的需要匿名人物取值；“无人知道、不为人知、人尽皆知、鲜为人知”等修饰词绝不表示有人群。仅当画面明确出现路人、群众或围观者时才设 true 并填写 crowdPrompt，否则必须为 false、crowdPrompt 为空，并禁止模型自行增加背景人物。未明确要求时禁止动物或车辆特写、可读文字、字幕、标牌、Logo、水印和无关装饰。相邻分镜必须延续人物身份、站位、视线、动作结果和场景锚点，但不能只是复制上一张：change 必须写清本帧新增动作、表情、景别、机位或焦点变化。禁止连续三个镜头使用相同景别、相同正面机位、相同人物尺寸和相同中心构图；在特写、近景、中景、全景、过肩、侧面或高低机位之间按剧情目的变化，避免为了变化而越轴。视频提示词只保留主要动作、运镜、结束状态和必要对白，让连接分镜按既定人物身份与场景演进，禁止重新设计人物、换装、换场景或切换画风。${comicProductionRules}\n${comicContinuityRules}\n${comicTransitionRules}\n${comicDialogueRules}\n${comicStyleRules}`;
     const adaptiveShotsSystem = `${shotsSystem}\n帧数与视频简化硬规则：每个镜头返回的 frames 数量必须严格等于镜头规划的 frameCount，不得自行统一成3帧或补帧。frameCount=1 时只给代表核心事件的单帧；frameCount=2 时给动作开始与结果；frameCount=3 时给开始、变化、结果；frameCount=4 仅用于规划明确指定的关键复杂动作。每个 videoPrompt 只执行一个核心事件，只保留完成该事件所需的一种主要运镜、必要动作和最多一个主要说话者；不得同时塞入多人对白、大量动作、复杂运镜和大型特效。相邻镜头必须让上一镜 exitState 成为下一镜 entryState，并通过动作、视线、声音、道具或同场景不同角度自然连接；换角度时保持人物左右关系、视线、动作方向和180度轴线。`;
+    const shotViewSystem = `${adaptiveShotsSystem}\n每个镜头必须原样保留规划中的 sceneView（main、reverse、left、right、top），并按该方位描述构图；换景别不得擅自换方位，换方位不得重建场景。`;
     const shotBatchSize = 6,
       batchCount = Math.ceil(totalShots / shotBatchSize);
     let resumeBatch = Math.min(
@@ -2553,7 +2589,7 @@ app.post("/agents/comic", async (request, reply) => {
           : batchText;
       let shotPart = await readStage(
         `正在生成镜头 ${firstNumber}–${lastNumber}/${totalShots}…`,
-        adaptiveShotsSystem,
+        shotViewSystem,
         batchContent,
         6200,
         batchStart,
@@ -2590,6 +2626,9 @@ app.post("/agents/comic", async (request, reply) => {
             duration: Number(plan.duration),
             storyBeat: String(plan.storyBeat || generated.storyBeat || "").trim(),
             sceneId: String(generated.sceneId || plan.sceneId || "").trim(),
+            sceneView: ["main", "reverse", "left", "right", "top"].includes(String(plan.sceneView))
+              ? String(plan.sceneView)
+              : "main",
             characterIndexes: Array.isArray(plan.characterIndexes)
               ? plan.characterIndexes
               : [],
@@ -2868,7 +2907,7 @@ app.post("/agents/comic", async (request, reply) => {
           : expected;
         const repaired = await readStage(
           `镜头 ${[...invalidNumbers].join("、") || `${firstNumber}–${lastNumber}`} 定向重写中…`,
-          `${adaptiveShotsSystem} 本次只返回指定问题镜头，shots 数组不得包含其他编号。`,
+          `${shotViewSystem} 本次只返回指定问题镜头，shots 数组不得包含其他编号。`,
           `只修复下列问题，不得改变其他已通过镜头。\n${issues.join("\n")}\n\n只需返回的镜头规划：\n${JSON.stringify(repairExpected)}\n\n当前完整批次：\n${JSON.stringify(shotPart)}\n\n上一批末镜：\n${JSON.stringify(previousTail)}`,
           Math.min(6200, 1000 + repairExpected.length * 1100),
           Math.max(batchStart, batchEnd - 1),
@@ -3158,6 +3197,25 @@ app.post("/agents/comic", async (request, reply) => {
         imagePrompt: compactImagePrompt(String(scene.imagePrompt || scene.scenePrompt || scene.description || ""), 160),
         propIndexes: [...new Set((Array.isArray(scene.propIndexes) ? scene.propIndexes : []).map(Number).filter((number) => Number.isInteger(number) && number >= 1 && number <= props.length))],
         environmentAnchors: (Array.isArray(scene.environmentAnchors) ? scene.environmentAnchors : []).map((item) => String(item || "").trim().slice(0, 80)).filter(Boolean).slice(0, 8),
+        views: (() => {
+          const allowed = new Set(["main", "reverse", "left", "right", "top"]),
+            rawViews = (Array.isArray(scene.views) ? scene.views : []).filter((raw) => raw && typeof raw === "object") as Array<Record<string, unknown>>,
+            byId = new Map(rawViews.filter((view) => allowed.has(String(view.id))).map((view) => [String(view.id), view])),
+            fallbacks = [
+              ["main", "主视角", "保持完整空间结构的主建立机位"],
+              ["reverse", "反向视角", "相对主视角旋转约180度，展示同一空间反向区域"],
+              ["top", "俯视布局", "俯视展示建筑边界、通道与固定道具的准确方位关系"],
+            ];
+          const result = fallbacks.map(([id, name, prompt]) => {
+            const view = byId.get(id) || {};
+            return { id, name: String(view.name || name).slice(0, 30), imagePrompt: compactImagePrompt(String(view.imagePrompt || prompt), 120) };
+          });
+          for (const id of ["left", "right"]) {
+            const view = byId.get(id);
+            if (view) result.push({ id, name: String(view.name || (id === "left" ? "左侧视角" : "右侧视角")).slice(0, 30), imagePrompt: compactImagePrompt(String(view.imagePrompt || "同一空间侧向机位"), 120) });
+          }
+          return result;
+        })(),
       };
     });
     normalizeComicSceneHierarchy(scenes);
@@ -3323,6 +3381,9 @@ app.post("/agents/comic", async (request, reply) => {
           action,
           scene,
           sceneId,
+          sceneView: ["main", "reverse", "left", "right", "top"].includes(String(shot.sceneView))
+            ? String(shot.sceneView)
+            : "main",
           scenePrompt: compactImagePrompt(
             sanitizeCharacterNamesFromScenePrompt(
               String(canonicalScene?.imagePrompt || shot.scenePrompt || "环境空间结构、陈设、界面与光影，保持统一美术风格"),
@@ -4826,7 +4887,8 @@ app.post("/projects/:projectId/canvas/sync", async (request, reply) => {
         message: "画布在此设备离线期间被整体替换或清空，请重新同步",
         version: serverVersion,
       });
-  const normalized: CanvasOperation[] = [],
+  let normalized: CanvasOperation[] = [];
+  const
     touched = new Set<string>();
   for (const raw of operations) {
     if (
@@ -4929,6 +4991,45 @@ app.post("/projects/:projectId/canvas/sync", async (request, reply) => {
     source.camera && typeof source.camera === "object"
       ? structuredClone(source.camera)
       : { x: 0, y: 0, zoom: 1 };
+  // Older/open clients may still submit a node on every job-progress poll.
+  // Progress and the queued/running transition are transient job state, so
+  // discard an operation when those are the only differences. This server
+  // guard prevents stale tabs from forcing a full SQL.js export every 1.5s.
+  const stableActiveJobNode = (value: Record<string, unknown>) => {
+    const copy = structuredClone(value);
+    if (["queued", "running"].includes(String(copy.status))) {
+      copy.status = "active";
+      copy.progress = 0;
+    }
+    return copy;
+  };
+  normalized = normalized.filter((operation) => {
+    if (operation.type !== "node" || operation.action !== "upsert") return true;
+    const current = nodeMap.get(operation.key),
+      incoming = operation.value as Record<string, unknown>;
+    if (
+      !current ||
+      !current.jobId ||
+      String(current.jobId) !== String(incoming.jobId) ||
+      !["queued", "running"].includes(String(current.status)) ||
+      !["queued", "running"].includes(String(incoming.status))
+    )
+      return true;
+    return (
+      JSON.stringify(stableActiveJobNode(current)) !==
+      JSON.stringify(stableActiveJobNode(incoming))
+    );
+  });
+  if (normalized.length === 0)
+    return {
+      projectId,
+      version: serverVersion,
+      updatedAt: String(previous.updatedAt),
+      nodes: [...nodeMap.values()],
+      links: [...linkMap.values()],
+      camera: nextCamera,
+      mergedFromVersion: baseVersion,
+    };
   for (const operation of normalized) {
     if (operation.type === "node") {
       if (operation.action === "delete") nodeMap.delete(operation.key);
@@ -6023,7 +6124,7 @@ function compactCanvasSyncHistory(onlyProjectId?: string) {
       SELECT rowid FROM (
         SELECT rowid,ROW_NUMBER() OVER(PARTITION BY project_id ORDER BY created_at DESC,rowid DESC) AS position
         FROM canvas_operation_batches WHERE project_id=?
-      ) WHERE position>40
+      ) WHERE position>12
     )`,[projectId]);
     changed+=database.getRowsModified();
   }

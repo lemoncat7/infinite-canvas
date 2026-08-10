@@ -335,6 +335,25 @@ function captureCanvasSnapshot(
 function sameCanvasRecord(left: unknown, right: unknown) {
   return JSON.stringify(left) === JSON.stringify(right);
 }
+function sameCanvasNodeRecord(left: FlowNode | undefined, right: FlowNode) {
+  if (!left) return false;
+  // Job progress is transient task state and is already persisted in `jobs`.
+  // Treating every polling tick as a canvas edit creates a save feedback loop:
+  // a save overlaps the next poll, queues another save, and repeatedly exports
+  // the entire SQL.js database. Terminal status, jobId and result fields remain
+  // part of the durable canvas record and still trigger a normal save.
+  if (
+    left.jobId &&
+    left.jobId === right.jobId &&
+    ["queued", "running"].includes(String(left.status)) &&
+    ["queued", "running"].includes(String(right.status))
+  ) {
+    const leftStable = { ...left, progress: 0 },
+      rightStable = { ...right, progress: 0 };
+    return sameCanvasRecord(leftStable, rightStable);
+  }
+  return sameCanvasRecord(left, right);
+}
 function diffCanvasSnapshots(
   base: CanvasSyncSnapshot,
   current: CanvasSyncSnapshot,
@@ -345,7 +364,7 @@ function diffCanvasSnapshots(
       current.nodes.map((node) => [String(node.id), node]),
     );
   for (const [key, node] of currentNodes)
-    if (!baseNodes.has(key) || !sameCanvasRecord(baseNodes.get(key), node))
+    if (!sameCanvasNodeRecord(baseNodes.get(key), node))
       operations.push({ type: "node", action: "upsert", key, value: node });
   for (const key of baseNodes.keys())
     if (!currentNodes.has(key))
@@ -7568,6 +7587,10 @@ function composeImageGenerationPrompt(
         : node.crowdConstraint === "forbidden"
           ? "本镜头不含匿名群众，禁止添加路人、围观者或背景人群。"
           : "",
+    sceneHardLock =
+      profile === "storyboard"
+        ? "场景硬锁：除本帧明确要求的环境变化外，墙体、房屋、门窗、道路及固定陈设的数量、位置、比例、朝向、材质和破损状态必须与连接场景一致；只改变指定人物动作和随身物品，禁止移动、增删、重建或替换建筑。镜头硬锁：未明确要求换机位、景别、焦段或构图时必须使用固定镜头，相机位置、取景范围、透视、轴线和画面边界不得改变。"
+        : "",
     exclusionGuide =
       profile === "storyboard"
         ? `画面只出现描述和连接素材明确要求的主体；${node.crowdConstraint ? "" : "未要求匿名群众时禁止添加路人、围观者或背景人群；"}未要求时禁止人物或动物特写、车辆、可读文字、字幕、标识、水印及无关装饰。`
@@ -7588,7 +7611,10 @@ function composeImageGenerationPrompt(
     ]
       .map((value) => normalizePromptText(value))
       .filter(Boolean),
-    mandatoryDynamic = [crowdGuide, sizeGuide].filter(Boolean),
+    // Structural continuity must never be the optional tail trimmed by the
+    // final prompt budget. Character action changes are otherwise prone to
+    // making image models casually rebuild walls, rooms and architecture.
+    mandatoryDynamic = [crowdGuide, sceneHardLock, sizeGuide].filter(Boolean),
     dynamic = [...mandatoryDynamic, ...optionalDynamic].filter(Boolean),
     limit =
       profile === "character"
@@ -8808,6 +8834,7 @@ type ComicShot = {
   action?: string;
   scene: string;
   sceneId?: string;
+  sceneView?: "main" | "reverse" | "left" | "right" | "top";
   scenePrompt?: string;
   characterIndexes?: number[];
   characterForms?: Array<{ characterIndex: number; form: string }>;
@@ -8831,6 +8858,11 @@ type ComicScene = {
   imagePrompt?: string;
   propIndexes?: number[];
   environmentAnchors?: string[];
+  views?: Array<{
+    id: "main" | "reverse" | "left" | "right" | "top";
+    name: string;
+    imagePrompt?: string;
+  }>;
 };
 type ComicPlan = {
   title: string;
@@ -10873,26 +10905,37 @@ function applyComicToCanvas() {
       }
       return [composite, unique.at(-1)!];
     };
-    const ensureSceneStep = (sceneKey: string, fallbackShot?: ComicShot): number => {
-      const existing = sceneSteps.get(sceneKey);
+    const ensureSceneStep = (
+      sceneKey: string,
+      fallbackShot?: ComicShot,
+      requestedView: "main" | "reverse" | "left" | "right" | "top" = "main",
+    ): number => {
+      const mapKey = `${sceneKey}:${requestedView}`,
+        existing = sceneSteps.get(mapKey);
       if (existing) return existing;
       const sceneAsset = comicPlan!.scenes?.find((scene) => scene.sceneId === sceneKey),
+        sceneView = sceneAsset?.views?.find((view) => view.id === requestedView),
+        mainViewStep = requestedView === "main" ? 0 : ensureSceneStep(sceneKey, fallbackShot, "main"),
         parentKey = sceneAsset?.baseSceneId?.trim(),
-        parentStep = parentKey && parentKey !== sceneKey ? ensureSceneStep(parentKey) : 0,
+        parentStep = requestedView === "main" && parentKey && parentKey !== sceneKey ? ensureSceneStep(parentKey, undefined, "main") : 0,
         scenePropIndexes = [...new Set((sceneAsset?.propIndexes || []).filter((value) => Number.isInteger(value) && value >= 1 && value <= propSteps.length))],
-        rawScenePrompt = sceneAsset?.imagePrompt || fallbackShot?.scenePrompt || fallbackShot?.scene || sceneAsset?.description || sceneAsset?.name || "空场景",
+        rawScenePrompt = requestedView === "main"
+          ? sceneAsset?.imagePrompt || fallbackShot?.scenePrompt || fallbackShot?.scene || sceneAsset?.description || sceneAsset?.name || "空场景"
+          : sceneView?.imagePrompt || `${sceneView?.name || requestedView}，保持同一空间结构`,
         anchors = (sceneAsset?.environmentAnchors || []).join("；"),
-        variantGuide = parentStep
+        variantGuide = requestedView !== "main"
+          ? `严格基于连接的场景主视角生成「${sceneView?.name || requestedView}」；建筑尺寸、标志物、固定道具位置、材质、主光方向和摄影轴线完全不变，只改变摄影机方位，禁止重新设计。`
+          : parentStep
           ? `严格基于连接的父场景生成${sceneAsset?.variantType === "area" ? "同一地点的局部区域" : sceneAsset?.variantType === "time" ? "同一空间的时段变体" : "同一空间的状态变体"}；继承建筑语言、标志物、材质、色彩、空间方向和主光，禁止重新设计。`
           : "",
         scenePrompt = `无人物场景基准图，禁止出现任何人物、人体、手部、角色剪影或人形主体；仅生成可供后续分镜合成的环境。${variantGuide}${clipComicPrompt(rawScenePrompt.replace(/^(?:无人物|空镜头?|纯场景)[，,：:\s]*/, "").trim(), parentStep ? 80 : 105)}${anchors ? `；固定空间锚点：${clipComicPrompt(anchors, 55)}` : ""}`,
         dependencies = prepareTwoReferenceInputs(
-          [parentStep, ...scenePropIndexes.map((value) => propSteps[value - 1])].filter(Boolean),
+          [mainViewStep || parentStep, ...(requestedView === "main" ? scenePropIndexes.map((value) => propSteps[value - 1]) : [])].filter(Boolean),
           `场景 ${sceneAsset?.name || fallbackShot?.title || sceneKey}`,
           comicPlan!.aspectRatio,
         );
       steps.push({
-        title: `场景 · ${sceneAsset?.name || fallbackShot?.title || sceneKey}`,
+        title: `场景 · ${sceneAsset?.name || fallbackShot?.title || sceneKey} · ${sceneView?.name || "主视角"}`,
         kind: "image",
         prompt: scenePrompt,
         referenceIndexes: [],
@@ -10901,15 +10944,25 @@ function applyComicToCanvas() {
         stage: "scene",
         styleConstraint: styleType,
         formConstraint: [
-          parentStep ? "连接的父场景是本场景唯一空间基准，只允许执行指定的区域、时段或状态变化。" : "",
+          requestedView !== "main" ? "连接的主视角是当前方位唯一空间基准，只允许改变摄影机方向。" : parentStep ? "连接的父场景是本场景唯一空间基准，只允许执行指定的区域、时段或状态变化。" : "",
           scenePropIndexes.length ? "连接的固定道具属于场景结构，只按空间锚点放置并锁定外观、比例与位置，禁止重新设计或生成副本。" : "",
         ].filter(Boolean).join("；"),
         autoGenerate: true,
       });
       const created = steps.length;
-      sceneSteps.set(sceneKey, created);
+      sceneSteps.set(mapKey, created);
       return created;
     };
+    comicPlan.scenes?.forEach((scene) =>
+      (scene.views?.length
+        ? scene.views
+        : [
+            { id: "main" as const, name: "主视角" },
+            { id: "reverse" as const, name: "反向视角" },
+            { id: "top" as const, name: "俯视布局" },
+          ]
+      ).forEach((view) => ensureSceneStep(scene.sceneId, undefined, view.id)),
+    );
     comicPlan.shots.forEach((shot, index) => {
       shot = {
         ...shot,
@@ -10932,7 +10985,10 @@ function applyComicToCanvas() {
           ),
         ],
         scenePropSet = new Set(scenePropIndexes);
-      const sceneStep = ensureSceneStep(sceneKey, shot);
+      const requestedSceneView = ["main", "reverse", "left", "right", "top"].includes(String(shot.sceneView))
+          ? shot.sceneView!
+          : "main",
+        sceneStep = ensureSceneStep(sceneKey, shot, requestedSceneView);
       const characterEvidence = `${shot.scene}${shot.storyBeat || ""}${shot.action || ""}${shot.dialogue}${shot.imagePrompt}${JSON.stringify(shot.frames || [])}`,
         mentionedCharacterIndexes = comicPlan!.characters
           .map((character, characterIndex) =>
@@ -11090,14 +11146,13 @@ function applyComicToCanvas() {
             : continuesPrevious
               ? previousShotLastFrame
               : 0,
-          cameraChangeEvidence = `${frame.title} ${frame.imagePrompt} ${frame.change || ""} ${frame.inherit || ""}`,
-          needsSceneAnchor = Boolean(
-            continuityFrame &&
-              (frameIndex === 0 ||
-                /远景|全景|广角|俯拍|仰拍|反打|过肩|侧面|背面|鸟瞰|航拍|机位|视角|换角度|重新构图|wide shot|aerial|reverse shot|over-the-shoulder/i.test(
-                  cameraChangeEvidence,
-                )),
-          ),
+          // Every continuous frame keeps the canonical scene as the second
+          // reference. The previous frame preserves transient damage and
+          // character state; the scene reference prevents cumulative drift of
+          // walls, buildings, doors, roads and fixed furnishings. Additional
+          // new assets are still folded in through the existing two-reference
+          // staged compositor.
+          needsSceneAnchor = Boolean(continuityFrame),
           referenceCandidates = continuityFrame
             ? [
                 continuityFrame,

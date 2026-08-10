@@ -28,7 +28,10 @@ assert.deepEqual(normalizeComicCharacterStates([
   state(1, "crouching", "错误重复", "camera"),
   state(3, "standing", "画外", "camera"),
 ], [1, 2], [1]), [state(1, "standing", "黑棺左侧", "prop:1", [1])]);
-console.log("comic structured character-state validation: 6/6 passed");
+assert.deepEqual(normalizeComicCharacterStates([
+  [1, "WALKING", "黑棺左侧", "SCENE:院门", [1, 2], "停步后走近"],
+], [1], [1]), [state(1, "walking", "黑棺左侧", "scene:院门", [1], "停步后走近")]);
+console.log("comic structured character-state validation: 7/7 passed");
 
 const cases = [
   [false, "古城空巷全景，无人物，禁止群众和路人。"],

@@ -166,7 +166,17 @@ export class AgnesVideoProvider implements GenerationProvider {
     if (source.startsWith('data:')) return source
     if (/^https?:\/\//i.test(source) && !forceEmbedded) return source
     if (/^https?:\/\//i.test(source) && forceEmbedded) {
-      const response = await fetch(source, { signal:AbortSignal.timeout(30000) })
+      // Resolved owned assets may arrive here as this application's public
+      // URL. If Agnes rejects that URL, embedding must read the same asset over
+      // the container-local API instead of depending on public DNS/proxy
+      // hairpinning, which commonly fails with the unhelpful `fetch failed`.
+      let readUrl = source
+      try {
+        const parsed = new URL(source), publicOrigin = this.publicBaseUrl ? new URL(this.publicBaseUrl).origin : ''
+        if (publicOrigin && parsed.origin === publicOrigin && parsed.pathname.startsWith('/api/'))
+          readUrl = `http://127.0.0.1:${process.env.PORT ?? 3000}/${parsed.pathname.slice(5)}${parsed.search}`
+      } catch { /* keep the original external URL */ }
+      const response = await fetch(readUrl, { signal:AbortSignal.timeout(30000) })
       if (!response.ok) throw new Error(`重新读取 Agnes 参考图片失败（${response.status}）`)
       const mimeType = response.headers.get('content-type')?.split(';')[0] || 'image/png'
       const bytes = Buffer.from(await response.arrayBuffer())

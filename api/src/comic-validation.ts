@@ -103,7 +103,20 @@ export function normalizeComicCharacterStates(
     byCharacter = new Map<number, ComicCharacterState>();
   for (const raw of Array.isArray(value) ? value : []) {
     if (!raw || typeof raw !== "object") continue;
-    const item = raw as Record<string, unknown>,
+    // The generation transport may use a tuple to avoid repeating six JSON
+    // property names for every visible character in every keyframe.  Normalize
+    // it immediately so validation and persisted production data keep the
+    // readable object schema.
+    const item = Array.isArray(raw)
+        ? {
+            characterIndex: raw[0],
+            posture: raw[1],
+            positionAnchor: raw[2],
+            facingTarget: raw[3],
+            heldPropIndexes: raw[4],
+            transitionAction: raw[5],
+          }
+        : raw as Record<string, unknown>,
       characterIndex = Number(item.characterIndex);
     if (!visibleCharacters.has(characterIndex) || byCharacter.has(characterIndex))
       continue;
