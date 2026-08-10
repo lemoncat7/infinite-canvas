@@ -6,11 +6,31 @@ export type RenderNode = {
   height: number;
   accent: string;
   kind: string;
+  role?: "generator" | "result";
   title: string;
   body: string;
   status?: string;
   progress?: number;
   mediaUrl?: string;
+  model?: string;
+  videoSettings?: {
+    seconds?: string;
+    resolution?: string;
+    aspectRatio?: string;
+    referenceMode?: "keyframes" | "references";
+  };
+  voiceSettings?: {
+    voiceId?: string;
+    defaultSpeed?: number;
+    pitch?: number;
+    volume?: number;
+    roleName?: string;
+  };
+  ttsSettings?: {
+    emotion?: string;
+    format?: string;
+    duration?: number;
+  };
 };
 
 export type RenderLink = {

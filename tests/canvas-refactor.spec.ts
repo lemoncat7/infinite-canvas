@@ -95,9 +95,19 @@ test("400 nodes stay GPU-virtualized and recover WebGL context", async ({
   await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
   await expect(page.locator("body")).toHaveClass(/renderer-pixi/);
   expect(await page.locator("#node-layer > .flow-node").count()).toBe(0);
+  if (process.env.CANVAS_VISUAL_AUDIT)
+    await page.screenshot({
+      path: "test-results/canvas-unselected.png",
+      fullPage: true,
+    });
 
   await page.locator("#canvas").click({ position: { x: 370, y: 360 } });
   await expect(page.locator("#node-layer > .flow-node.selected")).toHaveCount(1);
+  if (process.env.CANVAS_VISUAL_AUDIT)
+    await page.screenshot({
+      path: "test-results/canvas-selected.png",
+      fullPage: true,
+    });
   expect(await page.locator("#node-layer > .flow-node").count()).toBeLessThanOrEqual(2);
 
   await page.evaluate(() =>

@@ -35,6 +35,122 @@ function control(
   return { x: point.x - distance, y: point.y };
 }
 
+function compactVoiceName(value = "") {
+  const names: Record<string, string> = {
+    "zh-CN-XiaoxiaoNeural": "晓晓 · 温暖女声",
+    "zh-CN-YunxiNeural": "云希 · 阳光男声",
+  };
+  return names[value] || value || "默认中文音色";
+}
+
+type CardPresentation = {
+  title: string;
+  subtitle: string;
+  body: string;
+  meta: string;
+  centered: boolean;
+  icon?: string;
+};
+
+function cardPresentation(
+  node: RenderNode,
+  incoming: readonly RenderLink[],
+  byId: ReadonlyMap<number, RenderNode>,
+): CardPresentation {
+  if (node.kind === "image" && !node.mediaUrl)
+    return {
+      title: "空图节点",
+      subtitle: "",
+      body: "生成新图片，或复用已有素材",
+      meta: "",
+      centered: true,
+      icon: "▧",
+    };
+  if (node.kind === "video" && node.role !== "result") {
+    const references = incoming
+        .map((link) => byId.get(link.from))
+        .filter((source) => source?.kind === "image"),
+      ready = references.filter((source) => source?.mediaUrl).length,
+      agnesKeyframes =
+        node.model?.startsWith("agnes-") && references.length > 1,
+      mode = agnesKeyframes
+        ? "关键帧动画"
+        : references.length > 1
+          ? "多图生视频"
+          : references.length === 1
+            ? "图生视频"
+            : "文生视频",
+      settings = node.videoSettings ?? {};
+    return {
+      title: "视频生成",
+      subtitle: `${mode}${references.length ? ` · ${ready} / ${references.length} 张已就绪` : ""}`,
+      body:
+        node.body ||
+        (references.length
+          ? ready === references.length
+            ? "参考图已就绪，在下方描述画面运动"
+            : `正在等待 ${references.length - ready} 张参考图完成`
+          : "连接图片，或直接输入视频描述"),
+      meta: `${settings.seconds ?? "5"} 秒 · ${agnesKeyframes || settings.referenceMode === "keyframes" ? "关键帧" : "参考图"} · ${settings.resolution ?? "720p"} · ${settings.aspectRatio ?? "16:9"}`,
+      centered: false,
+    };
+  }
+  if (node.kind === "video" && node.role === "result" && !node.mediaUrl)
+    return {
+      title: "▶  正在生成视频",
+      subtitle: "",
+      body: "完成后可在这里双击播放",
+      meta: "",
+      centered: true,
+      icon: "▶",
+    };
+  if (node.kind === "voice") {
+    const settings = node.voiceSettings ?? {},
+      speed = settings.defaultSpeed ?? 1,
+      pitch = settings.pitch ?? 0,
+      volume = settings.volume ?? 1;
+    return {
+      title: settings.roleName?.trim() || "未设置角色",
+      subtitle: "固定角色跨镜头声音",
+      body: compactVoiceName(settings.voiceId),
+      meta: `${speed.toFixed(2).replace(/0$/, "")}× 语速 · ${pitch > 0 ? "+" : ""}${pitch}Hz 音调 · ${Math.round(volume * 100)}% 音量`,
+      centered: false,
+    };
+  }
+  if (node.kind === "tts") {
+    const voice = incoming
+        .map((link) => byId.get(link.from))
+        .find((source) => source?.kind === "voice"),
+      voiceLabel = voice
+        ? `${voice.voiceSettings?.roleName || "角色"} · ${compactVoiceName(voice.voiceSettings?.voiceId)}`
+        : "尚未连接角色声音";
+    return {
+      title: "TTS 文本生成",
+      subtitle: voiceLabel,
+      body: node.body || "填写这一镜的对白、旁白或系统播报",
+      meta: `${node.ttsSettings?.emotion || "中性"} · ${(node.ttsSettings?.format || "mp3").toUpperCase()}`,
+      centered: false,
+    };
+  }
+  if (node.kind === "audio")
+    return {
+      title: node.title || "音频结果",
+      subtitle: node.mediaUrl
+        ? `${(node.ttsSettings?.format || "mp3").toUpperCase()}${node.ttsSettings?.duration ? ` · ${node.ttsSettings.duration.toFixed(1)} 秒` : ""}`
+        : "等待生成",
+      body: "▂▅▃▇▆▃▅▂▃▆▇▃▅▂",
+      meta: node.mediaUrl ? "双击播放" : "等待音频生成",
+      centered: false,
+    };
+  return {
+    title: node.title || "未命名卡片",
+    subtitle: "",
+    body: node.body || "暂无描述",
+    meta: "",
+    centered: false,
+  };
+}
+
 export class PixiCanvasRenderer implements CanvasRenderer {
   private readonly app = new Application();
   private readonly background = new Graphics();
@@ -51,7 +167,10 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       container: Container;
       shell: Graphics;
       title: Text;
+      icon: Text;
+      subtitle: Text;
       body: Text;
+      meta: Text;
       media: Sprite;
       mediaUrl?: string;
       mediaRequest: number;
@@ -178,6 +297,12 @@ export class PixiCanvasRenderer implements CanvasRenderer {
     }
     this.renderPendingConnection(snapshot);
     const byId = new Map(snapshot.nodes.map((node) => [node.id, node]));
+    const incomingByTarget = new Map<number, RenderLink[]>();
+    for (const link of snapshot.links) {
+      const incoming = incomingByTarget.get(link.to);
+      if (incoming) incoming.push(link);
+      else incomingByTarget.set(link.to, [link]);
+    }
     let linkHash = 2166136261;
     const mix = (value: number) => {
       linkHash ^= value | 0;
@@ -269,6 +394,21 @@ export class PixiCanvasRenderer implements CanvasRenderer {
               fontWeight: "600",
             },
           }),
+          icon = new Text({
+            style: {
+              fill: snapshot.dark ? 0xc7d2cf : 0x76817d,
+              fontFamily: "system-ui, sans-serif",
+              fontSize: 20,
+              fontWeight: "500",
+            },
+          }),
+          subtitle = new Text({
+            style: {
+              fill: snapshot.dark ? 0x8fa09d : 0x78827f,
+              fontFamily: "system-ui, sans-serif",
+              fontSize: 10,
+            },
+          }),
           body = new Text({
             style: {
               fill: snapshot.dark ? 0xa9b8b5 : 0x66736f,
@@ -279,19 +419,43 @@ export class PixiCanvasRenderer implements CanvasRenderer {
               wordWrapWidth: Math.max(80, node.width - 28),
             },
           }),
+          meta = new Text({
+            style: {
+              fill: snapshot.dark ? 0xa9b8b5 : 0x66736f,
+              fontFamily: "system-ui, sans-serif",
+              fontSize: 10,
+            },
+          }),
           media = new Sprite(Texture.EMPTY);
         title.position.set(14, 13);
-        body.position.set(14, 43);
+        icon.anchor.set(0.5);
+        subtitle.position.set(14, 34);
+        body.position.set(14, 58);
+        meta.position.set(14, Math.max(58, node.height - 25));
         media.position.set(12, 66);
         media.visible = false;
-        container.addChild(shell, media, title, body);
+        container.addChild(shell, media, icon, title, subtitle, body, meta);
         this.cards.addChild(container);
-        view = { container, shell, title, body, media, mediaRequest: 0, key: "" };
+        view = {
+          container,
+          shell,
+          title,
+          icon,
+          subtitle,
+          body,
+          meta,
+          media,
+          mediaRequest: 0,
+          key: "",
+        };
         this.cardViews.set(node.id, view);
       }
       view.container.position.set(node.x, node.y);
       view.container.visible = true;
-      const mediaUrl = node.mediaUrl ? this.thumbnailUrl(node.mediaUrl) : undefined;
+      const mediaUrl =
+        node.mediaUrl && (node.kind === "image" || node.kind === "video")
+          ? this.thumbnailUrl(node.mediaUrl)
+          : undefined;
       if (mediaUrl !== view.mediaUrl) {
         this.detachMedia(view);
         if (mediaUrl) {
@@ -326,15 +490,46 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         node.body,
         node.status,
         node.progress,
+        node.role,
+        node.model,
+        JSON.stringify(node.videoSettings),
+        JSON.stringify(node.voiceSettings),
+        JSON.stringify(node.ttsSettings),
         node.id === snapshot.selectedId,
         selectedIds.has(node.id),
         snapshot.dark,
       ].join("|");
       if (view.key === key) continue;
       view.key = key;
-      view.title.text = node.title || "未命名卡片";
-      view.body.visible = !node.mediaUrl;
-      view.body.text = (node.body || "暂无描述").replace(/\s+/g, " ").slice(0, 92);
+      const presentation = cardPresentation(
+        node,
+        incomingByTarget.get(node.id) ?? [],
+        byId,
+      );
+      view.title.text = presentation.title;
+      view.icon.text = presentation.icon || "";
+      view.subtitle.text = presentation.subtitle;
+      view.body.text = presentation.body.replace(/\s+/g, " ").slice(0, 92);
+      view.meta.text = presentation.meta;
+      const mediaOnly = Boolean(mediaUrl);
+      view.title.visible = !mediaOnly;
+      view.icon.visible = !mediaOnly && Boolean(presentation.icon);
+      view.subtitle.visible = !mediaOnly && Boolean(presentation.subtitle);
+      view.body.visible = !mediaOnly;
+      view.meta.visible = !mediaOnly && Boolean(presentation.meta);
+      view.title.anchor.set(presentation.centered ? 0.5 : 0);
+      view.body.anchor.set(presentation.centered ? 0.5 : 0);
+      view.title.position.set(
+        presentation.centered ? node.width / 2 : 14,
+        presentation.centered ? node.height / 2 + 3 : 13,
+      );
+      view.icon.position.set(node.width / 2, node.height / 2 - 36);
+      view.subtitle.position.set(14, 34);
+      view.body.position.set(
+        presentation.centered ? node.width / 2 : 14,
+        presentation.centered ? node.height / 2 + 29 : 58,
+      );
+      view.meta.position.set(14, Math.max(58, node.height - 25));
       view.body.style.wordWrapWidth = Math.max(80, node.width - 28);
       view.shell
         .clear()
@@ -360,6 +555,27 @@ export class PixiCanvasRenderer implements CanvasRenderer {
               ? node.accent
               : 0x7b8985,
         });
+      if (presentation.meta && !mediaOnly)
+        view.shell
+          .moveTo(14, node.height - 38)
+          .lineTo(node.width - 14, node.height - 38)
+          .stroke({
+            color: snapshot.dark ? 0x344247 : 0xd8dfdb,
+            alpha: 0.72,
+            width: 1,
+          });
+      if (presentation.icon && !mediaOnly)
+        view.shell
+          .roundRect(node.width / 2 - 21, node.height / 2 - 57, 42, 42, 11)
+          .fill({
+            color: snapshot.dark ? 0xffffff : 0x66736f,
+            alpha: snapshot.dark ? 0.055 : 0.07,
+          })
+          .stroke({
+            color: snapshot.dark ? 0xffffff : 0x66736f,
+            alpha: snapshot.dark ? 0.2 : 0.22,
+            width: 1,
+          });
       if (node.status === "queued" || node.status === "running") {
         const progress = Math.max(0, Math.min(100, node.progress || 0));
         view.shell
