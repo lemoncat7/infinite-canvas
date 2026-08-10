@@ -35,7 +35,7 @@ function stressCanvas(count = 400) {
   };
 }
 
-async function mockApi(page: Page, count = 400) {
+async function mockApi(page: Page, count = 400, preserveLocalCanvas = false) {
   const canvas = stressCanvas(count);
   const syncPayloads: unknown[] = [];
   await page.route("**/api/**", async (route) => {
@@ -60,8 +60,20 @@ async function mockApi(page: Page, count = 400) {
     else if (path === "/api/assets" || path === "/api/user-api-models")
       body = [];
     else if (path === "/api/generation/capabilities") body = {};
+    else if (path === "/api/jobs" && request.method() === "POST")
+      body = { id: "canvas-test-job", status: "queued", progress: 0 };
+    else if (path === "/api/jobs/canvas-test-job")
+      body = { id: "canvas-test-job", status: "running", progress: 35 };
     else if (path.includes("/canvas/sync")) {
       syncPayloads.push(request.postDataJSON());
+      if (preserveLocalCanvas) {
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "test_sync_deferred" }),
+        });
+        return;
+      }
       body = { ...canvas, version: 2, updatedAt: new Date().toISOString() };
     }
     else if (path.includes("notifications")) body = [];
@@ -222,5 +234,77 @@ test("connection overlay and quick group movement stay in the Pixi path", async 
   await page.mouse.move(470, 430, { steps: 10 });
   await page.mouse.up();
   await expect(page.locator("[data-batch-count]")).toContainText("2");
+  expect(errors).toEqual([]);
+});
+
+test("card creation, generation and repeated dragging never reveal foreign panels", async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  await mockApi(page, 6, true);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/?canvasPerf=1#/canvas");
+  await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
+
+  for (const [kind, point] of [
+    ["prompt", { x: 80, y: 500 }],
+    ["image", { x: 360, y: 500 }],
+    ["video", { x: 640, y: 500 }],
+    ["voice", { x: 920, y: 500 }],
+    ["tts", { x: 1200, y: 500 }],
+  ] as const) {
+    await page.mouse.dblclick(point.x, point.y);
+    const menu = page.locator("#quick-node-menu.open");
+    await expect(menu).toBeVisible();
+    await menu.locator(`[data-quick-add="${kind}"]`).click();
+  }
+
+  await expect(page.locator(".flow-node.kind-prompt")).toHaveCount(1);
+  await expect(page.locator(".flow-node.kind-video")).toHaveCount(1);
+  await expect(page.locator(".flow-node.kind-voice")).toHaveCount(1);
+  await expect(page.locator(".flow-node.kind-tts")).toHaveCount(1);
+  await expect(
+    page.locator(".flow-node:not(.kind-audio) > .audio-result-panel:visible"),
+  ).toHaveCount(0);
+
+  const generatedImage = page.locator(".flow-node.kind-image").last();
+  await generatedImage.click();
+  await generatedImage
+    .locator('[data-image-field="description"]')
+    .fill("动漫风夜景城市，固定镜头，无人物、文字或水印。");
+  const audioCountBefore = await page.locator(".flow-node.kind-audio").count();
+  await generatedImage.locator("[data-image-generate]").dispatchEvent("click");
+  await expect(generatedImage).toHaveClass(/generating/);
+
+  // Repeated panning while the task status changes used to expose the Pixi
+  // fallback and DOM card at once, making status and audio panels flash.
+  for (let index = 0; index < 6; index++) {
+    await page.mouse.move(820, 560);
+    await page.mouse.down();
+    await page.mouse.move(780 + index * 3, 530 + index * 2, { steps: 8 });
+    await page.mouse.up();
+  }
+  await expect(page.locator(".flow-node.kind-audio")).toHaveCount(
+    audioCountBefore,
+  );
+  await expect(
+    page.locator(".flow-node:not(.kind-audio) > .audio-result-panel:visible"),
+  ).toHaveCount(0);
+
+  // Drag the generating card repeatedly as well; it must remain one complete
+  // DOM card and must not swap to another card type while moving.
+  const box = await generatedImage.boundingBox();
+  expect(box).toBeTruthy();
+  for (let index = 0; index < 4; index++) {
+    await page.mouse.move(box!.x + 40 + index * 6, box!.y + 45 + index * 4);
+    await page.mouse.down();
+    await page.mouse.move(box!.x + 80 + index * 6, box!.y + 70 + index * 4, {
+      steps: 8,
+    });
+    await page.mouse.up();
+  }
+  await expect(generatedImage).toHaveCount(1);
+  await expect(generatedImage.locator(".audio-result-panel:visible")).toHaveCount(0);
   expect(errors).toEqual([]);
 });
