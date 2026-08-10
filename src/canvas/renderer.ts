@@ -25,6 +25,7 @@ export type CanvasRenderSnapshot = {
   links: readonly RenderLink[];
   camera: { x: number; y: number; zoom: number };
   selectedId: number;
+  selectedIds: readonly number[];
   dark: boolean;
 };
 

@@ -247,6 +247,8 @@ const pointer = {
   moved: false,
   blankCanvas: false,
   draggingNode: null as number | null,
+  draggingGroup: null as Set<number> | null,
+  toggleBatchOnRelease: 0,
 };
 let canvasPanSelectedElement: HTMLElement | null = null;
 let selectedId = 0;
@@ -3459,126 +3461,19 @@ function drawLink(link: FlowLink, index: number) {
     }
 }
 
-function drawNode(node: FlowNode) {
-  const p = screen(node),
-    w = node.width * camera.zoom,
-    h = node.height * camera.zoom,
-    selected = node.id === selectedId;
-  ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,.4)";
-  ctx.shadowBlur = 28 * camera.zoom;
-  roundedRect(p.x, p.y, w, h, 16 * camera.zoom);
-  ctx.fillStyle = "#1c1f1d";
-  ctx.fill();
-  ctx.shadowColor = "transparent";
-  if (selected) {
-    ctx.strokeStyle = node.accent;
-    ctx.lineWidth = 2;
-    ctx.stroke();
-  }
-  if (node.kind === "image" && node.mediaUrl) {
-    let image = imageCache.get(node.mediaUrl);
-    if (!image) {
-      image = new Image();
-      image.onload = () => {
-        const ratio = image!.naturalHeight / image!.naturalWidth;
-        node.height = Math.max(190, 92 + (node.width - 24) * ratio);
-        scheduleSave();
-        draw();
-      };
-      image.src = node.mediaUrl;
-      imageCache.set(node.mediaUrl, image);
-    }
-    if (image.complete && image.naturalWidth) {
-      const ix = p.x + 12 * camera.zoom,
-        iy = p.y + 78 * camera.zoom,
-        iw = w - 24 * camera.zoom,
-        ih = h - 92 * camera.zoom;
-      ctx.save();
-      roundedRect(ix, iy, iw, ih, 10 * camera.zoom);
-      ctx.clip();
-      const scale = Math.min(iw / image.naturalWidth, ih / image.naturalHeight),
-        dw = image.naturalWidth * scale,
-        dh = image.naturalHeight * scale;
-      ctx.fillStyle = "#111";
-      ctx.fillRect(ix, iy, iw, ih);
-      ctx.drawImage(image, ix + (iw - dw) / 2, iy + (ih - dh) / 2, dw, dh);
-      ctx.restore();
-    }
-  }
-  ctx.fillStyle = node.accent;
-  roundedRect(
-    p.x + 14 * camera.zoom,
-    p.y + 14 * camera.zoom,
-    34 * camera.zoom,
-    24 * camera.zoom,
-    7 * camera.zoom,
-  );
-  ctx.fill();
-  ctx.fillStyle = "#171917";
-  ctx.font = `700 ${10 * camera.zoom}px system-ui`;
-  ctx.textAlign = "center";
-  ctx.fillText(
-    node.kind.toUpperCase(),
-    p.x + 31 * camera.zoom,
-    p.y + 30 * camera.zoom,
-  );
-  ctx.textAlign = "left";
-  ctx.fillStyle = "#f4f5f1";
-  ctx.font = `600 ${17 * camera.zoom}px system-ui`;
-  ctx.fillText(node.title, p.x + 16 * camera.zoom, p.y + 66 * camera.zoom);
-  if (!node.mediaUrl) {
-    ctx.fillStyle = "#929991";
-    ctx.font = `${12 * camera.zoom}px system-ui`;
-    const words = node.body.split("");
-    let line = "",
-      y = p.y + 92 * camera.zoom;
-    for (const char of words) {
-      if (ctx.measureText(line + char).width > w - 32 * camera.zoom) {
-        ctx.fillText(line, p.x + 16 * camera.zoom, y);
-        line = char;
-        y += 20 * camera.zoom;
-      } else line += char;
-    }
-    ctx.fillText(line, p.x + 16 * camera.zoom, y);
-  }
-  if (!node.mediaUrl && (node.kind === "image" || node.kind === "video")) {
-    const iy = p.y + h - 49 * camera.zoom;
-    roundedRect(
-      p.x + 15 * camera.zoom,
-      iy,
-      w - 30 * camera.zoom,
-      34 * camera.zoom,
-      9 * camera.zoom,
-    );
-    ctx.fillStyle = "#282c29";
-    ctx.fill();
-    ctx.fillStyle = node.accent;
-    ctx.font = `${11 * camera.zoom}px system-ui`;
-    ctx.fillText(
-      node.kind === "video" ? "▶  生成预览" : "✦  查看生成结果",
-      p.x + 28 * camera.zoom,
-      iy + 21 * camera.zoom,
-    );
-  }
-  const sides: PortSide[] = ["top", "right", "bottom", "left"];
-  for (const side of sides) {
-    const port = screen(portWorld(node, side));
-    ctx.beginPath();
-    ctx.arc(port.x, port.y, 6 * camera.zoom, 0, Math.PI * 2);
-    ctx.fillStyle = selected ? node.accent : "#656b65";
-    ctx.fill();
-    ctx.strokeStyle = "#171917";
-    ctx.lineWidth = 2 * camera.zoom;
-    ctx.stroke();
-  }
-  ctx.restore();
-}
-
 function hitNode(sx: number, sy: number) {
-  const p = world({ x: sx, y: sy });
+  const p = world({ x: sx, y: sy }),
+    candidates = new Set(
+      canvasSpatialIndex.search({
+        minX: p.x,
+        minY: p.y,
+        maxX: p.x,
+        maxY: p.y,
+      }),
+    );
   for (let index = nodes.length - 1; index >= 0; index--) {
     const node = nodes[index];
+    if (!candidates.has(node.id)) continue;
     if (
       p.x >= node.x &&
       p.x <= node.x + node.width &&
@@ -3591,9 +3486,21 @@ function hitNode(sx: number, sy: number) {
 }
 function hitPort(sx: number, sy: number, radius = 12, excludeNodeId?: number) {
   const sides: PortSide[] = ["top", "right", "bottom", "left"];
+  const center = world({ x: sx, y: sy }),
+    worldRadius = radius / camera.zoom,
+    candidates = new Set(
+      canvasSpatialIndex.search({
+        minX: center.x - worldRadius,
+        minY: center.y - worldRadius,
+        maxX: center.x + worldRadius,
+        maxY: center.y + worldRadius,
+      }),
+    );
   let closest: { node: FlowNode; side: PortSide; distance: number } | undefined;
-  for (const node of [...nodes].reverse()) {
+  for (let index = nodes.length - 1; index >= 0; index--) {
+    const node = nodes[index];
     if (
+      !candidates.has(node.id) ||
       node.id === excludeNodeId ||
       (node.kind === "video" && node.role === "result")
     )
@@ -3934,6 +3841,7 @@ function paint() {
     links,
     camera,
     selectedId,
+    selectedIds: [...batchSelectedIds],
     dark: colorTheme === "dark",
   });
   canvasPerformance.endFrame(performanceFrame);
@@ -4294,7 +4202,6 @@ function syncDomNodes() {
   const requiredPixiDomIds = pixiRenderer
       ? new Set<number>([
           ...(selectedId ? [selectedId] : []),
-          ...batchSelectedIds,
           ...promptAgentContextSelection,
           ...(editingTextNodeId ? [editingTextNodeId] : []),
           ...(domDrag ? [domDrag.id] : []),
@@ -6962,6 +6869,7 @@ function updateEditor() {
 }
 
 function updateNodeJobProgressUi(node: FlowNode) {
+  if (pixiRenderer) draw(false);
   const element = nodeLayer.querySelector<HTMLElement>(
       `.flow-node[data-id="${node.id}"]`,
     ),
@@ -8618,20 +8526,29 @@ canvas.addEventListener("pointerdown", (e) => {
   pointer.y = pointer.startY = e.clientY;
   pointer.moved = false;
   pointer.draggingNode = null;
+  pointer.draggingGroup = null;
+  pointer.toggleBatchOnRelease = 0;
   pointer.blankCanvas = true;
   if (pixiRenderer) {
     const hit = hitNode(e.clientX, e.clientY);
     if (hit) {
       if (multiSelectMode) {
-        pointer.down = false;
+        if (!batchSelectedIds.has(hit.id)) {
+          pointer.down = false;
+          pointer.blankCanvas = false;
+          toggleBatchNode(hit.id);
+          return;
+        }
+        pointer.draggingNode = hit.id;
+        pointer.draggingGroup = new Set(batchSelectedIds);
+        pointer.toggleBatchOnRelease = hit.id;
         pointer.blankCanvas = false;
-        toggleBatchNode(hit.id);
-        return;
+      } else {
+        selectedId = hit.id;
+        pointer.draggingNode = hit.id;
+        pointer.blankCanvas = false;
+        updateEditor();
       }
-      selectedId = hit.id;
-      pointer.draggingNode = hit.id;
-      pointer.blankCanvas = false;
-      updateEditor();
     }
   }
   canvas.setPointerCapture(e.pointerId);
@@ -8671,11 +8588,9 @@ canvas.addEventListener("pointermove", (e) => {
   const dx = e.clientX - pointer.x,
     dy = e.clientY - pointer.y;
   if (pointer.draggingNode) {
-    canvasStore.moveNodeById(
-      pointer.draggingNode,
-      dx / camera.zoom,
-      dy / camera.zoom,
-    );
+    const draggingIds = pointer.draggingGroup ?? [pointer.draggingNode];
+    for (const id of draggingIds)
+      canvasStore.moveNodeById(id, dx / camera.zoom, dy / camera.zoom);
   } else {
     canvasStore.panCamera(dx, dy);
   }
@@ -8716,9 +8631,13 @@ canvas.addEventListener("pointerup", (e) => {
     selectedId = 0;
     updateEditor();
   }
+  if (pointer.toggleBatchOnRelease && !pointer.moved)
+    toggleBatchNode(pointer.toggleBatchOnRelease);
   scheduleSave();
   pointer.down = false;
   pointer.draggingNode = null;
+  pointer.draggingGroup = null;
+  pointer.toggleBatchOnRelease = 0;
   pointer.blankCanvas = false;
   canvasPanSelectedElement?.classList.remove("canvas-pan-selected");
   canvasPanSelectedElement = null;
@@ -8729,6 +8648,9 @@ canvas.addEventListener("pointercancel", () => {
   canvasPanSelectedElement?.classList.remove("canvas-pan-selected");
   canvasPanSelectedElement = null;
   pointer.down = false;
+  pointer.draggingNode = null;
+  pointer.draggingGroup = null;
+  pointer.toggleBatchOnRelease = 0;
   pointer.blankCanvas = false;
   if (connecting) {
     connecting = null;
@@ -8741,6 +8663,8 @@ function cancelCanvasPanOnPageInterruption() {
   if (!pointer.down && !stableCardPanMode) return;
   pointer.down = false;
   pointer.draggingNode = null;
+  pointer.draggingGroup = null;
+  pointer.toggleBatchOnRelease = 0;
   pointer.blankCanvas = false;
   canvasPanSelectedElement?.classList.remove("canvas-pan-selected");
   canvasPanSelectedElement = null;

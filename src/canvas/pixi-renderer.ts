@@ -184,6 +184,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       }
     }
     const live = new Set(snapshot.nodes.map((node) => node.id));
+    const selectedIds = new Set(snapshot.selectedIds);
     for (const [id, view] of this.cardViews)
       if (!live.has(id)) {
         this.detachMedia(view);
@@ -274,6 +275,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         node.status,
         node.progress,
         node.id === snapshot.selectedId,
+        selectedIds.has(node.id),
         snapshot.dark,
       ].join("|");
       if (view.key === key) continue;
@@ -288,19 +290,23 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         .fill({ color: snapshot.dark ? 0x121a1c : 0xf7f7f4, alpha: 1 })
         .stroke({
           color:
-            node.id === snapshot.selectedId
+            node.id === snapshot.selectedId || selectedIds.has(node.id)
               ? node.accent
               : snapshot.dark
                 ? 0x344247
                 : 0xc9d0cc,
-          width: node.id === snapshot.selectedId ? 2 : 1,
+          width:
+            node.id === snapshot.selectedId || selectedIds.has(node.id) ? 2 : 1,
         })
         .roundRect(0, 0, node.width, 4, 2)
         .fill({ color: node.accent, alpha: 0.75 })
         .circle(0, node.height / 2, 5)
         .circle(node.width, node.height / 2, 5)
         .fill({
-          color: node.id === snapshot.selectedId ? node.accent : 0x7b8985,
+          color:
+            node.id === snapshot.selectedId || selectedIds.has(node.id)
+              ? node.accent
+              : 0x7b8985,
         });
       if (node.status === "queued" || node.status === "running") {
         const progress = Math.max(0, Math.min(100, node.progress || 0));
