@@ -30,7 +30,6 @@ import { GenerationWorkflow } from "../services/generation-workflow";
 import { requestNodeIdLease } from "../services/node-id-lease";
 import { NotificationStreamController } from "../services/notification-stream";
 import { SessionActivityController } from "../services/session-activity";
-import { requestPromptAgent } from "../services/prompt-agent";
 import {
   appendRevisionNode,
   findOutputPosition,
@@ -123,6 +122,7 @@ import {
 } from "../ui/custom-api-controller";
 import { PromptAgentControls } from "../ui/prompt-agent-controls";
 import { PromptAgentContextController } from "../ui/prompt-agent-context";
+import { PromptAgentRequestController } from "../ui/prompt-agent-request-controller";
 import { PromptAgentAnimationController } from "../ui/prompt-agent-animation";
 import { createComicStudioShell } from "../ui/comic-studio-shell";
 import { ComicSidePanelController } from "../ui/comic-side-panel";
@@ -4264,6 +4264,7 @@ const promptAgentComicBusyProxy = document.createElement("button");
 promptAgentComicBusyProxy.className = "agent-comic-entry";
 promptAgentComicBusyProxy.hidden = true;
 promptAgentPanel.append(promptAgentComicBusyProxy);
+let promptAgentRequests: PromptAgentRequestController | null = null;
 const promptAgentControls = new PromptAgentControls({
   panel: promptAgentPanel,
   onComic: openComicStudio,
@@ -4276,7 +4277,7 @@ const promptAgentControls = new PromptAgentControls({
     }
     draw();
   },
-  isBusy: () => Boolean(promptAgentRequestController),
+  isBusy: () => Boolean(promptAgentRequests?.busy),
 });
 const promptAgentGoalInput = promptAgentControls.goalInput;
 const comicShell = createComicStudioShell();
@@ -4316,27 +4317,12 @@ const comicStudioView = new ComicStudioView(
   comicBriefPanel,
   positionComicBriefPanel,
 );
-const promptAgentModelSelect = promptAgentControls.modelSelect;
-let promptAgentResult: PromptAgentResult | null = null,
-  promptAgentAppliedNodeId = 0,
-  promptAgentUndo: (() => void) | null = null;
-let promptAgentRequestController: AbortController | null = null,
-  promptAgentRequestVersion = 0;
 function clearPromptAgentResult() {
-  promptAgentResult = null;
-  promptAgentUndo = null;
-  promptAgentAppliedNodeId = 0;
-  promptAgentPanel.classList.remove("prompt-result-open");
-  const article = promptAgentPanel.querySelector<HTMLElement>("article")!;
-  article.hidden = true;
-  article.querySelector<HTMLElement>("[data-agent-prompt]")!.textContent = "";
-  article.querySelector<HTMLElement>("[data-agent-summary]")!.textContent = "";
+  promptAgentRequests?.clearResult();
 }
 function closePromptAgent() {
   promptAgentAnimation.cancelFormation();
-  promptAgentRequestController?.abort();
-  promptAgentRequestController = null;
-  promptAgentRequestVersion++;
+  promptAgentRequests?.cancel();
   promptAgentPanel
     .querySelector(".agent-submit")
     ?.classList.remove("is-running");
@@ -4348,24 +4334,10 @@ function closePromptAgent() {
   draw();
 }
 function cancelPromptAgentRequest() {
-  if (!promptAgentRequestController) return;
-  promptAgentRequestController.abort();
-  promptAgentRequestController = null;
-  promptAgentRequestVersion++;
-  promptAgentPanel.querySelector<HTMLTextAreaElement>("textarea")!.disabled =
-    false;
-  promptAgentPanel.querySelector<HTMLButtonElement>(".agent-submit")!.disabled =
-    false;
-  promptAgentPanel.querySelector<HTMLButtonElement>(
-    "[data-agent-mode-trigger]",
-  )!.disabled = false;
-  promptAgentPanel.classList.remove("is-busy");
-  promptAgentPanel
-    .querySelector(".agent-submit")
-    ?.classList.remove("is-running");
+  promptAgentRequests?.cancel();
 }
-function playAgentMeteor() {
-  const node = nodes.find((item) => item.id === promptAgentAppliedNodeId);
+function playAgentMeteor(nodeId: number) {
+  const node = nodes.find((item) => item.id === nodeId);
   if (!node) return;
   const panel = promptAgentPanel.getBoundingClientRect(),
     start = {
@@ -4401,7 +4373,7 @@ function renderPromptAgentContext(reset = false) {
 const promptAgentAnimation = new PromptAgentAnimationController({
   trigger: promptAgentTrigger,
   panel: promptAgentPanel,
-  isBusy: () => Boolean(promptAgentRequestController),
+  isBusy: () => Boolean(promptAgentRequests?.busy),
   onBusy: () => showToast("提示词生成中，请等待完成", "warning"),
   onClose: closePromptAgent,
   onCancel: cancelPromptAgentRequest,
@@ -4813,286 +4785,33 @@ const promptAgentApplication = new PromptAgentApplicationController({
   loadVoices: (providerId) => { void loadTtsVoices(providerId); },
 });
 function applyPromptAgentPlan(result: PromptAgentResult) {
-  const applied = promptAgentApplication.applyPlan(result);
-  promptAgentAppliedNodeId = applied.appliedNodeId;
-  promptAgentUndo = applied.undo;
+  promptAgentApplication.applyPlan(result);
 }
-function applyPromptAgentVoice(result: PromptAgentResult) {
-  const applied = promptAgentApplication.applyVoice(result);
-  promptAgentAppliedNodeId = applied.appliedNodeId;
-  promptAgentUndo = applied.undo;
-}
-promptAgentPanel
-  .querySelector<HTMLButtonElement>(".agent-submit")!
-  .addEventListener("click", (event) => {
-    if (promptAgentControls.mode !== "voice") return;
-    event.stopImmediatePropagation();
-    const textarea =
-        promptAgentPanel.querySelector<HTMLTextAreaElement>("textarea")!,
-      idea = textarea.value.trim(),
-      submit =
-        promptAgentPanel.querySelector<HTMLButtonElement>(".agent-submit")!,
-      modeTrigger = promptAgentPanel.querySelector<HTMLButtonElement>(
-        "[data-agent-mode-trigger]",
-      )!,
-      status =
-        promptAgentPanel.querySelector<HTMLOutputElement>(".agent-status")!;
-    if (promptAgentRequestController) {
-      showToast("音色配置生成中，请等待完成", "warning");
-      return;
-    }
-    if (!idea) {
-      showToast("先描述角色和想要的声音", "warning");
-      return;
-    }
-    const controller = new AbortController(),
-      version = ++promptAgentRequestVersion;
-    promptAgentRequestController = controller;
-    textarea.disabled = true;
-    submit.disabled = true;
-    modeTrigger.disabled = true;
-    promptAgentPanel.classList.add("is-busy");
-    submit.classList.add("is-running");
-    submit.title = "正在匹配音色";
-    status.textContent = "正在理解角色并匹配中文音色…";
-    void (async () => {
-      try {
-        const result = await requestPromptAgent(
-          {
-            idea,
-            kind: "image",
-            promptMode: "voice",
-            complexity: "simple",
-            model: promptAgentModelSelect.value,
-          },
-          controller.signal,
-        );
-        if (version !== promptAgentRequestVersion) return;
-        if (!result.voiceConfig) throw new Error("没有匹配到可用中文音色");
-        promptAgentResult = result;
-        applyPromptAgentVoice(result);
-        playAgentMeteor();
-        status.textContent = "音色配置已创建";
-        textarea.value = "";
-        showToast(result.summary || "音色配置卡片已创建", "success");
-      } catch (error) {
-        if (controller.signal.aborted || version !== promptAgentRequestVersion)
-          return;
-        const message =
-          error instanceof Error ? error.message : "音色配置生成失败";
-        status.textContent = message;
-        showToast(message, "error");
-      } finally {
-        if (version === promptAgentRequestVersion) {
-          promptAgentRequestController = null;
-          textarea.disabled = false;
-          submit.disabled = false;
-          modeTrigger.disabled = false;
-          promptAgentPanel.classList.remove("is-busy");
-          submit.classList.remove("is-running");
-          submit.title = "";
-        }
-      }
-    })();
-  });
-promptAgentPanel
-  .querySelector<HTMLButtonElement>(".agent-submit")!
-  .addEventListener("click", async () => {
-    const textarea =
-        promptAgentPanel.querySelector<HTMLTextAreaElement>("textarea")!,
-      idea = textarea.value.trim(),
-      submit =
-        promptAgentPanel.querySelector<HTMLButtonElement>(".agent-submit")!,
-      status =
-        promptAgentPanel.querySelector<HTMLOutputElement>(".agent-status")!,
-      article = promptAgentPanel.querySelector<HTMLElement>("article")!,
-      selected = nodes.find((node) => node.id === selection.selectedId),
-      promptOnly = promptAgentControls.mode !== "create",
-      modeTrigger = promptAgentPanel.querySelector<HTMLButtonElement>(
-        "[data-agent-mode-trigger]",
-      )!,
-      comicEntry =
-        promptAgentPanel.querySelector<HTMLButtonElement>(
-          ".agent-comic-entry",
-        )!;
-    if (promptAgentRequestController) {
-      showToast("提示词生成中，请等待完成", "warning");
-      return;
-    }
-    if (!idea) {
-      showToast(
-        promptOnly ? "先描述需要生成提示词的镜头" : "先告诉我你想创造什么",
-        "warning",
-      );
-      return;
-    }
-    const controller = new AbortController(),
-      version = ++promptAgentRequestVersion;
-    promptAgentRequestController = controller;
-    const promptAgentKind =
-      promptAgentControls.mode === "agnes" ||
-      /视频|动态|动起来|镜头运动|运镜/.test(idea)
-        ? "video"
-        : "image";
-    const selectedContexts = selectedPromptAgentNodes(),
-      context = selectedContexts.map(
-        (node, index) =>
-          `${index === 0 ? "当前节点" : `参考节点${index + 1}`}「${node.title}」：${node.generationPrompt || node.body || "无文字说明"}`,
-      ),
-      visuals = selectedContexts
-        .filter((node) => node.kind === "image" && node.mediaUrl)
-        .map((node) => node.mediaUrl!);
-    textarea.disabled = true;
-    submit.disabled = true;
-    modeTrigger.disabled = true;
-    comicEntry.disabled = true;
-    promptAgentPanel.classList.add("is-busy");
-    submit.classList.add("is-running");
-    submit.title = "正在生成提示词";
-    status.textContent = promptOnly
-      ? "正在理解镜头并生成提示词…"
-      : "正在理解素材并规划画布…";
-    article.hidden = true;
-    promptAgentPanel.classList.remove("prompt-result-open");
-    try {
-      const result = await requestPromptAgent(
-        {
-            idea,
-            kind: promptAgentKind,
-            promptMode: promptAgentControls.mode,
-            complexity: promptAgentControls.complexity,
-            context,
-            visuals,
-            model: promptAgentModelSelect.value,
-            target: selected
-              ? {
-                  id: selected.id,
-                  kind: selected.kind,
-                  role: selected.role || "generator",
-                  hasMedia: Boolean(selected.mediaUrl),
-                  hasPrompt: Boolean(
-                    (selected.generationPrompt || selected.body).trim(),
-                  ),
-                }
-              : null,
-        },
-        controller.signal,
-      );
-      if (version !== promptAgentRequestVersion) return;
-      promptAgentResult = result;
-      if (!promptOnly) {
-        applyPromptAgentPlan(result);
-        playAgentMeteor();
-      } else {
-        promptAgentUndo = null;
-        promptAgentAppliedNodeId = 0;
-      }
-      article.querySelector<HTMLElement>("[data-agent-prompt]")!.textContent =
-        result.finalPrompt;
-      article.querySelector<HTMLElement>("[data-agent-summary]")!.textContent =
-        promptOnly
-          ? promptAgentControls.mode === "agnes"
-            ? "Agnes Video v2.0 提示词已生成"
-            : "通用提示词已生成"
-          : result.summary || "已根据你的素材准备好画布节点";
-      article.querySelector("small")!.textContent =
-        `${result.model} · ${promptOnly ? (promptAgentControls.mode === "agnes" ? "Agnes" : "通用") : (result.targetType || result.kind) === "video" ? "视频" : "图像"} · ${selectedContexts.length} 个参考`;
-      article.querySelector<HTMLButtonElement>("[data-agent-undo]")!.hidden =
-        promptOnly || !promptAgentUndo;
-      article.querySelector<HTMLButtonElement>("[data-agent-apply]")!.hidden =
-        !promptOnly ||
-        !selected ||
-        !["image", "video"].includes(selected.kind) ||
-        selected.role === "result";
-      article.querySelector<HTMLButtonElement>("[data-agent-locate]")!.hidden =
-        promptOnly;
-      article.hidden = false;
-      promptAgentPanel.classList.toggle("prompt-result-open", promptOnly);
-      status.textContent = promptOnly ? "提示词已生成" : "画布已更新";
-      textarea.value = "";
-      showToast(
-        promptOnly ? "提示词已生成" : result.summary || "创作节点已准备",
-        "success",
-      );
-    } catch (error) {
-      if (controller.signal.aborted || version !== promptAgentRequestVersion)
-        return;
-      const message =
-        error instanceof Error
-          ? error.message
-          : promptOnly
-            ? "提示词生成失败"
-            : "创作规划失败";
-      status.textContent = message;
-      showToast(message, "error");
-    } finally {
-      if (version === promptAgentRequestVersion) {
-        promptAgentRequestController = null;
-        textarea.disabled = false;
-        submit.disabled = false;
-        modeTrigger.disabled = false;
-        comicEntry.disabled = false;
-        promptAgentPanel.classList.remove("is-busy");
-        submit.classList.remove("is-running");
-        submit.title = "";
-      }
-    }
-  });
-promptAgentPanel
-  .querySelector("[data-agent-copy]")!
-  .addEventListener("click", async () => {
-    if (!promptAgentResult) return;
-    await navigator.clipboard.writeText(
-      decodePromptClipboardText(promptAgentResult.finalPrompt),
-    );
-    showToast("提示词已复制", "success");
-    dispersePromptAgent();
-  });
-promptAgentPanel
-  .querySelector("[data-agent-apply]")!
-  .addEventListener("click", () => {
-    if (!promptAgentResult) return;
-    const node = nodes.find((item) => item.id === selection.selectedId);
-    if (
-      !node ||
-      !["image", "video"].includes(node.kind) ||
-      node.role === "result"
-    ) {
-      showToast("请先选择可编辑的生成卡片", "warning");
-      return;
-    }
-    node.body = promptAgentResult.finalPrompt;
-    node.originalPrompt = promptAgentResult.finalPrompt;
-    updateEditor();
-    scheduleSave();
-    draw();
-    showToast("提示词已写入选中卡片", "success");
-    dispersePromptAgent();
-  });
-promptAgentPanel
-  .querySelector("[data-agent-undo]")!
-  .addEventListener("click", () => {
-    if (!promptAgentUndo) return;
-    promptAgentUndo();
-    promptAgentUndo = null;
-    promptAgentPanel.querySelector<HTMLButtonElement>(
-      "[data-agent-undo]",
-    )!.hidden = true;
-    promptAgentPanel.querySelector<HTMLOutputElement>(
-      ".agent-status",
-    )!.textContent = "已撤销刚才的画布操作";
-  });
-promptAgentPanel
-  .querySelector("[data-agent-locate]")!
-  .addEventListener("click", () => {
-    const node = nodes.find((item) => item.id === promptAgentAppliedNodeId);
+promptAgentRequests = new PromptAgentRequestController({
+  panel: promptAgentPanel,
+  controls: promptAgentControls,
+  getNodes: () => nodes,
+  getSelectedId: () => selection.selectedId,
+  getContexts: selectedPromptAgentNodes,
+  applyPlan: (result) => promptAgentApplication.applyPlan(result),
+  applyVoice: (result) => promptAgentApplication.applyVoice(result),
+  playMeteor: playAgentMeteor,
+  locateNode: (nodeId) => {
+    const node = nodes.find((item) => item.id === nodeId);
     if (!node) return;
     selection.selectedId = node.id;
     camera.x = -(node.x + node.width / 2) * camera.zoom;
     camera.y = -(node.y + node.height / 2) * camera.zoom;
     draw();
     closePromptAgent();
-  });
+  },
+  updateEditor,
+  persist: scheduleSave,
+  draw,
+  decodePrompt: decodePromptClipboardText,
+  disperse: dispersePromptAgent,
+  showToast: (message, tone) => showToast(message, tone),
+});
 window.addEventListener(
   "contextmenu",
   (event) => {
