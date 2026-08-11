@@ -96,12 +96,9 @@ import { syncVideoNodePanel } from "../nodes/video-node-sync";
 import { syncVoiceTtsAudioPanels } from "../nodes/voice-node-sync";
 import { syncVideoReferenceView } from "../nodes/video-reference-view";
 import {
-  nodeDomState,
-  nodeDomStateEquals,
-  normalizeNodeViewSize,
-  styleNodeEditor,
   syncBasicNodeContent,
 } from "../nodes/node-dom-state";
+import { synchronizeNodeDom } from "../nodes/node-dom-synchronizer";
 import { bindVoiceNodePanels } from "../nodes/voice-node-view";
 import { bindVideoNodePanel } from "../nodes/video-node-view";
 import {
@@ -3697,109 +3694,16 @@ function addMediaNode(
 }
 
 function syncDomNodes() {
-  nodeViewport.style.transform = `translate3d(${innerWidth / 2 + camera.x}px, ${innerHeight / 2 + camera.y}px,0) scale(${camera.zoom})`;
-  const requiredPixiDomIds = new Set<number>([
-          ...(selection.selectedId ? [selection.selectedId] : []),
-          ...(promptNodeEditor.editingId ? [promptNodeEditor.editingId] : []),
-          ...(domPointer.drag ? [domPointer.drag.id] : []),
-        ]),
-    allNodeIds = new Set(nodes.map((node) => String(node.id))),
-    live = new Set(
-      nodes
-        .filter((node) => requiredPixiDomIds.has(node.id))
-        .map((node) => String(node.id)),
-    );
-  mountedDomNodeIds.clear();
-  for (const id of live) mountedDomNodeIds.add(Number(id));
-  for (const id of pixiDetachedNodeCache.keys())
-    if (!allNodeIds.has(String(id))) {
-      pixiDetachedNodeCache.delete(id);
-      nodeDomStates.delete(id);
-    }
-  nodeLayer.querySelectorAll<HTMLElement>(".flow-node").forEach((element) => {
-    if (!live.has(element.dataset.id!)) {
-      const id = Number(element.dataset.id);
-      if (allNodeIds.has(String(id)))
-        cacheDetachedPixiNode(id, element);
-      else {
-        nodeDomStates.delete(id);
-        pixiDetachedNodeCache.delete(id);
-        element.remove();
-      }
-    }
-  });
-  const imageStates = new Map(
-      nodes
-        .filter((node) => node.kind === "image")
-        .map((node) => [
-          node.id,
-          `${node.status ?? ""}:${node.mediaUrl ?? ""}`,
-        ]),
-    ),
-    videoDependencyParts = new Map<number, string[]>();
-  for (const link of links) {
-    const imageState = imageStates.get(link.from);
-    if (imageState === undefined) continue;
-    const parts = videoDependencyParts.get(link.to),
-      part = `${link.from}:${link.inputOrder ?? ""}:${imageState}`;
-    if (parts) parts.push(part);
-    else videoDependencyParts.set(link.to, [part]);
-  }
-  for (const node of nodes) {
-    normalizeNodeViewSize(node);
-    if (!requiredPixiDomIds.has(node.id)) continue;
-    let element = nodeLayer.querySelector<HTMLElement>(
-      `.flow-node[data-id="${node.id}"]`,
-    );
-    if (!element) {
-      element = pixiDetachedNodeCache.get(node.id) ?? null;
-      if (element) {
-        pixiDetachedNodeCache.delete(node.id);
-        nodeLayer.append(element);
-      }
-    }
-    if (!element) {
-      element = createDomNode(node);
-      nodeLayer.append(element);
-      nodeDomStates.delete(node.id);
-    }
-    const nodeScreen = screen(node),
-      mediaMargin = 480,
-      onscreen =
-        nodeScreen.x + node.width * camera.zoom > -mediaMargin &&
-        nodeScreen.x < innerWidth + mediaMargin &&
-        nodeScreen.y + node.height * camera.zoom > -mediaMargin &&
-        nodeScreen.y < innerHeight + mediaMargin;
-    const workflowWaiting = Boolean(
-      node.agentAuto && node.status === "waiting",
-    );
-    const locked =
-      (nodeIsActivelyGenerating(node) || workflowWaiting) &&
-      !(node.kind === "video" && node.role !== "result");
-    const flags = {
-      selected: node.id === selection.selectedId,
-      batchSelected: selection.batchIds.has(node.id),
-      agentReference:
-        promptAgentSelecting && promptAgentContextSelection.has(node.id),
-      locked,
-      workflowWaiting,
-      onscreen,
-      editing: promptNodeEditor.editingId === node.id,
-      colorTheme,
-      videoDependency:
-        node.kind === "video"
-          ? (videoDependencyParts.get(node.id) || []).join("|")
-          : "",
-      swapSourceId:
-        videoReferenceSwapSelection?.videoId === node.id
-          ? videoReferenceSwapSelection.sourceId
-          : 0,
-    };
-    styleNodeEditor(element, node, flags);
-    const domState = nodeDomState(node, flags);
-    const previousState = nodeDomStates.get(node.id);
-    if (nodeDomStateEquals(previousState, domState)) continue;
-    nodeDomStates.set(node.id, domState);
+  synchronizeNodeDom({
+    viewport: nodeViewport, layer: nodeLayer, nodes, links, camera,
+    selectedId: selection.selectedId, batchIds: selection.batchIds,
+    editingId: promptNodeEditor.editingId, draggingId: domPointer.drag?.id ?? 0,
+    agentSelecting: promptAgentSelecting, agentIds: promptAgentContextSelection,
+    colorTheme, swap: videoReferenceSwapSelection, mountedIds: mountedDomNodeIds,
+    detached: pixiDetachedNodeCache, states: nodeDomStates, cacheDetached: cacheDetachedPixiNode,
+    createElement: createDomNode, isGenerating: nodeIsActivelyGenerating,
+    syncNode: (element, node, flags) => {
+      const { locked, workflowWaiting, onscreen } = flags;
     syncBasicNodeContent(element, node, flags.editing, defaultNodeCopy);
     syncVoiceTtsAudioPanels({
       element,
@@ -3862,9 +3766,9 @@ function syncDomNodes() {
       paintImage: paintNodeMedia,
       paintVideo: paintNodeVideo,
     });
-  }
+    },
+  });
 }
-
 function createDomNode(node: FlowNode) {
   // Always resolve the live object because authoritative canvas sync may
   // replace node instances while retaining the DOM view.
