@@ -49,7 +49,6 @@ import type {
 } from "../nodes/node-types";
 import { makeNodePublicId } from "../nodes/node-service";
 import { NodeLifecycleController } from "../nodes/node-lifecycle-controller";
-import { ImageAssetController } from "../nodes/image-asset-controller";
 import { GenerationGraph } from "../nodes/generation-graph";
 import { ConnectionRules } from "../nodes/connection-rules";
 import { decodePromptClipboardText, normalizePromptText } from "../nodes/prompt-text";
@@ -69,7 +68,6 @@ import { GenerationCapabilitiesController } from "../services/generation-capabil
 import { GenerationFinalizer } from "../services/generation-finalizer";
 import type { GenerationJob } from "../services/generation";
 import { ClientDiagnostics } from "../services/client-diagnostics";
-import { type LibraryAsset } from "../services/assets";
 import { ComicSessionController } from "../services/comic-session";
 import { ComicSessionState } from "../services/comic-session-state";
 import {
@@ -82,13 +80,8 @@ import {
 import { inferVoiceConfig } from "../nodes/voice-node";
 import type { ComicPlan, ComicShot } from "../nodes/comic-types";
 import { bindNodeConfigPanel } from "../ui/node-editor";
-import { AssetLibraryView } from "../ui/asset-library-view";
-import { AssetLibraryController } from "../ui/asset-library-controller";
-import { AssetTouchController } from "../ui/asset-touch-controller";
 import { AssetPreviewController } from "../ui/asset-preview";
-import { AssetUploadController } from "../ui/asset-upload-controller";
-import { AssetContextController } from "../ui/asset-context-controller";
-import { AssetBulkController } from "../ui/asset-bulk-controller";
+import { AssetLibraryFeature } from "../ui/asset-library-feature";
 import { SquarePanelView } from "../ui/square-panel";
 import { WorkspacePanelController } from "../ui/toolbar";
 import { WorkspaceNavigationCoordinator } from "../ui/workspace-navigation-coordinator";
@@ -2193,13 +2186,14 @@ const workspacePanels =
 const workspaceBrand = document.querySelector<HTMLElement>(".topbar .brand")!,
   mobileNavToggle =
     document.querySelector<HTMLButtonElement>("#mobile-nav-toggle")!;
+let assetLibraryFeature: AssetLibraryFeature;
 const workspacePanelController = new WorkspacePanelController(
   workspacePanels,
   panelBackdrop,
   workspaceBrand,
   mobileNavToggle,
   () => {
-    assetLibraryController?.setImageTarget(null);
+    assetLibraryFeature?.setImageTarget(null);
   },
 );
 function closeMobileWorkspaceMenu() {
@@ -2218,16 +2212,13 @@ function openWorkspacePanel(id: string, trigger: string) {
 new WorkspaceNavigationCoordinator({
   panels: workspacePanelController,
   brand: workspaceBrand,
-  hasAssets: () => assetLibraryController.hasAssets,
+  hasAssets: () => assetLibraryFeature.hasAssets,
   loadAssets: () => loadAssets(false),
   renderAssets,
   loadProjects: () => { void projectController.load(); },
   loadSquare: () => { void loadSquare(); },
   toggleTopbar: (opening) => closeTopbarMenus(opening ? "workspace" : undefined),
 }).bind();
-const assetUpload = document.querySelector<HTMLInputElement>("#asset-upload")!,
-  assetGrid = document.querySelector<HTMLElement>("#asset-grid")!,
-  assetCount = document.querySelector<HTMLElement>("#asset-count")!;
 const assetPreviewController = new AssetPreviewController({
   modal: document.querySelector<HTMLElement>("#asset-preview")!,
   image: document.querySelector<HTMLImageElement>("#preview-image")!,
@@ -2235,161 +2226,37 @@ const assetPreviewController = new AssetPreviewController({
   name: document.querySelector<HTMLElement>("#preview-name")!,
   closeButton: document.querySelector<HTMLElement>("#close-preview")!,
 });
-let assetLibraryController: AssetLibraryController;
 const ASSET_PAGE_SIZE = 36;
-const assetSearch = document.querySelector<HTMLInputElement>("#asset-search")!,
-  assetProjectFilter = document.querySelector<HTMLSelectElement>(
-    "#asset-project-filter",
-  )!,
-  assetTypeFilter =
-    document.querySelector<HTMLSelectElement>("#asset-type-filter")!,
-  assetSort = document.querySelector<HTMLSelectElement>("#asset-sort")!;
-assetTypeFilter.insertAdjacentHTML(
-  "beforeend",
-  '<option value="audio">音频</option>',
-);
-const assetContextController = new AssetContextController({
-  menu: document.querySelector<HTMLElement>("#asset-context-menu")!,
-  placeButton: document.querySelector<HTMLElement>("#asset-context-place")!,
-  previewButton: document.querySelector<HTMLElement>("#asset-context-preview")!,
-  publishButton: document.querySelector<HTMLElement>("#asset-context-publish")!,
-  publishLabel: document.querySelector<HTMLElement>("#asset-context-publish span")!,
-  deleteButton: document.querySelector<HTMLElement>("#asset-context-delete")!,
-  onPlace: (asset) =>
-    addMediaNode(
-      asset.url,
-      asset.name,
-      world({ x: innerWidth / 2, y: innerHeight / 2 }),
-      asset.kind,
-    ),
-  onPreview: (asset) =>
-    openAssetPreview(asset.url, asset.name, asset.kind),
-  onCloseWorkspace: closeWorkspacePanels,
-  onVisibilityChanged: () => {
-    homeShowcase.invalidate();
-  },
-  onDeleted: (asset) => imageCache.delete(asset.url),
-  reloadAssets: () => loadAssets(),
-  toast: (message, type) => showToast(message, type),
-});
-const openAssetContextAt = (asset: LibraryAsset, x: number, y: number) =>
-  assetContextController.open(asset, x, y);
-function assetForRenderedItem(item: HTMLElement) {
-  return assetLibraryController.resolveItem(item);
-}
-const assetTouchController = new AssetTouchController({
-  grid: assetGrid,
-  resolveAsset: assetForRenderedItem,
-  onContext: openAssetContextAt,
-});
-const assetBulkController = new AssetBulkController({
-  deleteButton: document.querySelector<HTMLButtonElement>(
-    "#asset-bulk-delete",
-  )!,
-  downloadButton: document.querySelector<HTMLButtonElement>(
-    "#asset-bulk-download",
-  )!,
-  getAssets: () => assetLibraryController.allAssets,
-  confirmDelete: async (count) =>
-    Boolean(
-      await askProjectDialog({
-        title: "删除所选资产？",
-        description: `将永久删除所选的 ${count} 项资产，此操作无法撤销。`,
-        confirm: "确认删除",
-        danger: true,
-      }),
-    ),
-  reloadAssets: () => loadAssets(),
-  toast: (message, type) => showToast(message, type),
-});
-const assetLibraryView = new AssetLibraryView({
-  grid: assetGrid,
-  count: assetCount,
-  pageSize: ASSET_PAGE_SIZE,
-  selectedIds: assetBulkController.selectedIds,
-  bulkDelete: document.querySelector<HTMLButtonElement>(
-    "#asset-bulk-delete",
-  )!,
-  bulkDownload: document.querySelector<HTMLButtonElement>(
-    "#asset-bulk-download",
-  )!,
-  isTouchContextBlocked: () => assetTouchController.isContextBlocked(),
-  onOpen: (asset, kind) => openAssetPreview(asset.url, asset.name, kind),
-  onAudio: (asset) => assetLibraryController.playAudio(asset),
-  onPickImage: (asset) => {
-    const targetId = assetLibraryController.consumeImageTarget();
-    if (targetId) attachAssetToImageNode(targetId, asset);
-    closeWorkspacePanels();
-  },
-  onContext: openAssetContextAt,
-});
-assetLibraryController = new AssetLibraryController({
-  search: assetSearch,
-  projectFilter: assetProjectFilter,
-  typeFilter: assetTypeFilter,
-  sort: assetSort,
-  viewButtons: document.querySelectorAll<HTMLButtonElement>("[data-asset-view]"),
-  getCurrentProjectId: () => currentProjectId,
-  getView: () => assetLibraryView,
-  showError: (message) => showToast(message, "error"),
-});
-const imageNodeUpload = document.createElement("input");
-imageNodeUpload.type = "file";
-imageNodeUpload.accept = "image/*";
-imageNodeUpload.hidden = true;
-document.body.append(imageNodeUpload);
-let imageAssetController: ImageAssetController;
-function attachAssetToImageNode(
-  nodeId: number,
-  asset: { url: string; name: string },
-) {
-  imageAssetController.attach(nodeId, asset);
-}
-function imageNodeAllowsSourceChange(nodeId: number) {
-  return imageAssetController.allowsSourceChange(nodeId);
-}
-const assetUploadController = new AssetUploadController({
-  input: assetUpload,
-  nodeInput: imageNodeUpload,
-  button: document.querySelector<HTMLButtonElement>("#upload-assets")!,
-  triggers: [
-    document.querySelector<HTMLElement>("#upload-assets")!,
-    document.querySelector<HTMLElement>("#dock-upload")!,
-  ],
-  getProjectId: () => currentProjectId,
-  getPastePosition: () => world({ x: innerWidth / 2, y: innerHeight / 2 }),
-  onAttachNode: attachAssetToImageNode,
-  onPlace: (position, asset) =>
-    addMediaNode(asset.url, asset.name, position, "image"),
-  onReload: () => loadAssets(),
-  onToast: (message, tone, detail) => showToast(message, tone, detail),
-});
-imageAssetController = new ImageAssetController({
+assetLibraryFeature = new AssetLibraryFeature({
   nodes,
-  select: (id) => { selection.selectedId = id; },
+  getProjectId: () => currentProjectId,
+  center: () => world({ x: innerWidth / 2, y: innerHeight / 2 }),
+  addMedia: addMediaNode,
+  preview: openAssetPreview,
+  closePanels: closeWorkspacePanels,
+  openPanel: () => openWorkspacePanel("#assets-panel", "#open-assets"),
+  invalidateShowcase: () => homeShowcase.invalidate(),
+  deleteCachedImage: (url) => { imageCache.delete(url); },
+  selectNode: (id) => { selection.selectedId = id; },
   save: scheduleSave,
   updateEditor,
   draw,
-  notify: (message, tone) => showToast(message, tone),
-  clearLibraryTarget: () => assetLibraryController.setImageTarget(null),
-  openUpload: (nodeId) => assetUploadController.openForNode(nodeId),
-  openLibraryPanel: () => openWorkspacePanel("#assets-panel", "#open-assets"),
-  setLibraryTarget: (nodeId) => assetLibraryController.setImageTarget(nodeId),
-  selectImageFilter: () => {
-    assetTypeFilter.value = "image";
-    assetProjectFilter.value = "current";
-  },
-  loadAssets: () => loadAssets(),
-  renderAssets,
+  confirmDelete: async (count) => Boolean(await askProjectDialog({
+    title: "删除所选资产？",
+    description: `将永久删除所选的 ${count} 项资产，此操作无法撤销。`,
+    confirm: "确认删除",
+    danger: true,
+  })),
+  toast: (message, tone, detail) => showToast(message, tone, detail),
 });
 function openAssetUploadAt(position: Point | null = null) {
-  assetUploadController.open(position);
+  assetLibraryFeature.openUploadAt(position);
 }
 function beginImageNodeUpload(nodeId: number) {
-  imageAssetController.beginUpload(nodeId);
+  assetLibraryFeature.beginNodeUpload(nodeId);
 }
 async function beginImageNodeLibrary(nodeId: number) {
-  await imageAssetController.beginLibrary(nodeId);
+  await assetLibraryFeature.beginNodeLibrary(nodeId);
 }
 const projectDialog = document.querySelector<HTMLElement>("#project-dialog")!;
 const askProjectDialog = createProjectDialog(projectDialog);
@@ -2424,10 +2291,10 @@ async function switchProject(projectId: string) {
   await projectSwitchController.switch(projectId);
 }
 async function loadAssets(render = true) {
-  await assetLibraryController.load(render);
+  await assetLibraryFeature.load(render);
 }
 function renderAssets() {
-  assetLibraryController.render();
+  assetLibraryFeature.render();
 }
 const squareGrid = document.querySelector<HTMLElement>("#square-grid")!,
   squareSearch = document.querySelector<HTMLInputElement>("#square-search")!;
@@ -2470,7 +2337,7 @@ function escapeHtml(value: string) {
 document.addEventListener("pointerdown", (event) => {
   const target = event.target as Node;
   if (!quickNodeMenu.contains(target)) closeQuickNodeMenu();
-  assetContextController.closeIfOutside(target);
+  assetLibraryFeature.closeContextIfOutside(target);
   document
     .querySelectorAll<HTMLDetailsElement>(
       ".image-config-panel details[open],.video-config-panel details[open],.voice-config-panel details[open]",
