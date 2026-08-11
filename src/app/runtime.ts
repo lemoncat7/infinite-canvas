@@ -87,10 +87,7 @@ import type {
   PromptAgentResult,
   PromptAgentStep,
 } from "../nodes/comic-types";
-import {
-  briefFromComicPlan,
-  stripCharactersFromScenePrompt,
-} from "../nodes/comic-format";
+import { stripCharactersFromScenePrompt } from "../nodes/comic-format";
 import { bindNodeConfigPanel } from "../ui/node-editor";
 import { AssetLibraryView } from "../ui/asset-library-view";
 import { AssetLibraryController } from "../ui/asset-library-controller";
@@ -1969,51 +1966,13 @@ function comicLabels() {
     .filter((node) => node.kind === "prompt" && node.body.trim())
     .sort((a, b) => b.id - a.id);
 }
-function unlinkComicLabel() {
-  comicState.linkedLabelId = 0;
-  comicState.originalIdea = "";
-  resetComicConversationState(true);
-  comicStudio.querySelector<HTMLElement>(".comic-plan")!.hidden = true;
-  renderComicLabelState();
-}
-function selectComicLabel(label: FlowNode) {
-  comicState.linkedLabelId = label.id;
-  comicState.originalIdea = label.body;
-  const stored = label.comicData as ComicPlan | undefined;
-  const saved =
-    stored?.shots && Array.isArray(stored.shots) ? structuredClone(stored) : null;
-  resetComicConversationState(true);
-  if (saved) {
-    comicState.plan = saved;
-    comicState.brief = briefFromComicPlan(saved);
-    renderComicPlan(saved);
-  } else {
-    comicState.plan = null;
-    comicState.brief = {
-      title: label.title.replace(/^漫剧方案\s*·\s*/, ""),
-      premise: label.body.replace(/\s+/g, " ").trim().slice(0, 360),
-      aspectRatio: "16:9",
-      openQuestions: ["继续对话，确认需要保留和调整的内容"],
-    };
-    comicStudio.querySelector<HTMLElement>(".comic-plan")!.hidden = true;
-  }
-  renderComicLabelState();
-  renderComicBrief();
-  const conversation = comicStudio.querySelector<HTMLElement>(
-      "[data-comic-conversation]",
-    )!,
-    notice = document.createElement("div");
-  notice.className = "comic-message assistant compact";
-  notice.innerHTML = `<i>◇</i><div><b>${saved ? "已恢复" : "已关联"}《${escapeHtml(label.title)}》</b><p>${saved ? "人物、剧情、风格和分镜已经载入，可以直接继续修改或续写。" : "标签内容已载入当前方案，可继续对话整理为完整剧本。"}</p></div>`;
-  conversation.insertBefore(notice, comicStudio.querySelector(".comic-plan"));
-  comicStudio.querySelector<HTMLTextAreaElement>("[data-comic-message]")!.focus();
-}
 const comicLabelController = new ComicLabelController({
   studio: comicStudio,
+  state: comicState,
   getLabels: comicLabels,
-  getLinkedId: () => comicState.linkedLabelId,
-  onSelect: selectComicLabel,
-  onUnlink: unlinkComicLabel,
+  resetConversation: resetComicConversationState,
+  renderPlan: (plan) => renderComicPlan(plan),
+  renderBrief: renderComicBrief,
 });
 function renderComicLabelState() {
   comicLabelController.renderState();
