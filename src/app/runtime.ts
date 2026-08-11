@@ -9,7 +9,7 @@ import { CanvasConnectionController } from "../canvas/connection-controller";
 import { CanvasInteractionController } from "../canvas/interaction-controller";
 import { CanvasInputFeature } from "../canvas/canvas-input-feature";
 import { BatchSelectionController } from "../canvas/batch-selection-controller";
-import { CanvasHistoryController } from "../canvas/history-controller";
+import { CanvasHistoryFeature } from "../canvas/canvas-history-feature";
 import { LinkInteractionView } from "../canvas/link-interaction-view";
 import { GenerationPoller } from "../services/generation-poller";
 import { GenerationWorkflow } from "../services/generation-workflow";
@@ -222,50 +222,22 @@ topbarMenus.register("task", () => taskMonitorController.close());
 topbarMenus.register("presence", () =>
   document.querySelector("#online-status-panel")?.classList.remove("open"),
 );
-const undoButton = document.querySelector<HTMLButtonElement>("#dock-history")!,
-  redoButton = document.createElement("button");
-function showHistoryShortcutGuide(kind: "undo" | "redo") {
-  const storageKey = `flow-history-guide:${kind}`;
-  if (sessionStorage.getItem(storageKey)) return;
-  sessionStorage.setItem(storageKey, "1");
-  showCanvasGuide(
-    kind === "undo"
-      ? {
-          key: "history-undo-guide",
-          title: "画布回溯",
-          detail: "可以按 Ctrl/⌘ + Z 快速撤销上一步。",
-          tone: "online",
-          priority: 28,
-          duration: 4200,
-        }
-      : {
-          key: "history-redo-guide",
-          title: "已重做上一步",
-          detail: "可以按 Ctrl/⌘ + Shift + Z 恢复刚才撤销的操作。",
-          tone: "online",
-          priority: 28,
-          duration: 4600,
-        },
-  );
-}
-const canvasHistory = new CanvasHistoryController({
+const canvasHistory = new CanvasHistoryFeature({
   nodes,
   links,
-  undoButton,
-  redoButton,
-  projectId: () => currentProjectId,
-  nextId: () => canvasNodeIds.nextId,
+  getProjectId: () => currentProjectId,
+  getNextId: () => canvasNodeIds.nextId,
   setNextId: (value) => { canvasNodeIds.nextId = value; },
-  selectedId: () => selection.selectedId,
+  getSelectedId: () => selection.selectedId,
   setSelectedId: (value) => { selection.selectedId = value; },
   clearBatch: () => selection.batchIds.clear(),
   clearPromptEditing: () => { promptNodeEditor.editingId = 0; },
   generationActive: canvasHasActiveGeneration,
-  update: updateEditor,
+  updateEditor,
   draw,
   save: saveCanvas,
   toast: (message) => showToast(message, "warning"),
-  guide: showHistoryShortcutGuide,
+  showGuide: showCanvasGuide,
 });
 function resetCanvasHistory(restore = true) { canvasHistory.reset(restore); }
 function queueCanvasHistory() { canvasHistory.queue(); }
