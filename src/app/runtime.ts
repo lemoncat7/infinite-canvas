@@ -111,6 +111,7 @@ import {
   UserMenuController,
   type AuthUser,
 } from "../ui/user-menu-controller";
+import { AuthModalController } from "../ui/auth-modal-controller";
 import { ComicSidePanelController } from "../ui/comic-side-panel";
 import { ComicStudioView } from "../ui/comic-studio";
 import { ComicLabelController } from "../ui/comic-labels";
@@ -1807,8 +1808,24 @@ let customApiModels: CustomApiModel[] = [];
 let appNotifications: AppNotification[] = [];
 let autoPopupCheckedUserId = "";
 let authReady = false;
-let authMode: "login" | "register" = "login";
 let showcaseLoaded = false;
+const authModalController = new AuthModalController({
+  modal: homeLoginModal,
+  onAuthenticated: async (user, completedMode) => {
+    authUser = user;
+    authReady = true;
+    lastUserActivity = Date.now();
+    scheduleIdleLogout();
+    renderAuthenticatedUser();
+    if (!(await synchronizeCanvasAfterAuthentication()))
+      throw new Error("登录成功，但画布未能完整同步，请重试");
+    if (completedMode === "register") {
+      location.hash = "#/canvas";
+      await Promise.all([loadAssets(), loadCustomApiModels()]);
+      applyAppRoute();
+    } else showToast(`欢迎回来，${user.name}`, "success");
+  },
+});
 const workspaceBootStatus = document.createElement("div");
 workspaceBootStatus.className = "workspace-boot-status";
 workspaceBootStatus.innerHTML = "<i></i><span>正在检测登录状态</span>";
@@ -1851,46 +1868,7 @@ function requestWorkspace() {
   else openAuth("register");
 }
 function openAuth(mode: "login" | "register") {
-  setAuthMode(mode);
-  homeLoginModal.classList.add("open");
-  homeLoginModal
-    .querySelector<HTMLInputElement>('input[name="email"]')!
-    .focus();
-}
-function setAuthMode(mode: "login" | "register") {
-  authMode = mode;
-  homeLoginModal
-    .querySelectorAll<HTMLElement>("[data-auth-mode]")
-    .forEach((button) =>
-      button.classList.toggle("active", button.dataset.authMode === mode),
-    );
-  homeLoginModal
-    .querySelectorAll<HTMLElement>("[data-register-field]")
-    .forEach((field) => {
-      field.hidden = mode !== "register";
-    });
-  const name =
-      homeLoginModal.querySelector<HTMLInputElement>('input[name="name"]')!,
-    inviteCode = homeLoginModal.querySelector<HTMLInputElement>(
-      'input[name="inviteCode"]',
-    )!,
-    account = homeLoginModal.querySelector<HTMLInputElement>(
-      'input[name="email"]',
-    )!;
-  name.required = mode === "register";
-  inviteCode.required = mode === "register";
-  name.parentElement!.firstChild!.textContent = "用户名";
-  name.placeholder = "用于登录，例如 creator_01";
-  account.type = mode === "register" ? "email" : "text";
-  account.autocomplete = mode === "register" ? "email" : "username";
-  account.placeholder =
-    mode === "register" ? "name@example.com" : "输入用户名或邮箱";
-  account.parentElement!.firstChild!.textContent =
-    mode === "register" ? "邮箱" : "用户名 / 邮箱";
-  homeLoginModal.querySelector<HTMLElement>(".home-login-submit")!.textContent =
-    mode === "register" ? "使用邀请码创建账号" : "登录";
-  homeLoginModal.querySelector<HTMLElement>(".home-login-error")!.textContent =
-    "";
+  authModalController.open(mode);
 }
 function renderAuthenticatedUser() {
   userMenuController.render(authUser);
@@ -1912,7 +1890,11 @@ async function ensureCurrentUserProject() {
 }
 async function synchronizeCanvasAfterAuthentication(force = false) {
   if (!authUser) return false;
-  if (!force && location.hash !== "#/canvas" && authMode === "login")
+  if (
+    !force &&
+    location.hash !== "#/canvas" &&
+    authModalController.mode === "login"
+  )
     return ensureCurrentUserProject();
   await ensurePixiRenderer();
   canvasSaveBlocked = true;
@@ -2167,64 +2149,6 @@ homePage.addEventListener(
   { passive: true },
 );
 setHomeSceneTarget(0);
-homeLoginModal
-  .querySelector(".home-login-close")!
-  .addEventListener("click", () => homeLoginModal.classList.remove("open"));
-homeLoginModal.addEventListener("click", (event) => {
-  if (event.target === homeLoginModal) homeLoginModal.classList.remove("open");
-});
-homeLoginModal
-  .querySelectorAll<HTMLElement>("[data-auth-mode]")
-  .forEach((button) =>
-    button.addEventListener("click", () =>
-      setAuthMode(button.dataset.authMode as "login" | "register"),
-    ),
-  );
-homeLoginModal
-  .querySelector("form")!
-  .addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget as HTMLFormElement,
-      submit = form.querySelector<HTMLButtonElement>(".home-login-submit")!,
-      error = form.querySelector<HTMLOutputElement>(".home-login-error")!,
-      data = new FormData(form),
-      completedMode = authMode;
-    submit.disabled = true;
-    error.textContent = "";
-    try {
-      const response = await apiFetch(`/api/auth/${completedMode}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          name: data.get("name"),
-          inviteCode: data.get("inviteCode"),
-          email: data.get("email"),
-          password: data.get("password"),
-        }),
-      });
-      const result = (await response.json()) as AuthUser & { error?: string };
-      if (!response.ok) throw new Error(result.error || "登录失败");
-      authUser = result;
-      authReady = true;
-      lastUserActivity = Date.now();
-      scheduleIdleLogout();
-      renderAuthenticatedUser();
-      if (!(await synchronizeCanvasAfterAuthentication()))
-        throw new Error("登录成功，但画布未能完整同步，请重试");
-      homeLoginModal.classList.remove("open");
-      form.reset();
-      if (completedMode === "register") {
-        location.hash = "#/canvas";
-        await Promise.all([loadAssets(), loadCustomApiModels()]);
-        applyAppRoute();
-      } else showToast(`欢迎回来，${result.name}`, "success");
-    } catch (reason) {
-      error.textContent =
-        reason instanceof Error ? reason.message : "登录失败，请重试";
-    } finally {
-      submit.disabled = false;
-    }
-  });
 homePreview
   .querySelector(":scope > button")!
   .addEventListener("click", closeHomePreview);
