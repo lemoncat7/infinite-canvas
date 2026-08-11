@@ -1,12 +1,11 @@
 import "../style.css";
-import { CanvasPersistenceFeature } from "../canvas/canvas-persistence-feature";
+import { CanvasPersistenceRuntimeFeature } from "../canvas/canvas-persistence-runtime-feature";
 import { CanvasRenderingRuntimeFeature } from "../canvas/canvas-rendering-runtime-feature";
 import { CanvasInputFeature } from "../canvas/canvas-input-feature";
 import { CanvasBatchFeature } from "../canvas/canvas-batch-feature";
 import { CanvasHistoryFeature } from "../canvas/canvas-history-feature";
 import { CanvasMediaFeature } from "../canvas/canvas-media-feature";
 import type {
-  FlowLink,
   FlowNode,
   GenerationCapabilities,
   NodeKind,
@@ -64,7 +63,7 @@ const {
   store: canvasStore, camera, nodes, links, interaction, pointer, selection,
   promptEditor: promptNodeEditor, connection,
 } = foundation;
-let canvasPersistence: CanvasPersistenceFeature;
+let canvasPersistence: CanvasPersistenceRuntimeFeature;
 const canvasNodeIds = foundation.nodeIds;
 let backgroundMode = foundation.backgroundMode;
 let colorTheme = foundation.colorTheme;
@@ -111,7 +110,7 @@ const canvasHistory = new CanvasHistoryFeature({
   setSelectedId: (value) => { selection.selectedId = value; },
   clearBatch: () => selection.batchIds.clear(),
   clearPromptEditing: () => { promptNodeEditor.editingId = 0; },
-  generationActive: canvasHasActiveGeneration,
+  generationActive: () => nodeRuntime.lifecycle.hasActiveGeneration(),
   updateEditor,
   draw,
   save: saveCanvas,
@@ -136,7 +135,7 @@ const canvasBatch = new CanvasBatchFeature({
   isMultiSelectMode: () => selection.multiSelectMode,
   screen: (point) => screen(point),
   viewportWidth: () => innerWidth,
-  generationActive: canvasHasActiveGeneration,
+  generationActive: () => nodeRuntime.lifecycle.hasActiveGeneration(),
   enqueue: (ids) => generationRuntime.enqueue(ids),
   exitMode: () => marqueeController.exit(),
   updateEditor,
@@ -180,7 +179,7 @@ const canvasInput = new CanvasInputFeature({
   batchToolbar: canvasBatch.toolbar,
   draw,
   save: scheduleSave,
-  setEditing: () => setSaveState("editing", "编辑中…"),
+  setEditing: () => canvasPersistence.setEditing(),
   updateEditor,
   syncDraggedElements: (ids) => nodeViews.syncDraggedElements(ids, nodes),
   refreshBatchSelection: () => canvasBatch.refresh(),
@@ -239,7 +238,7 @@ const nodeViews = new CanvasNodeViewFeature({
   getAuthUser: () => authWorkspace.user,
   getCustomModels: () => accountTools.models,
   getCapabilities: () => generationCapabilities,
-  isGenerating: nodeIsActivelyGenerating,
+  isGenerating: (node) => nodeRuntime.lifecycle.isActive(node),
   defaultCopy: defaultNodeCopy,
   getProviders: () => ttsFeature.catalog.providers,
   getVoices: () => ttsFeature.catalog.voicesByProvider,
@@ -254,7 +253,7 @@ const nodeViews = new CanvasNodeViewFeature({
   draw,
   scheduleSave,
   commitHistory: () => canvasHistory.queue(),
-  setEditingState: () => setSaveState("editing", "编辑中…"),
+  setEditingState: () => canvasPersistence.setEditing(),
   editPrompt: enterTextEdit,
   previewMedia: (node) =>
     assetRuntime.openPreview(node.mediaUrl!, node.title, node.kind as "image" | "video"),
@@ -397,29 +396,11 @@ authWorkspace.applyRoute();
 
 const screen = (point: Point) => renderingRuntime.screen(point);
 const world = (point: Point) => renderingRuntime.world(point);
-function nodeIsActivelyGenerating(node: FlowNode | undefined) {
-  return nodeRuntime.lifecycle.isActive(node);
-}
-function canvasHasActiveGeneration() {
-  return nodeRuntime.lifecycle.hasActiveGeneration();
-}
-function orderedImageInputs(targetId: number) {
-  return nodeRuntime.lifecycle.orderedImageInputs(targetId);
-}
-function imageInputOrder(link: FlowLink) {
-  return nodeRuntime.lifecycle.imageInputOrder(link);
-}
-function orderedTargetLinks(targetId: number) {
-  return nodeRuntime.lifecycle.orderedTargetLinks(targetId);
-}
 function canvasInteractionActive() {
   return Boolean(pointer.down || domPointer.drag || interaction.marquee?.active || touchPinch.active);
 }
 function hitNode(sx: number, sy: number) {
   return renderingRuntime.connection.hitNode(sx, sy);
-}
-function hitPort(sx: number, sy: number, radius = 12, excludeNodeId?: number) {
-  return renderingRuntime.connection.hitPort(sx, sy, radius, excludeNodeId);
 }
 function updateConnectionPointer(sx: number, sy: number) {
   renderingRuntime.connection.updatePointer(sx, sy);
@@ -480,7 +461,7 @@ nodeRuntime = new CanvasNodeRuntimeFeature({
   hasConnectedVoice: (node) => Boolean(ttsFeature.connectedVoice(node)),
   pixiActive: renderingRuntime.render.active,
   updateEditor,
-  setEditingState: () => setSaveState("editing", "编辑中…"),
+  setEditingState: () => canvasPersistence.setEditing(),
   save: scheduleSave,
   draw,
   updateTasks: () => canvasTasks.update(),
@@ -527,19 +508,14 @@ function updateNodeJobProgressUi(node: FlowNode) {
 }
 
 function scheduleSave(recordHistory = true) {
-  canvasPersistence.schedule(() => canvasHistory.queue(), recordHistory);
+  canvasPersistence.schedule(recordHistory);
 }
 
 function saveCanvas() { return canvasPersistence.save(); }
-function setSaveState(
-  state: "editing" | "saving" | "saved" | "error",
-  label: string,
-) {
-  saveState.dataset.state = state;
-  saveState.textContent = label;
-}
-
-canvasPersistence = new CanvasPersistenceFeature({
+canvasPersistence = new CanvasPersistenceRuntimeFeature(saveState, {
+  reset: (restore) => canvasHistory.reset(restore),
+  queue: () => canvasHistory.queue(),
+}, {
   clientId: foundation.syncClientId,
   nodes,
   links,
@@ -571,11 +547,8 @@ canvasPersistence = new CanvasPersistenceFeature({
     tone: "offline",
     priority: 110,
   }),
-  setState: setSaveState,
   updateEditor,
   draw,
-  resetHistory: (restore) => canvasHistory.reset(restore),
-  queueHistory: () => canvasHistory.queue(),
   pollJob: (node) => generationRuntime.poll(node),
   runWorkflow: () => generationRuntime.run(),
   clearButton: document.querySelector<HTMLElement>("#dock-clear")!,
@@ -640,7 +613,7 @@ const canvasControls: CanvasControlsFeature = new CanvasControlsFeature({
     pointerDown: () => pointer.down,
     multiSelect: () => selection.multiSelectMode,
     hitLink,
-    generationActive: canvasHasActiveGeneration,
+    generationActive: () => nodeRuntime.lifecycle.hasActiveGeneration(),
     contextSuppressed: marqueeController.isContextSuppressed,
     save: scheduleSave,
     draw,
