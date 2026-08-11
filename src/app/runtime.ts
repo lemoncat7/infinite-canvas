@@ -44,8 +44,8 @@ import type {
 import { createNode, makeNodePublicId } from "../nodes/node-service";
 import { downloadNodeImage as downloadNodeImageFile } from "../nodes/node-download";
 import { PromptNodeController } from "../nodes/prompt-node";
-import { synthesizeTts } from "../services/tts";
 import { TtsCatalogController } from "../services/tts-catalog";
+import { TtsGenerationController } from "../nodes/tts-generation-controller";
 import { apiFetch } from "../services/api";
 import {
   hydrateGenerationPrompts,
@@ -254,7 +254,6 @@ const interaction = new CanvasInteractionController(),
 const selection = new CanvasSelectionController();
 let videoReferenceSwapSelection: { videoId: number; sourceId: number } | null =
   null;
-const activeVoicePreviews = new Map<number, HTMLAudioElement>();
 const promptNodeEditor = new PromptNodeController();
 let nextId = 1;
 let canvasNodeIdBlockEnd = 0;
@@ -3553,150 +3552,26 @@ async function generate(sourceOverride?: FlowNode) {
   }
 }
 
-function connectedVoiceNode(ttsNode: FlowNode) {
-  return links
-    .filter((link) => link.to === ttsNode.id)
-    .map((link) => nodes.find((node) => node.id === link.from))
-    .find((node): node is FlowNode => node?.kind === "voice");
+const ttsGenerationController = new TtsGenerationController({
+  nodes,
+  links,
+  getProjectId: () => currentProjectId,
+  allocateNodeId: allocateCanvasNodeId,
+  updateEditor,
+  draw,
+  save: scheduleSave,
+  reloadAssets: () => loadAssets(false),
+  toast: (message, tone) => showToast(message, tone),
+});
+function connectedVoiceNode(source: FlowNode) {
+  return ttsGenerationController.connectedVoice(source);
 }
-async function previewVoice(voice: FlowNode) {
-  const existing = activeVoicePreviews.get(voice.id);
-  if (existing) {
-    existing.pause();
-    existing.removeAttribute("src");
-    existing.load();
-    activeVoicePreviews.delete(voice.id);
-    showToast("已停止试听", "info");
-    return;
-  }
-  const params = new URLSearchParams({
-      projectId: currentProjectId,
-      providerId: voice.voiceSettings?.providerId || "easyvoice-local",
-      text: `${voice.voiceSettings?.roleName || "角色"}的声音已经准备好了。`,
-      voiceId: voice.voiceSettings?.voiceId || "zh-CN-XiaoxiaoNeural",
-      speed: String(voice.voiceSettings?.defaultSpeed ?? 1),
-      pitch: String(voice.voiceSettings?.pitch ?? 0),
-      volume: String(voice.voiceSettings?.volume ?? 1),
-      t: String(Date.now()),
-    }),
-    audio = new Audio(`/api/tts/preview?${params}`);
-  audio.preload = "none";
-  activeVoicePreviews.set(voice.id, audio);
-  showToast("正在连接流式试听", "info");
-  try {
-    await new Promise<void>((resolve, reject) => {
-      audio.onplaying = () => showToast("正在流式试听", "success");
-      audio.onended = () => resolve();
-      audio.onerror = () => reject(new Error("流式试听加载失败"));
-      void audio.play().catch(reject);
-    });
-  } catch (error) {
-    showToast(error instanceof Error ? error.message : "试听失败", "error");
-  } finally {
-    audio.pause();
-    audio.removeAttribute("src");
-    audio.load();
-    if (activeVoicePreviews.get(voice.id) === audio)
-      activeVoicePreviews.delete(voice.id);
-  }
+function previewVoice(voice: FlowNode) {
+  return ttsGenerationController.preview(voice);
 }
-async function generateTts(source: FlowNode) {
-  const voice = connectedVoiceNode(source);
-  if (!voice) {
-    showToast("请先连接一张语音配置卡片", "warning");
-    return;
-  }
-  if (!source.body.trim()) {
-    showToast("请先填写需要生成的文本", "warning");
-    return;
-  }
-  if (source.status === "running" || source.status === "queued") return;
-  source.status = "running";
-  source.progress = 15;
-  updateEditor();
-  draw();
-  try {
-    const response = await synthesizeTts(currentProjectId, source, voice, source.body.trim()),
-      result = (await response.json()) as {
-        assetUrl: string;
-        duration?: number;
-        provider?: string;
-        voiceId?: string;
-      };
-    let audioNode = links
-      .filter((link) => link.from === source.id)
-      .map((link) => nodes.find((node) => node.id === link.to))
-      .find((node): node is FlowNode => node?.kind === "audio");
-    if (audioNode) {
-      audioNode.title = `音频 · ${voice.voiceSettings?.roleName || "语音"}`;
-      audioNode.body = source.body;
-      audioNode.model =
-        result.provider || voice.voiceSettings?.providerId || "easyvoice-local";
-      audioNode.mediaUrl = result.assetUrl;
-      audioNode.status = "succeeded";
-      audioNode.progress = 100;
-      audioNode.ttsSettings = {
-        ...(source.ttsSettings || {}),
-        duration: Number(result.duration) || undefined,
-      };
-    } else {
-      const id = allocateCanvasNodeId();
-      if (id === null) throw new Error("无法创建音频结果卡片");
-      const position = findOutputPosition(source, nodes);
-      audioNode = {
-        id,
-        publicId: makeNodePublicId("audio"),
-        kind: "audio",
-        role: "result",
-        sourceNodeId: source.id,
-        x: position.x,
-        y: position.y,
-        width: 300,
-        height: 180,
-        title: `音频 · ${voice.voiceSettings?.roleName || "语音"}`,
-        body: source.body,
-        accent: "#8b9fe8",
-        model:
-          result.provider ||
-          voice.voiceSettings?.providerId ||
-          "easyvoice-local",
-        mediaUrl: result.assetUrl,
-        status: "succeeded",
-        progress: 100,
-        ttsSettings: {
-          ...(source.ttsSettings || {}),
-          duration: Number(result.duration) || undefined,
-        },
-      };
-      nodes.push(audioNode);
-      links.push({
-        from: source.id,
-        to: audioNode.id,
-        fromSide: "right",
-        toSide: "left",
-      });
-    }
-    source.status = "succeeded";
-    source.progress = 100;
-    scheduleSave();
-    draw();
-    void loadAssets(false);
-    showToast("语音已生成并加入资产库", "success");
-  } catch (error) {
-    source.status = "failed";
-    source.progress = 0;
-    showToast(error instanceof Error ? error.message : "语音生成失败", "error");
-  } finally {
-    if (source.status === "running") {
-      source.status = "idle";
-      source.progress = 0;
-    }
-    updateEditor();
-    scheduleSave();
-    draw();
-  }
+function generateTts(source: FlowNode) {
+  return ttsGenerationController.generate(source);
 }
-
 function createRevisionNode(source: FlowNode) {
   const id = allocateCanvasNodeId();
   if (id === null) return null;
