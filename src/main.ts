@@ -3,6 +3,16 @@ import { CanvasPerformanceMonitor } from "./canvas/performance-monitor";
 import { CanvasSpatialIndex } from "./canvas/spatial-index";
 import { CanvasStore } from "./canvas/store";
 import { MediaLruCache } from "./canvas/media-cache";
+import type {
+  FlowLink,
+  FlowNode,
+  GenerationCapabilities,
+  NodeKind,
+  Point,
+  PortSide,
+  TtsProviderOption,
+  TtsVoiceOption,
+} from "./nodes/node-types";
 
 const canvasPerformance = new CanvasPerformanceMonitor(
   new URLSearchParams(location.search).has("canvasPerf"),
@@ -38,89 +48,6 @@ function ensurePixiRenderer() {
   return pixiRendererPromise;
 }
 
-type Point = { x: number; y: number };
-type NodeKind =
-  "prompt" | "image" | "video" | "note" | "voice" | "tts" | "audio";
-type PortSide = "top" | "right" | "bottom" | "left";
-type FlowNode = Point & {
-  id: number;
-  publicId?: string;
-  kind: NodeKind;
-  role?: "generator" | "result";
-  sourceNodeId?: number;
-  width: number;
-  height: number;
-  title: string;
-  body: string;
-  originalPrompt?: string;
-  corePrompt?: string;
-  promptProfile?:
-    "character" | "prop" | "scene" | "storyboard" | "composite" | "manual";
-  styleConstraint?: string;
-  formConstraint?: string;
-  continuityConstraint?: string;
-  crowdConstraint?: "required" | "forbidden";
-  generationPrompt?: string;
-  accent: string;
-  model?: string;
-  jobId?: string;
-  progress?: number;
-  status?: string;
-  mediaUrl?: string;
-  fontScale?: number;
-  agentAuto?: boolean;
-  comicData?: unknown;
-  imageSettings?: { size?: string; quality?: string; background?: string };
-  videoSettings?: {
-    seconds?: string;
-    resolution?: string;
-    aspectRatio?: string;
-    referenceMode?: "keyframes" | "references";
-    seed?: number;
-  };
-  videoResult?: {
-    seconds?: string;
-    size?: string;
-    sizeMapping?: Record<string, unknown>;
-    videoId?: string;
-  };
-  voiceSettings?: {
-    providerId?: string;
-    voiceId?: string;
-    language?: string;
-    defaultSpeed?: number;
-    pitch?: number;
-    volume?: number;
-    roleName?: string;
-    tone?: string;
-  };
-  ttsSettings?: {
-    emotion?: string;
-    speed?: number;
-    volume?: number;
-    format?: "wav" | "mp3" | "opus" | "flac" | "aac";
-    duration?: number;
-  };
-};
-type FlowLink = {
-  from: number;
-  to: number;
-  fromSide: PortSide;
-  toSide: PortSide;
-  inputOrder?: number;
-};
-type GenerationCapabilities = {
-  image?: {
-    defaultModel: string;
-    localFallback?: { model: string; available: boolean };
-  };
-  video?: {
-    defaultModel: string;
-    seconds: { min: number; max: number; default: number };
-    resolutions: string[];
-    aspectRatios: string[];
-  };
-};
 let generationCapabilities: GenerationCapabilities = {
   image: { defaultModel: "gpt-image-2" },
   video: {
@@ -129,22 +56,6 @@ let generationCapabilities: GenerationCapabilities = {
     resolutions: ["480p", "720p", "1080p"],
     aspectRatios: ["1:1", "4:3", "16:9"],
   },
-};
-type TtsVoiceOption = {
-  id: string;
-  name: string;
-  language?: string;
-  gender?: string;
-};
-type TtsProviderOption = {
-  provider: string;
-  name: string;
-  available: boolean;
-  local: boolean;
-  streaming: boolean;
-  formats: string[];
-  emotion: boolean;
-  voiceCloning: boolean;
 };
 let ttsProviders: TtsProviderOption[] = [];
 const ttsVoicesByProvider = new Map<string, TtsVoiceOption[]>(),
