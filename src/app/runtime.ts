@@ -4,12 +4,7 @@ import { CanvasRenderingRuntimeFeature } from "../canvas/canvas-rendering-runtim
 import { CanvasInputFeature } from "../canvas/canvas-input-feature";
 import { CanvasBatchFeature } from "../canvas/canvas-batch-feature";
 import { CanvasHistoryFeature } from "../canvas/canvas-history-feature";
-import type {
-  FlowNode,
-  GenerationCapabilities,
-  NodeKind,
-  Point,
-} from "../nodes/node-types";
+import type { GenerationCapabilities, Point } from "../nodes/node-types";
 import { decodePromptClipboardText, normalizePromptText } from "../nodes/prompt-text";
 import { CanvasNodeRuntimeFeature } from "../nodes/canvas-node-runtime-feature";
 import { TtsFeature } from "../services/tts-feature";
@@ -31,7 +26,7 @@ import { inferVoiceConfig } from "../nodes/voice-node";
 import { bindNodeConfigPanel } from "../ui/node-editor";
 import { CanvasTaskFeature } from "../ui/canvas-task-feature";
 import { TopbarMenuCoordinator } from "../ui/topbar-menu-coordinator";
-import { CanvasControlsFeature } from "../ui/canvas-controls-feature";
+import { CanvasControlsRuntime } from "../ui/canvas-controls-runtime";
 import type { CanvasGuideMessage } from "../ui/canvas-guide-controller";
 import type { ToastType } from "../ui/toast-controller";
 import { CanvasFeedbackFeature } from "../ui/canvas-feedback-feature";
@@ -64,8 +59,7 @@ const {
 } = foundation;
 let canvasPersistence: CanvasPersistenceRuntimeFeature;
 const canvasNodeIds = foundation.nodeIds;
-let backgroundMode = foundation.backgroundMode;
-let colorTheme = foundation.colorTheme;
+let controlsRuntime: CanvasControlsRuntime;
 const clientLog = new RuntimeDiagnosticsFeature().log;
 const canvasTasks = new CanvasTaskFeature<AuthUser>({
   nodes,
@@ -203,7 +197,7 @@ const canvasInput = new CanvasInputFeature({
   hitNode,
   moveNode: (id, dx, dy) => canvasStore.moveNodeById(id, dx, dy),
   panCamera: (dx, dy) => canvasStore.panCamera(dx, dy),
-  closeQuickMenu: () => canvasControls.closeQuickMenu(),
+  closeQuickMenu: () => controlsRuntime.closeQuickMenu(),
   screen: (point) => worldToScreen(point, camera, { width: innerWidth, height: innerHeight }),
   world: (point) => screenToWorld(point, camera, { width: innerWidth, height: innerHeight }),
 });
@@ -223,7 +217,7 @@ const nodePresentation = new CanvasNodePresentationRuntime({
   getAuthUser: () => authWorkspace.user,
   getCustomModels: () => accountTools.models,
   getCapabilities: () => generationCapabilities,
-  getColorTheme: () => colorTheme,
+  getColorTheme: () => foundation.colorTheme,
   displayModelName: modelDisplayName,
   updateEditor,
   draw,
@@ -232,13 +226,11 @@ const nodePresentation = new CanvasNodePresentationRuntime({
   commitHistory: () => canvasHistory.queue(),
   setEditing: () => canvasPersistence.setEditing(),
   copyPrompt: copyOriginalPrompt,
-  refreshAppearance: () => canvasControls.refreshAppearance(),
+  refreshAppearance: () => controlsRuntime.refreshAppearance(),
   toast: (message, type, detail) => showToast(message, type, detail),
 });
 const nodeViews = nodePresentation.views;
-const canvasMedia = nodePresentation.media;
-const pendingMediaLoads = canvasMedia.pendingLoads;
-const imageCache = canvasMedia.cache;
+const imageCache = nodePresentation.media.cache;
 function modelDisplayName(value?: string) {
   if (!value?.startsWith("custom:")) return value || "";
   return (
@@ -352,9 +344,6 @@ function updateConnectionPointer(sx: number, sy: number) {
 }
 function stopConnectionAutoPan() { renderingRuntime.connection.stopAutoPan(); }
 function startConnectionAutoPan(sx: number, sy: number) { renderingRuntime.connection.startAutoPan(sx, sy); }
-function hitLink(sx: number, sy: number, tolerance = 9) {
-  return renderingRuntime.connection.hitLink(sx, sy, tolerance);
-}
 renderingRuntime = new CanvasRenderingRuntimeFeature({
   nodes,
   links,
@@ -370,8 +359,8 @@ renderingRuntime = new CanvasRenderingRuntimeFeature({
   nodeCount,
   interacting: canvasInteractionActive,
   agentIds: () => contentRuntime.creation.prompt.selectedIds,
-  dark: () => colorTheme === "dark",
-  backgroundMode: () => backgroundMode,
+  dark: () => foundation.colorTheme === "dark",
+  backgroundMode: () => foundation.backgroundMode,
   save: scheduleSave,
   updateTasks: () => canvasTasks.update(),
   updateHistory: () => canvasHistory.refreshControls(),
@@ -417,16 +406,6 @@ nodeRuntime = new CanvasNodeRuntimeFeature({
   hideGuide: hideCanvasGuide,
   undo: () => canvasHistory.undo(),
 });
-function addNode(
-  kind: NodeKind = "image",
-  position?: Point,
-  deferRender = false,
-) {
-  nodeRuntime.add(kind, position, deferRender);
-}
-function enterTextEdit(node: FlowNode, element: HTMLElement) {
-  nodeRuntime.beginTextEdit(node, element);
-}
 function closeNodeInfo() {
   nodeRuntime.editor.closeInfo();
 }
@@ -502,67 +481,20 @@ generationRuntime = createCanvasGenerationRuntime({
   refreshModelMenus: refreshNodeModelMenus,
   toast: (message, tone, detail) => showToast(message, tone, detail),
 });
-function generate(sourceOverride?: FlowNode) {
-  return generationRuntime.generate(sourceOverride);
-}
-
-const canvasControls: CanvasControlsFeature = new CanvasControlsFeature({
-  link: {
-    canvas, links, connection,
-    pointerDown: () => pointer.down,
-    multiSelect: () => selection.multiSelectMode,
-    hitLink,
-    generationActive: () => nodeRuntime.lifecycle.hasActiveGeneration(),
-    contextSuppressed: marqueeController.isContextSuppressed,
-    save: scheduleSave,
-    draw,
-    notify: (message, type) => showToast(message, type),
-  },
-  toolbar: {
-    zoomSlider,
-    viewportCenter: () => ({ x: innerWidth / 2, y: innerHeight / 2 }),
-    fit: cameraViewport.fit,
-    setZoom: (zoom, anchor) => cameraViewport.setImmediate(zoom, anchor),
-    zoomBy: cameraViewport.smoothBy,
-    addNode: (kind) => addNode(kind),
-    generate: () => { void generate(); },
-    deleteSelected: () => { void nodeRuntime.lifecycle.deleteSelected(); },
-  },
-  quickMenu: {
-    canvas,
-    connectionActive: () => Boolean(connection.active),
-    hitNode,
-    selectNode: (node) => {
-      selection.selectedId = node.id;
-      updateEditor();
-      draw();
-    },
-    previewNode: (node) =>
-      contentRuntime.assets.openPreview(node.mediaUrl!, node.title, node.kind as "image" | "video"),
-    editPromptNode: (node) => {
-      const element = nodeLayer.querySelector<HTMLElement>(`.flow-node[data-id="${node.id}"]`);
-      if (element) enterTextEdit(node, element);
-    },
-    multiSelectActive: () => selection.multiSelectMode,
-    exitMultiSelect: () => marqueeController.exit(),
-    enterMultiSelect: () => marqueeController.enter(),
-    toWorld: world,
-    addNode: (kind, position) => addNode(kind, position),
-    uploadAt: (position) => contentRuntime.assets.openUploadAt(position),
-  },
-  appearance: {
-    pendingMedia: () => pendingMediaLoads.size,
-    currentTheme: () => colorTheme,
-    applyTheme: (theme) => {
-      colorTheme = theme;
-      document.body.dataset.theme = colorTheme;
-      localStorage.setItem("flow-theme", colorTheme);
-    },
-    repaintMedia: canvasMedia.repaintAll,
-    paint,
-  },
+controlsRuntime = new CanvasControlsRuntime({
+  foundation,
+  input: canvasInput,
+  rendering: renderingRuntime,
+  nodeRuntime,
+  presentation: nodePresentation,
+  generation: generationRuntime,
+  content: () => contentRuntime,
+  updateEditor,
+  draw,
+  save: scheduleSave,
+  toast: (message, tone, detail) => showToast(message, tone, detail),
 });
-const quickNodeMenu = canvasControls.quickMenu;
+const quickNodeMenu = controlsRuntime.quickMenu;
 contentRuntime = new CanvasWorkspaceContentRuntime({
   foundation,
   rendering: renderingRuntime,
@@ -620,13 +552,13 @@ const workspaceRuntime = new WorkspaceRuntimeFeature<AuthUser>({
   },
   overlay: {
     quickMenu: quickNodeMenu,
-    closeQuickMenu: () => canvasControls.closeQuickMenu(),
+    closeQuickMenu: () => controlsRuntime.closeQuickMenu(),
     closeAssetContextIfOutside: (target) => contentRuntime.assets.closeContextIfOutside(target),
   },
   keyboard: {
     closeQuickMenu: () => {
       if (!quickNodeMenu.classList.contains("open")) return false;
-      canvasControls.closeQuickMenu();
+      controlsRuntime.closeQuickMenu();
       return true;
     },
     closeNodeInfo: () => {
