@@ -100,6 +100,7 @@ import { AssetContextController } from "../ui/asset-context-controller";
 import { AssetBulkController } from "../ui/asset-bulk-controller";
 import { SquarePanelView } from "../ui/square-panel";
 import { WorkspacePanelController } from "../ui/toolbar";
+import { WorkspaceNavigationCoordinator } from "../ui/workspace-navigation-coordinator";
 import { WorkspaceKeyboardController } from "../ui/workspace-keyboard-controller";
 import { TaskMonitorController } from "../ui/task-monitor-controller";
 import { TopbarMenuCoordinator } from "../ui/topbar-menu-coordinator";
@@ -2600,33 +2601,16 @@ function openWorkspacePanel(id: string, trigger: string) {
     document.querySelector<HTMLElement>(trigger)!,
   );
 }
-function renderAssetsAfterPanelOpen() {
-  requestAnimationFrame(() =>
-    requestAnimationFrame(() => {
-      if (document.querySelector("#assets-panel")?.classList.contains("open"))
-        renderAssets();
-    }),
-  );
-}
-workspacePanelController.bindNavigation({
-  projectsButton: document.querySelector<HTMLElement>("#open-projects")!,
-  projectsPanel: document.querySelector<HTMLElement>("#projects-panel")!,
-  assetsButton: document.querySelector<HTMLElement>("#open-assets")!,
-  assetsPanel: document.querySelector<HTMLElement>("#assets-panel")!,
-  squareButton: document.querySelector<HTMLElement>("#open-square")!,
-  squarePanel: document.querySelector<HTMLElement>("#square-panel")!,
-  mainNav: workspaceBrand.querySelector<HTMLElement>(".main-nav")!,
-  closeButtons: document.querySelectorAll<HTMLElement>(".panel-close"),
-  onProjectsOpen: () => void projectController.load(),
-  onAssetsOpen: () => {
-    if (!assetLibraryController.hasAssets)
-      void loadAssets(false).then(renderAssetsAfterPanelOpen);
-    else renderAssetsAfterPanelOpen();
-  },
-  onSquareOpen: () => void loadSquare(),
-  onMobileToggle: (opening) =>
-    closeTopbarMenus(opening ? "workspace" : undefined),
-});
+new WorkspaceNavigationCoordinator({
+  panels: workspacePanelController,
+  brand: workspaceBrand,
+  hasAssets: () => assetLibraryController.hasAssets,
+  loadAssets: () => loadAssets(false),
+  renderAssets,
+  loadProjects: () => { void projectController.load(); },
+  loadSquare: () => { void loadSquare(); },
+  toggleTopbar: (opening) => closeTopbarMenus(opening ? "workspace" : undefined),
+}).bind();
 const assetUpload = document.querySelector<HTMLInputElement>("#asset-upload")!,
   assetGrid = document.querySelector<HTMLElement>("#asset-grid")!,
   assetCount = document.querySelector<HTMLElement>("#asset-count")!;
