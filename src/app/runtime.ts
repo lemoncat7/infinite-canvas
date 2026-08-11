@@ -1,9 +1,7 @@
 import "../style.css";
 import { CanvasPersistenceRuntimeFeature } from "../canvas/canvas-persistence-runtime-feature";
 import { CanvasRenderingRuntimeFeature } from "../canvas/canvas-rendering-runtime-feature";
-import { CanvasInputFeature } from "../canvas/canvas-input-feature";
-import { CanvasBatchFeature } from "../canvas/canvas-batch-feature";
-import { CanvasHistoryFeature } from "../canvas/canvas-history-feature";
+import { CanvasInteractionRuntime } from "../canvas/canvas-interaction-runtime";
 import type { GenerationCapabilities, Point } from "../nodes/node-types";
 import { normalizePromptText } from "../nodes/prompt-text";
 import { CanvasNodeRuntimeFeature } from "../nodes/canvas-node-runtime-feature";
@@ -22,19 +20,15 @@ import {
 } from "../nodes/video-node";
 import { inferVoiceConfig } from "../nodes/voice-node";
 import { bindNodeConfigPanel } from "../ui/node-editor";
-import { CanvasTaskFeature } from "../ui/canvas-task-feature";
-import { TopbarMenuCoordinator } from "../ui/topbar-menu-coordinator";
 import { CanvasControlsRuntime } from "../ui/canvas-controls-runtime";
 import type { CanvasGuideMessage } from "../ui/canvas-guide-controller";
 import type { ToastType } from "../ui/toast-controller";
-import type { AuthUser } from "../ui/user-menu-controller";
 import { CanvasWorkspaceContentRuntime } from "../ui/canvas-workspace-content-runtime";
 import { CanvasNodePresentationRuntime } from "../nodes/canvas-node-presentation-runtime";
 import { createDefaultGenerationCapabilities } from "./state";
 import { RuntimeFoundation } from "./runtime-foundation";
 import { AccountRuntimeComposition } from "./account-runtime-composition";
 import { createWorkspaceShell, type WorkspaceShell } from "./workspace-shell-composition";
-import { screenToWorld, worldToScreen } from "../canvas/camera-controller";
 
 let renderingRuntime: CanvasRenderingRuntimeFeature;
 
@@ -58,84 +52,38 @@ let canvasPersistence: CanvasPersistenceRuntimeFeature;
 const canvasNodeIds = foundation.nodeIds;
 let controlsRuntime: CanvasControlsRuntime;
 let workspaceRuntime: WorkspaceShell;
+let contentRuntime: CanvasWorkspaceContentRuntime;
 const clientLog = new RuntimeDiagnosticsFeature().log;
-const canvasTasks = new CanvasTaskFeature<AuthUser>({
-  nodes,
-  links,
-  resetButton,
-  canGenerate: (node) => nodeRuntime.editor.canGenerate(node),
-  modelName: modelDisplayName,
-  projectId: () => foundation.projectId,
-  cancelPoll: (jobId) => generationRuntime.cancel(jobId),
-  getUser: () => authWorkspace.user,
+const interactionRuntime: CanvasInteractionRuntime = new CanvasInteractionRuntime({
+  foundation,
+  nodeRuntime: () => nodeRuntime,
+  generation: () => generationRuntime,
+  rendering: () => renderingRuntime,
+  presentation: () => nodePresentation,
+  persistence: () => canvasPersistence,
+  controls: () => controlsRuntime,
+  content: () => contentRuntime,
+  user: () => authWorkspace.user,
   setUser: (user) => authWorkspace.setUser(user),
   renderUser: () => authWorkspace.renderUser(),
   refreshModels: refreshNodeModelMenus,
-  closeOtherMenus: (opening) =>
-    closeTopbarMenus(opening ? "task" : undefined),
-  focusNode: (node) => {
-    selection.selectedId = node.id;
-    camera.x = -(node.x + node.width / 2) * camera.zoom;
-    camera.y = -(node.y + node.height / 2) * camera.zoom;
-  },
-  runWorkflow: () => generationRuntime.run(),
-  ask: async (options) => (await contentRuntime.assets.ask(options)) === true,
+  modelName: modelDisplayName,
+  updateEditor,
+  draw,
   save: scheduleSave,
-  updateEditor,
-  draw,
   showGuide: showCanvasGuide,
+  showModeNotice: showCanvasModeNotice,
   toast: (message, tone, detail) => showToast(message, tone, detail),
-});
-const topbarMenus = new TopbarMenuCoordinator();
-topbarMenus.register("task", () => canvasTasks.close());
-topbarMenus.register("presence", () =>
-  document.querySelector("#online-status-panel")?.classList.remove("open"),
-);
-const canvasHistory = new CanvasHistoryFeature({
-  nodes,
-  links,
-  getProjectId: () => foundation.projectId,
-  getNextId: () => canvasNodeIds.nextId,
-  setNextId: (value) => { canvasNodeIds.nextId = value; },
-  getSelectedId: () => selection.selectedId,
-  setSelectedId: (value) => { selection.selectedId = value; },
-  clearBatch: () => selection.batchIds.clear(),
-  clearPromptEditing: () => { promptNodeEditor.editingId = 0; },
-  generationActive: () => nodeRuntime.lifecycle.hasActiveGeneration(),
-  updateEditor,
-  draw,
-  save: saveCanvas,
-  toast: (message) => showToast(message, "warning"),
-  showGuide: showCanvasGuide,
 });
 function closeTopbarMenus(
   except?: "workspace" | "task" | "user" | "notifications" | "presence",
 ) {
-  topbarMenus.closeAll(except);
+  interactionRuntime.closeMenus(except);
 }
-document.addEventListener("click", () => {
-  canvasTasks.close();
-  topbarMenus.closeAll();
-});
-const canvasBatch = new CanvasBatchFeature({
-  nodes,
-  links,
-  batchIds: selection.batchIds,
-  getSelectedId: () => selection.selectedId,
-  clearSelectedId: () => { selection.selectedId = 0; },
-  isMultiSelectMode: () => selection.multiSelectMode,
-  screen: (point) => screen(point),
-  viewportWidth: () => innerWidth,
-  generationActive: () => nodeRuntime.lifecycle.hasActiveGeneration(),
-  enqueue: (ids) => generationRuntime.enqueue(ids),
-  exitMode: () => marqueeController.exit(),
-  updateEditor,
-  draw,
-  save: scheduleSave,
-  toast: (message, tone, detail) => showToast(message, tone, detail),
-  confirm: (message) => window.confirm(message),
-});
-let contentRuntime: CanvasWorkspaceContentRuntime;
+const canvasTasks = interactionRuntime.tasks;
+const canvasHistory = interactionRuntime.history;
+const canvasBatch = interactionRuntime.batch;
+const canvasInput = interactionRuntime.input;
 const ttsFeature = new TtsFeature({
   nodes,
   links,
@@ -159,51 +107,11 @@ const ttsFeature = new TtsFeature({
   reloadAssets: () => contentRuntime.assets.load(false),
   toast: (message, tone) => showToast(message, tone),
 });
-const canvasInput = new CanvasInputFeature({
-  canvas,
-  nodeLayer,
-  nodes,
-  camera,
-  interaction,
-  selection,
-  marqueeBox: canvasBatch.marqueeBox,
-  batchToolbar: canvasBatch.toolbar,
-  draw,
-  save: scheduleSave,
-  setEditing: () => canvasPersistence.setEditing(),
-  updateEditor,
-  syncDraggedElements: (ids) => nodePresentation.views.syncDraggedElements(ids, nodes),
-  refreshBatchSelection: () => canvasBatch.refresh(),
-  clearBatchSelection: () => canvasBatch.clear(),
-  toggleBatchNode: (id) => canvasBatch.toggle(id),
-  refreshCanvasModeHint: () => canvasBatch.refreshModeHint(),
-  showCanvasModeNotice,
-  getAgentIds: () => contentRuntime.creation.prompt.selectedIds,
-  renderAgentSelection: () => contentRuntime.creation.prompt.renderContext(false),
-  warnAgentLimit: () => showToast("参考素材最多选择 8 个", "warning"),
-  hasConnection: () => Boolean(connection.active),
-  moveConnection: (event, syncDom) => {
-    updateConnectionPointer(event.clientX, event.clientY);
-    startConnectionAutoPan(event.clientX, event.clientY);
-    draw(syncDom);
-  },
-  finishConnection: (event) => renderingRuntime.connection.finish(event),
-  cancelConnection: () => {
-    connection.cancel();
-    stopConnectionAutoPan();
-  },
-  hitNode,
-  moveNode: (id, dx, dy) => canvasStore.moveNodeById(id, dx, dy),
-  panCamera: (dx, dy) => canvasStore.panCamera(dx, dy),
-  closeQuickMenu: () => controlsRuntime.closeQuickMenu(),
-  screen: (point) => worldToScreen(point, camera, { width: innerWidth, height: innerHeight }),
-  world: (point) => screenToWorld(point, camera, { width: innerWidth, height: innerHeight }),
-});
 const cameraViewport = canvasInput.cameraViewport;
 const domPointer = canvasInput.domPointer;
 const touchPinch = canvasInput.touchPinch;
 const marqueeController = canvasInput.marquee;
-const nodePresentation = new CanvasNodePresentationRuntime({
+const nodePresentation: CanvasNodePresentationRuntime = new CanvasNodePresentationRuntime({
   foundation,
   input: canvasInput,
   nodeRuntime: () => nodeRuntime,
@@ -261,7 +169,7 @@ const accountRuntime: AccountRuntimeComposition = new AccountRuntimeComposition(
   content: () => contentRuntime,
   resize,
   loadCapabilities: (redraw) => loadGenerationCapabilities(redraw),
-  registerMenu: (menu, close) => topbarMenus.register(menu, close),
+  registerMenu: (menu, close) => interactionRuntime.menus.register(menu, close),
   closeMenus: (except) => closeTopbarMenus(except),
 });
 const authWorkspace = accountRuntime.auth;
@@ -274,19 +182,10 @@ function refreshNodeModelMenus() {
 }
 authWorkspace.applyRoute();
 
-const screen = (point: Point) => renderingRuntime.screen(point);
 const world = (point: Point) => renderingRuntime.world(point);
 function canvasInteractionActive() {
   return Boolean(pointer.down || domPointer.drag || interaction.marquee?.active || touchPinch.active);
 }
-function hitNode(sx: number, sy: number) {
-  return renderingRuntime.connection.hitNode(sx, sy);
-}
-function updateConnectionPointer(sx: number, sy: number) {
-  renderingRuntime.connection.updatePointer(sx, sy);
-}
-function stopConnectionAutoPan() { renderingRuntime.connection.stopAutoPan(); }
-function startConnectionAutoPan(sx: number, sy: number) { renderingRuntime.connection.startAutoPan(sx, sy); }
 renderingRuntime = new CanvasRenderingRuntimeFeature({
   nodes,
   links,
@@ -455,7 +354,7 @@ contentRuntime = new CanvasWorkspaceContentRuntime({
   hideGuide: hideCanvasGuide,
   clientLog,
   closeTopbarMenus: (opening) => closeTopbarMenus(opening ? "workspace" : undefined),
-  registerWorkspaceMenu: (close) => topbarMenus.register("workspace", close),
+  registerWorkspaceMenu: (close) => interactionRuntime.menus.register("workspace", close),
   toast: (message, tone, detail) => showToast(message, tone, detail),
 });
 function loadGenerationCapabilities(redraw = false): Promise<void> {
