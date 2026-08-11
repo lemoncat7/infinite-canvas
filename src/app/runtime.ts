@@ -105,12 +105,7 @@ import {
 } from "../ui/user-menu-controller";
 import { AuthModalController } from "../ui/auth-modal-controller";
 import { NotificationFeature } from "../ui/notification-feature";
-import { FeedbackController } from "../ui/feedback-controller";
-import { CreditLabController } from "../ui/credit-lab-controller";
-import {
-  CustomApiController,
-  type CustomApiModel,
-} from "../ui/custom-api-controller";
+import { AccountToolsFeature } from "../ui/account-tools-feature";
 import { PromptAgentControls } from "../ui/prompt-agent-controls";
 import { PromptAgentContextController } from "../ui/prompt-agent-context";
 import { PromptAgentRequestController } from "../ui/prompt-agent-request-controller";
@@ -578,7 +573,7 @@ document.addEventListener("selectstart", (event) => {
 function modelDisplayName(value?: string) {
   if (!value?.startsWith("custom:")) return value || "";
   return (
-    customApiModels.find((item) => `custom:${item.id}` === value)?.name ||
+    accountTools.models.find((item) => `custom:${item.id}` === value)?.name ||
     "自定义模型"
   );
 }
@@ -658,7 +653,6 @@ const homeLoginModal =
   document.querySelector<HTMLElement>("#home-login-modal")!;
 const homePreview = document.querySelector<HTMLElement>("#home-preview")!;
 let authUser: AuthUser | null = null;
-let customApiModels: CustomApiModel[] = [];
 let authReady = false;
 const homeShowcase = new HomeShowcaseController(
   homeGallery,
@@ -680,7 +674,7 @@ const authModalController = new AuthModalController({
       throw new Error("登录成功，但画布未能完整同步，请重试");
     if (completedMode === "register") {
       location.hash = "#/canvas";
-      await Promise.all([loadAssets(), loadCustomApiModels()]);
+      await Promise.all([loadAssets(), accountTools.loadModels()]);
       applyAppRoute();
     } else showToast(`欢迎回来，${user.name}`, "success");
   },
@@ -730,7 +724,7 @@ const workspaceSession = new WorkspaceSessionController({
   resetNodeLease: () => canvasNodeIds.reset(),
   loadCanvas: (keepStatus) => loadCanvas(keepStatus),
   loadAssets: () => loadAssets(false),
-  loadModels: () => loadCustomApiModels(),
+  loadModels: () => accountTools.loadModels(),
   apiFetch,
   status: setWorkspaceBootStatus,
   hideStatus: hideWorkspaceBootStatusAfter,
@@ -776,9 +770,6 @@ const userMenuController = new UserMenuController({
   logout: () => logoutToHome(),
   toast: (message, type) => showToast(message, type),
 });
-const feedbackModal = document.querySelector<HTMLElement>("#feedback-modal")!,
-  feedbackForm =
-    feedbackModal.querySelector<HTMLFormElement>("#feedback-form")!;
 const notificationFeature = new NotificationFeature({
   getUserId: () => authUser?.id,
   registerTopbarMenu: (close) => topbarMenus.register("notifications", close),
@@ -803,52 +794,24 @@ function showCanvasModeNotice(title: string, detail: string) {
     duration: 2100,
   });
 }
-new FeedbackController({
-  modal: feedbackModal,
-  form: feedbackForm,
-  openButton: document.querySelector<HTMLElement>("#open-feedback")!,
-  closeUserMenu: () => userMenuController.close(),
-  getProjectId: () => currentProjectId,
-  toast: (message, type) => showToast(message, type),
-});
-const labModal = document.querySelector<HTMLElement>("#lab-modal")!;
-new CreditLabController({
-  modal: labModal,
-  openButton: document.querySelector<HTMLElement>("#open-lab")!,
+const accountTools = new AccountToolsFeature({
   getUser: () => authUser,
-  setUser: (user) => {
-    authUser = user;
-  },
+  setUser: (user) => { authUser = user; },
+  getProjectId: () => currentProjectId,
   closeUserMenu: () => userMenuController.close(),
   onCreditsChanged: () => {
     renderAuthenticatedUser();
     refreshNodeModelMenus();
   },
+  refreshNodeModels: refreshNodeModelMenus,
   toast: (message, type) => showToast(message, type),
 });
-const customApiModal =
-    document.querySelector<HTMLElement>("#custom-api-modal")!,
-  customApiForm = document.querySelector<HTMLFormElement>("#custom-api-form")!,
-  customApiList = document.querySelector<HTMLElement>("#custom-api-list")!;
 function refreshNodeModelMenus() {
   nodeLayer
     .querySelectorAll(".flow-node")
     .forEach((element) => element.remove());
   draw();
 }
-const customApiController = new CustomApiController({
-  modal: customApiModal,
-  form: customApiForm,
-  list: customApiList,
-  openButton: document.querySelector<HTMLButtonElement>("#open-custom-api")!,
-  getModels: () => customApiModels,
-  setModels: (models) => {
-    customApiModels = models;
-  },
-  closeUserMenu: () => userMenuController.close(),
-  refreshNodeModels: refreshNodeModelMenus,
-});
-const loadCustomApiModels = () => customApiController.load();
 applyAppRoute();
 
 const viewportSize = () => ({ width: innerWidth, height: innerHeight });
@@ -1076,7 +1039,7 @@ const boundNodeViewFactory = new BoundNodeViewFactory({
   nodes,
   batchIds: selection.batchIds,
   authUser: () => authUser,
-  customApiModels: () => customApiModels,
+  customApiModels: () => accountTools.models,
   generationCapabilities: () => generationCapabilities,
   getSelectedId: () => selection.selectedId,
   setSelectedId: (id) => { selection.selectedId = id; },
