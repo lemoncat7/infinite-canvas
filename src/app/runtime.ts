@@ -2,10 +2,8 @@ import "../style.css";
 import { CanvasPerformanceMonitor } from "../canvas/performance-monitor";
 import { CanvasPaintCoordinator } from "../canvas/canvas-paint-coordinator";
 import { CanvasSnapshotController } from "../canvas/canvas-snapshot-controller";
-import { CanvasSpatialIndex } from "../canvas/spatial-index";
 import { CanvasGeometryController } from "../canvas/canvas-geometry-controller";
 import { ConnectionAutoPanController } from "../canvas/connection-auto-pan-controller";
-import { PixiEditorCache } from "../canvas/pixi-editor-cache";
 import { CanvasStore } from "../canvas/store";
 import {
   applyCanvasOperations,
@@ -98,8 +96,7 @@ import { NotificationFeature } from "../ui/notification-feature";
 import { AccountToolsFeature } from "../ui/account-tools-feature";
 import { PromptAgentFeature } from "../ui/prompt-agent-feature";
 import { ComicStudioFeature } from "../ui/comic-studio-feature";
-import { BoundNodeViewFactory } from "../nodes/bound-node-view-factory";
-import { BoundNodeDomSynchronizer } from "../nodes/bound-node-dom-synchronizer";
+import { CanvasNodeViewFeature } from "../nodes/canvas-node-view-feature";
 import { createDefaultGenerationCapabilities } from "./state";
 import { ProjectSwitchController } from "./project-switch-controller";
 import { ApplicationBootstrapController } from "./application-bootstrap-controller";
@@ -496,24 +493,73 @@ new CanvasPointerLifecycle({
   closeQuickMenu: closeQuickNodeMenu,
   smoothZoom: cameraViewport.smoothBy,
 });
-const nodeDomStates = new Map<number, unknown[]>();
-const canvasSpatialIndex = new CanvasSpatialIndex();
-const pixiEditorCache = new PixiEditorCache(
+const nodeViews = new CanvasNodeViewFeature({
+  viewport: nodeViewport,
+  layer: nodeLayer,
   nodes,
+  links,
   camera,
-  canvasSpatialIndex,
-  (point) => world(point),
-  () => selection.selectedId,
-  createDomNode,
-  (id) => nodeDomStates.delete(id),
-);
-const pixiDetachedNodeCache = pixiEditorCache.elements;
-function cacheDetachedPixiNode(id: number, element: HTMLElement) {
-  pixiEditorCache.detach(id, element);
-}
-function schedulePixiEditorWarmup() {
-  pixiEditorCache.scheduleWarmup();
-}
+  world: (point) => world(point),
+  getSelectedId: () => selection.selectedId,
+  setSelectedId: (id) => { selection.selectedId = id; },
+  getBatchIds: () => selection.batchIds,
+  getEditingId: () => promptNodeEditor.editingId,
+  getDraggingId: () => domPointer.drag?.id ?? 0,
+  isMultiSelectMode: () => selection.multiSelectMode,
+  getDrag: () => domPointer.drag,
+  setDrag: (drag) => { domPointer.drag = drag; },
+  beginResize: (value) => domPointer.beginResize(value),
+  isReleaseSuppressed: domPointer.isReleaseSuppressed,
+  isAgentSelecting: () => promptAgentFeature.selecting,
+  isAgentCreateMode: () => promptAgentFeature.controls.mode === "create",
+  getAgentIds: () => promptAgentFeature.selectedIds,
+  getColorTheme: () => colorTheme,
+  getSwap: () => videoReferenceSwapSelection,
+  setSwap: (value) => { videoReferenceSwapSelection = value; },
+  getAuthUser: () => authWorkspace.user,
+  getCustomModels: () => accountTools.models,
+  getCapabilities: () => generationCapabilities,
+  isGenerating: nodeIsActivelyGenerating,
+  defaultCopy: defaultNodeCopy,
+  getProviders: () => ttsFeature.catalog.providers,
+  getVoices: () => ttsFeature.catalog.voicesByProvider,
+  ensureProviders: loadTtsProviders,
+  ensureVoices: loadTtsVoices,
+  escapeHtml,
+  normalizePrompt: normalizePromptText,
+  displayModelName: modelDisplayName,
+  decodePrompt: (value = "") => decodePromptClipboardText(value),
+  canGenerate: canGenerateNode,
+  updateEditor,
+  draw,
+  scheduleSave,
+  commitHistory: queueCanvasHistory,
+  setEditingState: () => setSaveState("editing", "编辑中…"),
+  editPrompt: enterTextEdit,
+  previewMedia: (node) =>
+    openAssetPreview(node.mediaUrl!, node.title, node.kind as "image" | "video"),
+  beginConnection: (nodeId, point) => connection.begin(nodeId, "right", point),
+  showInfo: openNodeInfo,
+  focusEditor: () => promptInput.focus(),
+  generate,
+  downloadImage: downloadNodeImage,
+  deleteNode: () => { void deleteSelectedNode(); },
+  confirmClearImage: async () => Boolean(await askProjectDialog({
+    title: "清除当前卡片的图片？",
+    description: "资产库中的原图不会删除。原提示词、当前描述、模型、图像设置和参考连线都会保留。",
+    confirm: "清除图片",
+  })),
+  removeCachedImage: (url) => imageCache.delete(url),
+  notifyImageCleared: (message) => showToast(message, "success"),
+  beginImageUpload: beginImageNodeUpload,
+  beginImageLibrary: beginImageNodeLibrary,
+  previewVoice,
+  generateTts,
+  copyPrompt: copyOriginalPrompt,
+  paintImage: paintNodeMedia,
+  paintVideo: paintNodeVideo,
+  notify: (message, type, detail) => showToast(message, type, detail),
+});
 const canvasMedia = new CanvasMediaFeature({
   mobile: innerWidth <= 780,
   nodes,
@@ -521,8 +567,8 @@ const canvasMedia = new CanvasMediaFeature({
   theme: () => colorTheme,
   suspendRenderer: () => pixiRenderer?.suspend(),
   resumeRenderer: () => pixiRenderer?.resume(),
-  clearNodeStates: () => nodeDomStates.clear(),
-  invalidateNode: (id) => { nodeDomStates.delete(id); },
+  clearNodeStates: () => nodeViews.clearStates(),
+  invalidateNode: (id) => nodeViews.invalidateState(id),
   resize,
   draw,
   refreshAppearance: refreshAppearanceButton,
@@ -724,7 +770,7 @@ const canvasGeometry = new CanvasGeometryController(
   nodes,
   links,
   camera,
-  canvasSpatialIndex,
+  nodeViews.spatialIndex,
   world,
   screen,
   portWorld,
@@ -733,9 +779,9 @@ canvasStore.subscribe((change) => {
   if (change.type === "node-position")
     change.nodeIds.forEach((id) => {
       const node = nodes.find((candidate) => candidate.id === id);
-      if (node) canvasSpatialIndex.update(node);
+      if (node) nodeViews.spatialIndex.update(node);
     });
-  else if (change.type === "structure") canvasSpatialIndex.rebuild(nodes);
+  else if (change.type === "structure") nodeViews.spatialIndex.rebuild(nodes);
 });
 function rebuildPaintIndexes() {
   canvasGeometry.rebuild();
@@ -783,7 +829,6 @@ function startConnectionAutoPan(sx: number, sy: number) {
 function hitLink(sx: number, sy: number, tolerance = 9) {
   return canvasGeometry.hitLink(sx, sy, tolerance);
 }
-const mountedDomNodeIds = new Set<number>();
 const canvasPaint = new CanvasPaintCoordinator({
   performance: canvasPerformance,
   viewport: nodeViewport,
@@ -803,7 +848,7 @@ const canvasPaint = new CanvasPaintCoordinator({
     links,
     nodeCount: nodes.length,
     indexedNodeCount: canvasGeometry.nodeIndex.size,
-    domNodeIds: [...mountedDomNodeIds],
+    domNodeIds: [...nodeViews.mountedIds],
     camera,
     selectedId: selection.selectedId,
     selectedIds: [
@@ -825,8 +870,8 @@ const canvasPaint = new CanvasPaintCoordinator({
   },
   renderer: () => pixiRenderer,
   rebuildIndexes: rebuildPaintIndexes,
-  syncDom: syncDomNodes,
-  warmEditors: schedulePixiEditorWarmup,
+  syncDom: () => nodeViews.sync(),
+  warmEditors: () => nodeViews.scheduleWarmup(),
   updateTasks: updateTaskMonitor,
   updateHistory: updateHistoryControls,
 });
@@ -871,96 +916,6 @@ function addMediaNode(
   nodeLifecycle.addMedia(url, title, position, kind);
 }
 
-const boundNodeDomSynchronizer = new BoundNodeDomSynchronizer({
-  viewport: nodeViewport,
-  layer: nodeLayer,
-  nodes,
-  links,
-  camera,
-  getSelectedId: () => selection.selectedId,
-  getBatchIds: () => selection.batchIds,
-  getEditingId: () => promptNodeEditor.editingId,
-  getDraggingId: () => domPointer.drag?.id ?? 0,
-  isAgentSelecting: () => promptAgentFeature.selecting,
-  getAgentIds: () => promptAgentFeature.selectedIds,
-  getColorTheme: () => colorTheme,
-  getSwap: () => videoReferenceSwapSelection,
-  setSwap: (value) => { videoReferenceSwapSelection = value; },
-  mountedIds: mountedDomNodeIds,
-  detached: pixiDetachedNodeCache,
-  states: nodeDomStates,
-  cacheDetached: cacheDetachedPixiNode,
-  createElement: createDomNode,
-  isGenerating: nodeIsActivelyGenerating,
-  defaultNodeCopy,
-  getProviders: () => ttsFeature.catalog.providers,
-  getVoices: () => ttsFeature.catalog.voicesByProvider,
-  ensureProviders: loadTtsProviders,
-  ensureVoices: loadTtsVoices,
-  escapeHtml,
-  scheduleSave,
-  commitHistory: queueCanvasHistory,
-  draw,
-  paintImage: paintNodeMedia,
-  paintVideo: paintNodeVideo,
-  normalizePrompt: normalizePromptText,
-  displayModelName: modelDisplayName,
-  decodePrompt: (value = "") => decodePromptClipboardText(value),
-  canGenerate: canGenerateNode,
-  notify: (message, type, detail) => showToast(message, type, detail),
-});
-function syncDomNodes() {
-  boundNodeDomSynchronizer.sync();
-}
-const boundNodeViewFactory = new BoundNodeViewFactory({
-  nodes,
-  batchIds: selection.batchIds,
-  authUser: () => authWorkspace.user,
-  customApiModels: () => accountTools.models,
-  generationCapabilities: () => generationCapabilities,
-  getSelectedId: () => selection.selectedId,
-  setSelectedId: (id) => { selection.selectedId = id; },
-  isMultiSelectMode: () => selection.multiSelectMode,
-  getDrag: () => domPointer.drag,
-  setDrag: (drag) => { domPointer.drag = drag; },
-  beginResize: (value) => domPointer.beginResize(value),
-  isReleaseSuppressed: domPointer.isReleaseSuppressed,
-  isAgentSelecting: () => promptAgentFeature.selecting,
-  isAgentCreateMode: () => promptAgentFeature.controls.mode === "create",
-  updateEditor,
-  draw,
-  scheduleSave,
-  setEditingState: () => setSaveState("editing", "编辑中…"),
-  editPrompt: enterTextEdit,
-  previewMedia: (current) =>
-    openAssetPreview(current.mediaUrl!, current.title, current.kind as "image" | "video"),
-  beginConnection: (nodeId, point) => connection.begin(nodeId, "right", point),
-  showInfo: openNodeInfo,
-  focusEditor: () => promptInput.focus(),
-  generate,
-  downloadImage: downloadNodeImage,
-  deleteNode: () => { void deleteSelectedNode(); },
-  confirmClearImage: async () =>
-    Boolean(await askProjectDialog({
-      title: "清除当前卡片的图片？",
-      description:
-        "资产库中的原图不会删除。原提示词、当前描述、模型、图像设置和参考连线都会保留。",
-      confirm: "清除图片",
-    })),
-  removeCachedImage: (url) => imageCache.delete(url),
-  normalizePrompt: normalizePromptText,
-  notifyImageCleared: (message) => showToast(message, "success"),
-  beginImageUpload: beginImageNodeUpload,
-  beginImageLibrary: beginImageNodeLibrary,
-  decodePrompt: decodePromptClipboardText,
-  previewVoice,
-  generateTts,
-  escapeHtml,
-  copyPrompt: copyOriginalPrompt,
-});
-function createDomNode(node: FlowNode) {
-  return boundNodeViewFactory.create(node);
-}
 function enterTextEdit(node: FlowNode, element: HTMLElement) {
   promptNodeEditor.beginEdit(node, element, {
     onInput: () => setSaveState("editing", "编辑中…"),
@@ -1138,7 +1093,7 @@ const canvasLoadCoordinator = new CanvasLoadCoordinator({
   normalizePrompt: normalizePromptText,
   clearViews: () => {
     nodeLayer.replaceChildren();
-    pixiEditorCache.clear();
+    nodeViews.clearEditors();
   },
   cancelPolling: () => generationPoller.cancelAll(),
   getLease: () => ({ nextId: canvasNodeIds.nextId, end: canvasNodeIds.end }),
@@ -1177,13 +1132,13 @@ const ttsFeature = new TtsFeature({
   invalidateProviders: () => {
     nodes
       .filter((node) => node.kind === "voice")
-      .forEach((node) => nodeDomStates.delete(node.id));
+      .forEach((node) => nodeViews.invalidateState(node.id));
     draw();
   },
   invalidateVoices: (providerId) => {
     nodes
       .filter((node) => node.kind === "voice" && node.voiceSettings?.providerId === providerId)
-      .forEach((node) => nodeDomStates.delete(node.id));
+      .forEach((node) => nodeViews.invalidateState(node.id));
     draw();
   },
   updateEditor,
