@@ -117,6 +117,7 @@ import {
   OnlinePresenceView,
 } from "../ui/notification-center";
 import { FeedbackController } from "../ui/feedback-controller";
+import { CreditLabController } from "../ui/credit-lab-controller";
 import { ComicSidePanelController } from "../ui/comic-side-panel";
 import { ComicStudioView } from "../ui/comic-studio";
 import { ComicLabelController } from "../ui/comic-labels";
@@ -2283,116 +2284,20 @@ new FeedbackController({
   toast: (message, type) => showToast(message, type),
 });
 const labModal = document.querySelector<HTMLElement>("#lab-modal")!;
-document.querySelector("#open-lab")!.addEventListener("click", () => {
-  workspaceUserMenu.classList.remove("open");
-  const available = Math.max(
-    0,
-    Number(authUser?.credits ?? 0) - Number(authUser?.reservedCredits ?? 0),
-  );
-  labModal.querySelector<HTMLElement>("[data-credit-value]")!.textContent =
-    String(available);
-  labModal.querySelector<HTMLElement>("[data-credit-reserved]")!.textContent =
-    Number(authUser?.reservedCredits ?? 0) > 0
-      ? `${authUser!.reservedCredits} 点正在生成任务中冻结`
-      : "";
-  labModal.querySelector<HTMLFormElement>("#credit-admin-form")!.hidden =
-    !authUser?.isAdmin;
-  labModal.classList.add("open");
+new CreditLabController({
+  modal: labModal,
+  openButton: document.querySelector<HTMLElement>("#open-lab")!,
+  getUser: () => authUser,
+  setUser: (user) => {
+    authUser = user;
+  },
+  closeUserMenu: () => userMenuController.close(),
+  onCreditsChanged: () => {
+    renderAuthenticatedUser();
+    refreshNodeModelMenus();
+  },
+  toast: (message, type) => showToast(message, type),
 });
-labModal
-  .querySelectorAll<HTMLElement>("[data-lab-close]")
-  .forEach((button) =>
-    button.addEventListener("click", () => labModal.classList.remove("open")),
-  );
-labModal.addEventListener("pointerdown", (event) => {
-  if (event.target === labModal) labModal.classList.remove("open");
-});
-labModal
-  .querySelector<HTMLFormElement>("#credit-redeem-form")!
-  .addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget as HTMLFormElement,
-      submit = form.querySelector<HTMLButtonElement>("button")!,
-      output = form.querySelector<HTMLOutputElement>("output")!,
-      code = new FormData(form).get("code");
-    submit.disabled = true;
-    output.textContent = "正在兑换…";
-    try {
-      const response = await apiFetch("/api/users/me/credits/redeem", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ code }),
-        }),
-        result = (await response.json().catch(() => ({}))) as {
-          added?: number;
-          credits?: number;
-          reservedCredits?: number;
-          error?: string;
-        };
-      if (!response.ok) throw new Error(result.error || "兑换失败");
-      authUser = {
-        ...authUser!,
-        credits: result.credits,
-        reservedCredits: result.reservedCredits,
-      };
-      renderAuthenticatedUser();
-      refreshNodeModelMenus();
-      labModal.querySelector<HTMLElement>("[data-credit-value]")!.textContent =
-        String(
-          Math.max(
-            0,
-            Number(result.credits ?? 0) - Number(result.reservedCredits ?? 0),
-          ),
-        );
-      form.reset();
-      output.textContent = `兑换成功，已到账 ${result.added} 点`;
-      showToast(`已到账 ${result.added} 创作点数`, "success");
-    } catch (reason) {
-      output.textContent =
-        reason instanceof Error ? reason.message : "兑换失败，请重试";
-    } finally {
-      submit.disabled = false;
-    }
-  });
-const creditAdminForm =
-    labModal.querySelector<HTMLFormElement>("#credit-admin-form")!,
-  creditCodesOutput =
-    creditAdminForm.querySelector<HTMLTextAreaElement>("textarea")!;
-creditAdminForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const submit = creditAdminForm.querySelector<HTMLButtonElement>(
-      'button[type="submit"]',
-    )!,
-    output = creditAdminForm.querySelector<HTMLOutputElement>("output")!,
-    data = Object.fromEntries(new FormData(creditAdminForm));
-  submit.disabled = true;
-  output.textContent = "正在生成…";
-  try {
-    const response = await apiFetch("/api/admin/recharge-codes", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(data),
-      }),
-      result = (await response.json().catch(() => ({}))) as {
-        codes?: string[];
-        error?: string;
-      };
-    if (!response.ok) throw new Error(result.error || "生成失败");
-    creditCodesOutput.value = (result.codes ?? []).join("\n");
-    output.textContent = `已生成 ${result.codes?.length ?? 0} 个充值码`;
-  } catch (reason) {
-    output.textContent = reason instanceof Error ? reason.message : "生成失败";
-  } finally {
-    submit.disabled = false;
-  }
-});
-creditAdminForm
-  .querySelector("[data-copy-codes]")!
-  .addEventListener("click", async () => {
-    if (!creditCodesOutput.value) return;
-    await navigator.clipboard.writeText(creditCodesOutput.value);
-    showToast("充值码已复制", "success");
-  });
 const customApiModal =
     document.querySelector<HTMLElement>("#custom-api-modal")!,
   customApiForm = document.querySelector<HTMLFormElement>("#custom-api-form")!,
