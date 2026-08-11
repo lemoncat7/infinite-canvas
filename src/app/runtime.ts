@@ -4,6 +4,7 @@ import { CanvasSpatialIndex } from "../canvas/spatial-index";
 import { CanvasStore } from "../canvas/store";
 import { CanvasSelectionController } from "../canvas/selection-controller";
 import { CanvasConnectionController } from "../canvas/connection-controller";
+import { CanvasInteractionController } from "../canvas/interaction-controller";
 import { MediaLruCache } from "../canvas/media-cache";
 import type {
   FlowLink,
@@ -15,6 +16,8 @@ import type {
   TtsProviderOption,
   TtsVoiceOption,
 } from "../nodes/node-types";
+import { createNode, makeNodePublicId } from "../nodes/node-service";
+import { PromptNodeController } from "../nodes/prompt-node";
 import { fetchTtsProviders, fetchTtsVoices } from "../services/tts";
 import { createDefaultGenerationCapabilities } from "./state";
 import {
@@ -165,39 +168,19 @@ const canvasStore = new CanvasStore<FlowNode, FlowLink>({
     zoom: 0.9,
   }),
   camera = canvasStore.camera;
-const pointer = {
-  down: false,
-  x: 0,
-  y: 0,
-  startX: 0,
-  startY: 0,
-  moved: false,
-  blankCanvas: false,
-  draggingNode: null as number | null,
-  draggingGroup: null as Set<number> | null,
-  toggleBatchOnRelease: 0,
-};
+const interaction = new CanvasInteractionController(),
+  pointer = interaction.pointer;
 let canvasPanSelectedElement: HTMLElement | null = null;
 const selection = new CanvasSelectionController();
 let videoReferenceSwapSelection: { videoId: number; sourceId: number } | null =
   null;
 const activeVoicePreviews = new Map<number, HTMLAudioElement>();
-let marquee: {
-    pointerId: number;
-    start: Point;
-    worldStart: Point;
-    current: Point;
-    active: boolean;
-    baseSelection: Set<number>;
-  } | null = null,
-  marqueeAutoPanFrame = 0,
+let marqueeAutoPanFrame = 0,
   marqueeContextSuppressedUntil = 0,
-  marqueeMode = false,
-  quickMarqueeMode = false,
   marqueeHoldTimer: number | undefined,
   marqueeHoldPointer: { id: number; start: Point; pointerType: string } | null =
     null;
-let editingTextNodeId = 0;
+const promptNodeEditor = new PromptNodeController();
 let nextId = 1;
 let canvasNodeIdBlockEnd = 0;
 let canvasNodeIdLeasePromise: Promise<boolean> | null = null;
@@ -788,7 +771,7 @@ async function applyCanvasHistory(snapshot: CanvasHistorySnapshot) {
   );
   selection.selectedId = finalIds.has(selectedBeforeRestore) ? selectedBeforeRestore : 0;
   selection.batchIds.clear();
-  editingTextNodeId = 0;
+  promptNodeEditor.editingId = 0;
   updateEditor();
   draw();
   await saveCanvas();
@@ -1168,7 +1151,7 @@ document.addEventListener("click", () => {
 });
 const marqueeBox = document.createElement("div"),
   batchToolbar = document.createElement("div");
-marqueeBox.className = "canvas-marquee";
+marqueeBox.className = "canvas-interaction.marquee";
 batchToolbar.className = "canvas-batch-toolbar";
 batchToolbar.innerHTML =
   '<span data-batch-count>已选 0 项</span><button type="button" data-batch-generate aria-label="生成所选卡片" title="生成">生成</button><button type="button" data-batch-delete aria-label="删除所选卡片" title="删除">删除</button><button type="button" data-batch-clear aria-label="退出多选模式" title="退出">退出</button>';
@@ -3264,7 +3247,7 @@ function linkPathGeometry(link: FlowLink) {
   };
 }
 function canvasInteractionActive() {
-  return Boolean(pointer.down || domDrag || marquee?.active || pinchGesture);
+  return Boolean(pointer.down || domDrag || interaction.marquee?.active || pinchGesture);
 }
 function hitNode(sx: number, sy: number) {
   const p = world({ x: sx, y: sy }),
@@ -3697,10 +3680,6 @@ function fitCanvas() {
   };
   cameraFrame = requestAnimationFrame(tick);
 }
-function makePublicId(kind: NodeKind) {
-  const type = kind === "prompt" ? "text" : kind;
-  return `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-}
 function addNode(
   kind: NodeKind = "image",
   position?: Point,
@@ -3709,103 +3688,7 @@ function addNode(
   const id = allocateCanvasNodeId();
   if (id === null) return;
   const center = position ?? world({ x: innerWidth / 2, y: innerHeight / 2 });
-  const titles: Record<NodeKind, string> = {
-      prompt: "标签",
-      image: "文生图 · 新任务",
-      video: "视频生成 · 新任务",
-      note: "创作便签",
-      voice: "语音配置 · 新角色",
-      tts: "TTS 文本生成",
-      audio: "音频结果",
-    },
-    width =
-      kind === "video" || kind === "voice"
-        ? 290
-        : kind === "tts" || kind === "audio"
-          ? 300
-          : kind === "image"
-            ? 280
-            : 265,
-    height =
-      kind === "video" || kind === "voice"
-        ? 225
-        : kind === "tts"
-          ? 270
-          : kind === "audio"
-            ? 180
-            : kind === "image"
-              ? 220
-              : kind === "note"
-                ? 135
-                : 175;
-  nodes.push({
-    id,
-    publicId: makePublicId(kind),
-    kind,
-    x: center.x - width / 2,
-    y: center.y - height / 2,
-    width,
-    height,
-    title: titles[kind],
-    body:
-      kind === "image" || kind === "video" || kind === "tts"
-        ? ""
-        : kind === "prompt"
-          ? "记录标签、分组标题或画布备注"
-          : kind === "voice"
-            ? "为角色选择固定音色"
-            : kind === "audio"
-              ? "生成完成后可试听与下载"
-              : "等待配置模型与生成参数",
-    accent:
-      kind === "voice"
-        ? "#78c8d8"
-        : kind === "tts"
-          ? "#7da9df"
-          : kind === "audio"
-            ? "#8b9fe8"
-            : kind === "video"
-              ? "#88bcd4"
-              : kind === "prompt"
-                ? "#8fb9c8"
-                : kind === "note"
-                  ? "#88b7b1"
-                  : "#8ee7ff",
-    model:
-      kind === "video"
-        ? (generationCapabilities.video?.defaultModel ?? "agnes-video-v2.0")
-        : kind === "voice" || kind === "tts"
-          ? "easyvoice-local"
-          : kind === "audio"
-            ? undefined
-            : (generationCapabilities.image?.defaultModel ?? "gpt-image-2"),
-    videoSettings:
-      kind === "video"
-        ? {
-            seconds: String(generationCapabilities.video?.seconds.default ?? 5),
-            resolution: generationCapabilities.video?.resolutions[1] ?? "720p",
-            aspectRatio:
-              generationCapabilities.video?.aspectRatios.at(-1) ?? "16:9",
-          }
-        : undefined,
-    voiceSettings:
-      kind === "voice"
-        ? {
-            providerId: "easyvoice-local",
-            voiceId: "zh-CN-XiaoxiaoNeural",
-            language: "zh-CN",
-            defaultSpeed: 1,
-            pitch: 0,
-            volume: 1,
-            roleName: "",
-            tone: "自然",
-          }
-        : undefined,
-    ttsSettings:
-      kind === "tts"
-        ? { emotion: "中性", speed: 1, volume: 1, format: "mp3" }
-        : undefined,
-  });
+  nodes.push(createNode(id, kind, center, generationCapabilities));
   selection.selectedId = id;
   if (!deferRender) {
     updateEditor();
@@ -3823,7 +3706,7 @@ function addMediaNode(
   if (id === null) return;
   nodes.push({
     id,
-    publicId: makePublicId(kind),
+    publicId: makeNodePublicId(kind),
     kind,
     role: kind === "video" ? "result" : undefined,
     x: position.x - 145,
@@ -3853,7 +3736,7 @@ function syncDomNodes() {
   nodeViewport.style.transform = `translate3d(${innerWidth / 2 + camera.x}px, ${innerHeight / 2 + camera.y}px,0) scale(${camera.zoom})`;
   const requiredPixiDomIds = new Set<number>([
           ...(selection.selectedId ? [selection.selectedId] : []),
-          ...(editingTextNodeId ? [editingTextNodeId] : []),
+          ...(promptNodeEditor.editingId ? [promptNodeEditor.editingId] : []),
           ...(domDrag ? [domDrag.id] : []),
         ]),
     allNodeIds = new Set(nodes.map((node) => String(node.id))),
@@ -3990,7 +3873,7 @@ function syncDomNodes() {
       locked,
       workflowWaiting,
       onscreen,
-      editingTextNodeId === node.id,
+      promptNodeEditor.editingId === node.id,
       colorTheme,
       node.kind === "video"
         ? (videoDependencyParts.get(node.id) || []).join("|")
@@ -4010,7 +3893,7 @@ function syncDomNodes() {
       port.hidden = node.kind === "video" && node.role === "result";
     });
     const copy = element.querySelector<HTMLElement>(".node-copy")!;
-    if (editingTextNodeId !== node.id)
+    if (promptNodeEditor.editingId !== node.id)
       copy.textContent = node.body || defaultNodeCopy(node.kind);
     const labelHeading = element.querySelector<HTMLElement>(
       ".node-label-heading",
@@ -5909,49 +5792,14 @@ function createDomNode(node: FlowNode) {
 }
 
 function enterTextEdit(node: FlowNode, element: HTMLElement) {
-  if (
-    node.kind !== "prompt" ||
-    node.status === "queued" ||
-    node.status === "running"
-  )
-    return;
-  const copy = element.querySelector<HTMLElement>(".node-copy")!;
-  editingTextNodeId = node.id;
-  copy.contentEditable = "true";
-  copy.classList.add("editing");
-  copy.focus();
-  const range = document.createRange();
-  range.selectNodeContents(copy);
-  const selection = getSelection();
-  selection?.removeAllRanges();
-  selection?.addRange(range);
-  const finish = () => {
-    if (editingTextNodeId !== node.id) return;
-    node.body = copy.innerText.trim();
-    editingTextNodeId = 0;
-    copy.contentEditable = "false";
-    copy.classList.remove("editing");
-    copy.oninput = null;
-    copy.onkeydown = null;
-    copy.onblur = null;
-    scheduleSave();
-    updateEditor();
-    draw();
-  };
-  copy.oninput = () => {
-    node.body = copy.innerText;
-    setSaveState("editing", "编辑中…");
-  };
-  copy.onkeydown = (event) => {
-    if (
-      event.key === "Escape" ||
-      ((event.metaKey || event.ctrlKey) && event.key === "Enter")
-    ) {
-      event.preventDefault();
-      copy.blur();
-    }
-  };
-  copy.onblur = finish;
+  promptNodeEditor.beginEdit(node, element, {
+    onInput: () => setSaveState("editing", "编辑中…"),
+    onFinish: () => {
+      scheduleSave();
+      updateEditor();
+      draw();
+    },
+  });
 }
 
 const nodeInfoModal = document.querySelector<HTMLElement>("#node-info-modal")!;
@@ -5959,7 +5807,7 @@ const nodeInfoDetails =
   document.querySelector<HTMLElement>("#node-info-details")!;
 const nodeInfoJson = document.querySelector<HTMLElement>("#node-info-json")!;
 function nodeInfoData(node: FlowNode) {
-  node.publicId ||= makePublicId(node.kind);
+  node.publicId ||= makeNodePublicId(node.kind);
   return {
     id: node.publicId,
     type: node.kind === "prompt" ? "label" : node.kind,
@@ -7364,7 +7212,7 @@ async function generateTts(source: FlowNode) {
       const position = findRevisionPosition(source);
       audioNode = {
         id,
-        publicId: makePublicId("audio"),
+        publicId: makeNodePublicId("audio"),
         kind: "audio",
         role: "result",
         sourceNodeId: source.id,
@@ -7553,7 +7401,7 @@ function createRevisionNode(source: FlowNode) {
   const kind: "image" | "video" = source.kind === "video" ? "video" : "image";
   const revision: FlowNode = {
     id,
-    publicId: makePublicId(kind),
+    publicId: makeNodePublicId(kind),
     kind,
     role: kind === "video" ? "result" : undefined,
     sourceNodeId: kind === "video" ? source.id : undefined,
@@ -7849,17 +7697,17 @@ function toggleBatchNode(id: number) {
   refreshBatchSelection();
 }
 function updateMarqueeSelection() {
-  if (!marquee?.active) return;
-  const origin = screen(marquee.worldStart),
-    left = Math.min(origin.x, marquee.current.x),
-    top = Math.min(origin.y, marquee.current.y),
-    right = Math.max(origin.x, marquee.current.x),
-    bottom = Math.max(origin.y, marquee.current.y),
-    currentWorld = world(marquee.current),
-    worldLeft = Math.min(marquee.worldStart.x, currentWorld.x),
-    worldTop = Math.min(marquee.worldStart.y, currentWorld.y),
-    worldRight = Math.max(marquee.worldStart.x, currentWorld.x),
-    worldBottom = Math.max(marquee.worldStart.y, currentWorld.y);
+  if (!interaction.marquee?.active) return;
+  const origin = screen(interaction.marquee.worldStart),
+    left = Math.min(origin.x, interaction.marquee.current.x),
+    top = Math.min(origin.y, interaction.marquee.current.y),
+    right = Math.max(origin.x, interaction.marquee.current.x),
+    bottom = Math.max(origin.y, interaction.marquee.current.y),
+    currentWorld = world(interaction.marquee.current),
+    worldLeft = Math.min(interaction.marquee.worldStart.x, currentWorld.x),
+    worldTop = Math.min(interaction.marquee.worldStart.y, currentWorld.y),
+    worldRight = Math.max(interaction.marquee.worldStart.x, currentWorld.x),
+    worldBottom = Math.max(interaction.marquee.worldStart.y, currentWorld.y);
   Object.assign(marqueeBox.style, {
     left: `${left}px`,
     top: `${top}px`,
@@ -7867,7 +7715,7 @@ function updateMarqueeSelection() {
     height: `${bottom - top}px`,
   });
   selection.batchIds.clear();
-  marquee.baseSelection.forEach((id) => selection.batchIds.add(id));
+  interaction.marquee.baseSelection.forEach((id) => selection.batchIds.add(id));
   nodes.forEach((node) => {
     if (
       node.x < worldRight &&
@@ -7887,7 +7735,7 @@ function startMarqueeAutoPan() {
   if (marqueeAutoPanFrame) return;
   let previous = performance.now();
   const tick = (now: number) => {
-    if (!marquee?.active) {
+    if (!interaction.marquee?.active) {
       marqueeAutoPanFrame = 0;
       return;
     }
@@ -7900,8 +7748,8 @@ function startMarqueeAutoPan() {
           : position > limit - edge
             ? Math.min(1, 1 - (limit - position) / edge) * maxSpeed
             : 0,
-      vx = axisSpeed(marquee.current.x, innerWidth),
-      vy = axisSpeed(marquee.current.y, innerHeight);
+      vx = axisSpeed(interaction.marquee.current.x, innerWidth),
+      vy = axisSpeed(interaction.marquee.current.y, innerHeight);
     if (vx || vy) {
       camera.x -= vx * elapsed;
       camera.y -= vy * elapsed;
@@ -7932,7 +7780,7 @@ function clearMarqueeHold() {
 }
 function enterMultiSelectMode() {
   selection.enterMultiSelect();
-  marqueeMode = true;
+  interaction.marqueeMode = true;
   document.body.classList.add("marquee-mode");
   refreshCanvasModeHint();
   showCanvasModeNotice(
@@ -7944,8 +7792,8 @@ function exitMultiSelectMode() {
   clearMarqueeHold();
   stopMarqueeAutoPan();
   selection.exitMultiSelect();
-  marqueeMode = false;
-  marquee = null;
+  interaction.marqueeMode = false;
+  interaction.clearMarquee();
   document.body.classList.remove("marquee-mode");
   marqueeBox.classList.remove("open");
   clearBatchSelection();
@@ -8058,21 +7906,19 @@ document.addEventListener(
       event.preventDefault();
       event.stopImmediatePropagation();
       clearMarqueeHold();
-      quickMarqueeMode = true;
       selection.multiSelectMode = true;
-      marqueeMode = true;
       document.body.classList.add("marquee-mode");
       pointer.down = false;
       pointer.draggingNode = null;
       canvas.classList.remove("dragging");
-      marquee = {
+      interaction.beginMarquee({
         pointerId: event.pointerId,
         start,
         worldStart: world(start),
         current: { ...start },
         active: true,
         baseSelection: new Set(selection.batchIds),
-      };
+      }, true);
       selection.selectedId = 0;
       updateEditor();
       marqueeBox.classList.add("open");
@@ -8098,14 +7944,14 @@ document.addEventListener(
       pointer.down = false;
       pointer.draggingNode = null;
       canvas.classList.remove("dragging");
-      marquee = {
+      interaction.beginMarquee({
         pointerId: event.pointerId,
         start,
         worldStart: world(start),
         current: { ...start },
         active: true,
         baseSelection: new Set(selection.batchIds),
-      };
+      });
       selection.selectedId = 0;
       updateEditor();
       marqueeBox.classList.add("open");
@@ -8134,9 +7980,9 @@ document.addEventListener(
       ) > 8
     )
       clearMarqueeHold();
-    if (!marquee || event.pointerId !== marquee.pointerId) return;
-    marquee.current = { x: event.clientX, y: event.clientY };
-    if (!marquee.active) return;
+    if (!interaction.marquee || event.pointerId !== interaction.marquee.pointerId) return;
+    interaction.marquee.current = { x: event.clientX, y: event.clientY };
+    if (!interaction.marquee.active) return;
     event.preventDefault();
     event.stopImmediatePropagation();
     updateMarqueeSelection();
@@ -8147,13 +7993,13 @@ document.addEventListener(
   "pointerup",
   (event) => {
     if (marqueeHoldPointer?.id === event.pointerId) clearMarqueeHold();
-    if (!marquee || event.pointerId !== marquee.pointerId) return;
-    const active = marquee.active;
+    if (!interaction.marquee || event.pointerId !== interaction.marquee.pointerId) return;
+    const active = interaction.marquee.active,
+      wasQuickMarquee = interaction.quickMarqueeMode;
     stopMarqueeAutoPan();
-    marquee = null;
+    interaction.clearMarquee();
     marqueeBox.classList.remove("open");
-    if (quickMarqueeMode) {
-      quickMarqueeMode = false;
+    if (wasQuickMarquee) {
       refreshCanvasModeHint();
     }
     if (active) {
@@ -8171,14 +8017,14 @@ document.addEventListener(
   "pointercancel",
   (event) => {
     if (marqueeHoldPointer?.id === event.pointerId) clearMarqueeHold();
-    if (!marquee || event.pointerId !== marquee.pointerId) return;
+    if (!interaction.marquee || event.pointerId !== interaction.marquee.pointerId) return;
     stopMarqueeAutoPan();
-    marquee = null;
+    const wasQuickMarquee = interaction.quickMarqueeMode;
+    interaction.clearMarquee();
     marqueeBox.classList.remove("open");
-    if (quickMarqueeMode) {
-      quickMarqueeMode = false;
+    if (wasQuickMarquee) {
       selection.multiSelectMode = false;
-      marqueeMode = false;
+      interaction.marqueeMode = false;
       document.body.classList.remove("marquee-mode");
       refreshCanvasModeHint();
     }
@@ -8206,14 +8052,7 @@ canvas.addEventListener("pointerdown", (e) => {
     cameraFrame = null;
     zoomTarget = camera.zoom;
   }
-  pointer.down = true;
-  pointer.x = pointer.startX = e.clientX;
-  pointer.y = pointer.startY = e.clientY;
-  pointer.moved = false;
-  pointer.draggingNode = null;
-  pointer.draggingGroup = null;
-  pointer.toggleBatchOnRelease = 0;
-  pointer.blankCanvas = true;
+  interaction.beginPointer({ x: e.clientX, y: e.clientY });
   {
     const hit = hitNode(e.clientX, e.clientY);
     if (hit) {
@@ -8318,11 +8157,7 @@ canvas.addEventListener("pointerup", (e) => {
   if (pointer.toggleBatchOnRelease && !pointer.moved)
     toggleBatchNode(pointer.toggleBatchOnRelease);
   scheduleSave();
-  pointer.down = false;
-  pointer.draggingNode = null;
-  pointer.draggingGroup = null;
-  pointer.toggleBatchOnRelease = 0;
-  pointer.blankCanvas = false;
+  interaction.resetPointer();
   canvasPanSelectedElement?.classList.remove("canvas-pan-selected");
   canvasPanSelectedElement = null;
   canvas.classList.remove("dragging");
@@ -8331,11 +8166,7 @@ canvas.addEventListener("pointerup", (e) => {
 canvas.addEventListener("pointercancel", () => {
   canvasPanSelectedElement?.classList.remove("canvas-pan-selected");
   canvasPanSelectedElement = null;
-  pointer.down = false;
-  pointer.draggingNode = null;
-  pointer.draggingGroup = null;
-  pointer.toggleBatchOnRelease = 0;
-  pointer.blankCanvas = false;
+  interaction.resetPointer();
   if (connection.active) {
     connection.cancel();
     stopConnectionAutoPan();
@@ -8344,11 +8175,7 @@ canvas.addEventListener("pointercancel", () => {
 });
 function cancelCanvasPanOnPageInterruption() {
   if (!pointer.down) return;
-  pointer.down = false;
-  pointer.draggingNode = null;
-  pointer.draggingGroup = null;
-  pointer.toggleBatchOnRelease = 0;
-  pointer.blankCanvas = false;
+  interaction.resetPointer();
   canvasPanSelectedElement?.classList.remove("canvas-pan-selected");
   canvasPanSelectedElement = null;
   canvas.classList.remove("dragging");
