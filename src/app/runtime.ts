@@ -20,6 +20,7 @@ import { CanvasClearController } from "../canvas/clear-controller";
 import { CanvasSaveCoordinator } from "../canvas/save-coordinator";
 import { CanvasLoadCoordinator } from "../canvas/load-coordinator";
 import { BatchSelectionController } from "../canvas/batch-selection-controller";
+import { CanvasHistoryController } from "../canvas/history-controller";
 import { LinkInteractionView } from "../canvas/link-interaction-view";
 import { GenerationPoller } from "../services/generation-poller";
 import { GenerationWorkflow } from "../services/generation-workflow";
@@ -388,271 +389,8 @@ topbarMenus.register("task", () => taskMonitorController.close());
 topbarMenus.register("presence", () =>
   document.querySelector("#online-status-panel")?.classList.remove("open"),
 );
-type CanvasHistorySnapshot = {
-  nodes: FlowNode[];
-  links: FlowLink[];
-  nextId: number;
-};
-type CanvasHistoryState = {
-  undo: CanvasHistorySnapshot[];
-  redo: CanvasHistorySnapshot[];
-  current: CanvasHistorySnapshot | null;
-  signature: string;
-};
-const canvasHistories = new Map<string, CanvasHistoryState>();
-let historyCommitTimer: number | undefined,
-  historyRestoring = false;
 const undoButton = document.querySelector<HTMLButtonElement>("#dock-history")!,
   redoButton = document.createElement("button");
-function cloneHistorySnapshot(): CanvasHistorySnapshot {
-  return {
-    nodes: structuredClone(nodes),
-    links: structuredClone(links),
-    nextId,
-  };
-}
-function isGeneratedProductNode(node: FlowNode) {
-  return node.role === "result" || node.title === "图片修改结果";
-}
-function historySignature(snapshot: CanvasHistorySnapshot) {
-  const ignoredIds = new Set(
-    snapshot.nodes.filter(isGeneratedProductNode).map((node) => node.id),
-  );
-  return JSON.stringify({
-    nodes: snapshot.nodes
-      .filter((node) => !ignoredIds.has(node.id))
-      .map(
-        ({
-          progress,
-          status,
-          jobId,
-          agentAuto,
-          mediaUrl,
-          generationPrompt,
-          originalPrompt,
-          corePrompt,
-          ...node
-        }) => node,
-      ),
-    links: snapshot.links.filter(
-      (link) => !ignoredIds.has(link.from) && !ignoredIds.has(link.to),
-    ),
-    nextId: snapshot.nextId,
-  });
-}
-function historyStructureSignature(snapshot: CanvasHistorySnapshot) {
-  const ignoredIds = new Set(
-    snapshot.nodes.filter(isGeneratedProductNode).map((node) => node.id),
-  );
-  return JSON.stringify({
-    nodes: snapshot.nodes
-      .filter((node) => !ignoredIds.has(node.id))
-      .map(
-        ({
-          x,
-          y,
-          width,
-          height,
-          progress,
-          status,
-          jobId,
-          agentAuto,
-          mediaUrl,
-          generationPrompt,
-          originalPrompt,
-          corePrompt,
-          ...node
-        }) => node,
-      )
-      .sort((a, b) => a.id - b.id),
-    links: snapshot.links
-      .filter((link) => !ignoredIds.has(link.from) && !ignoredIds.has(link.to))
-      .map((link) => ({ ...link }))
-      .sort(
-        (a, b) =>
-          a.from - b.from ||
-          a.to - b.to ||
-          a.fromSide.localeCompare(b.fromSide) ||
-          a.toSide.localeCompare(b.toSide),
-      ),
-  });
-}
-function generationSafeHistoryStep(
-  from: CanvasHistorySnapshot | null,
-  to: CanvasHistorySnapshot | undefined,
-) {
-  return Boolean(
-    from &&
-    to &&
-    historyStructureSignature(from) === historyStructureSignature(to),
-  );
-}
-function historyState() {
-  let state = canvasHistories.get(currentProjectId);
-  if (!state) {
-    state = { undo: [], redo: [], current: null, signature: "" };
-    canvasHistories.set(currentProjectId, state);
-  }
-  return state;
-}
-function updateHistoryControls() {
-  const state = historyState(),
-    generating = canvasHasActiveGeneration(),
-    undoSafe =
-      !generating ||
-      generationSafeHistoryStep(state.current, state.undo.at(-1)),
-    redoSafe =
-      !generating ||
-      generationSafeHistoryStep(state.current, state.redo.at(-1));
-  undoButton.disabled = !state.undo.length || !undoSafe;
-  undoButton.classList.toggle("available", state.undo.length > 0 && undoSafe);
-  undoButton.title =
-    generating && !undoSafe
-      ? "生成中仅可撤销卡片位置或尺寸调整"
-      : `回溯${state.undo.length ? ` · ${state.undo.length} 步` : ""}（Ctrl+Z）`;
-  redoButton.disabled = !state.redo.length || !redoSafe;
-}
-function persistCanvasHistory() {
-  const state = historyState();
-  try {
-    sessionStorage.setItem(
-      `flow-canvas-history:${currentProjectId}`,
-      JSON.stringify({
-        undo: state.undo.slice(-20),
-        redo: state.redo.slice(-20),
-        current: state.current,
-        signature: state.signature,
-      }),
-    );
-  } catch {
-    /* 历史过大时仍保留当前页面内撤销 */
-  }
-}
-function resetCanvasHistory(restore = true) {
-  window.clearTimeout(historyCommitTimer);
-  historyCommitTimer = undefined;
-  const snapshot = cloneHistorySnapshot(),
-    signature = historySignature(snapshot),
-    state = historyState();
-  let restored = false;
-  if (restore)
-    try {
-      const saved = JSON.parse(
-        sessionStorage.getItem(`flow-canvas-history:${currentProjectId}`) ||
-          "null",
-      ) as CanvasHistoryState | null;
-      if (saved?.current && saved.signature === signature) {
-        state.undo = Array.isArray(saved.undo) ? saved.undo.slice(-20) : [];
-        state.redo = Array.isArray(saved.redo) ? saved.redo.slice(-20) : [];
-        restored = true;
-      }
-    } catch {
-      /* 使用新历史 */
-    }
-  if (!restored) {
-    state.undo = [];
-    state.redo = [];
-  }
-  state.current = snapshot;
-  state.signature = signature;
-  persistCanvasHistory();
-  updateHistoryControls();
-}
-function commitCanvasHistory() {
-  historyCommitTimer = undefined;
-  if (historyRestoring) return;
-  const state = historyState(),
-    snapshot = cloneHistorySnapshot(),
-    signature = historySignature(snapshot);
-  if (!state.current) {
-    state.current = snapshot;
-    state.signature = signature;
-    updateHistoryControls();
-    return;
-  }
-  if (signature === state.signature) {
-    state.current = snapshot;
-    return;
-  }
-  state.undo.push(state.current);
-  if (state.undo.length > 50) state.undo.splice(0, state.undo.length - 50);
-  state.redo = [];
-  state.current = snapshot;
-  state.signature = signature;
-  persistCanvasHistory();
-  updateHistoryControls();
-}
-function queueCanvasHistory() {
-  if (historyRestoring) return;
-  window.clearTimeout(historyCommitTimer);
-  historyCommitTimer = window.setTimeout(commitCanvasHistory, 520);
-}
-async function applyCanvasHistory(snapshot: CanvasHistorySnapshot) {
-  historyRestoring = true;
-  const selectedBeforeRestore = selection.selectedId,
-    currentNodes = structuredClone(nodes),
-    currentLinks = structuredClone(links),
-    currentById = new Map(currentNodes.map((node) => [node.id, node])),
-    restoredNodes = structuredClone(snapshot.nodes);
-  for (const restored of restoredNodes) {
-    const current = currentById.get(restored.id);
-    if (!current) continue;
-    for (const key of [
-      "mediaUrl",
-      "jobId",
-      "status",
-      "progress",
-      "agentAuto",
-      "generationPrompt",
-      "originalPrompt",
-      "corePrompt",
-    ] as const) {
-      if (current[key] !== undefined)
-        (restored as unknown as Record<string, unknown>)[key] = current[key];
-      else delete (restored as unknown as Record<string, unknown>)[key];
-    }
-  }
-  const restoredIds = new Set(restoredNodes.map((node) => node.id)),
-    protectedProducts = currentNodes.filter(
-      (node) => isGeneratedProductNode(node) && !restoredIds.has(node.id),
-    );
-  restoredNodes.push(...protectedProducts);
-  const finalIds = new Set(restoredNodes.map((node) => node.id)),
-    restoredLinks = structuredClone(snapshot.links),
-    restoredLinkKeys = new Set(
-      restoredLinks.map(
-        (link) => `${link.from}:${link.to}:${link.fromSide}:${link.toSide}`,
-      ),
-    );
-  for (const link of currentLinks) {
-    if (!finalIds.has(link.from) || !finalIds.has(link.to)) continue;
-    if (
-      !protectedProducts.some(
-        (node) => node.id === link.from || node.id === link.to,
-      )
-    )
-      continue;
-    const key = `${link.from}:${link.to}:${link.fromSide}:${link.toSide}`;
-    if (!restoredLinkKeys.has(key)) {
-      restoredLinks.push(link);
-      restoredLinkKeys.add(key);
-    }
-  }
-  nodes.splice(0, nodes.length, ...restoredNodes);
-  links.splice(0, links.length, ...restoredLinks);
-  nextId = Math.max(
-    snapshot.nextId,
-    nodes.length ? Math.max(...nodes.map((node) => node.id)) + 1 : 1,
-  );
-  selection.selectedId = finalIds.has(selectedBeforeRestore) ? selectedBeforeRestore : 0;
-  selection.batchIds.clear();
-  promptNodeEditor.editingId = 0;
-  updateEditor();
-  draw();
-  await saveCanvas();
-  historyRestoring = false;
-  updateHistoryControls();
-}
 function showHistoryShortcutGuide(kind: "undo" | "redo") {
   const storageKey = `flow-history-guide:${kind}`;
   if (sessionStorage.getItem(storageKey)) return;
@@ -677,50 +415,31 @@ function showHistoryShortcutGuide(kind: "undo" | "redo") {
         },
   );
 }
-async function undoCanvas() {
-  commitCanvasHistory();
-  const state = historyState(),
-    previous = state.undo.at(-1);
-  if (!previous) {
-    showHistoryShortcutGuide("undo");
-    return;
-  }
-  if (
-    canvasHasActiveGeneration() &&
-    !generationSafeHistoryStep(state.current, previous)
-  ) {
-    showToast("生成中只能撤销卡片位置或尺寸调整", "warning");
-    return;
-  }
-  state.undo.pop();
-  state.redo.push(state.current!);
-  state.current = structuredClone(previous);
-  state.signature = historySignature(previous);
-  persistCanvasHistory();
-  await applyCanvasHistory(previous);
-  showHistoryShortcutGuide("undo");
-}
-async function redoCanvas() {
-  commitCanvasHistory();
-  const state = historyState(),
-    next = state.redo.at(-1);
-  if (!next) return;
-  if (
-    canvasHasActiveGeneration() &&
-    !generationSafeHistoryStep(state.current, next)
-  ) {
-    showToast("生成中只能重做卡片位置或尺寸调整", "warning");
-    return;
-  }
-  state.redo.pop();
-  state.undo.push(state.current!);
-  state.current = structuredClone(next);
-  state.signature = historySignature(next);
-  persistCanvasHistory();
-  await applyCanvasHistory(next);
-  showHistoryShortcutGuide("redo");
-}
-undoButton.addEventListener("click", () => void undoCanvas());
+const canvasHistory = new CanvasHistoryController({
+  nodes,
+  links,
+  undoButton,
+  redoButton,
+  projectId: () => currentProjectId,
+  nextId: () => nextId,
+  setNextId: (value) => { nextId = value; },
+  selectedId: () => selection.selectedId,
+  setSelectedId: (value) => { selection.selectedId = value; },
+  clearBatch: () => selection.batchIds.clear(),
+  clearPromptEditing: () => { promptNodeEditor.editingId = 0; },
+  generationActive: canvasHasActiveGeneration,
+  update: updateEditor,
+  draw,
+  save: saveCanvas,
+  toast: (message) => showToast(message, "warning"),
+  guide: showHistoryShortcutGuide,
+});
+function resetCanvasHistory(restore = true) { canvasHistory.reset(restore); }
+function commitCanvasHistory() { canvasHistory.commit(); }
+function queueCanvasHistory() { canvasHistory.queue(); }
+function updateHistoryControls() { canvasHistory.refreshControls(); }
+function undoCanvas() { return canvasHistory.undo(); }
+function redoCanvas() { return canvasHistory.redo(); }
 function emptyImageCandidates() {
   return taskMonitorController.emptyImageCandidates();
 }
