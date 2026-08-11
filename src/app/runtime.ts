@@ -108,6 +108,7 @@ import {
 } from "../ui/node-editor";
 import { filterAssets } from "../ui/asset-panel";
 import { AssetLibraryView } from "../ui/asset-library-view";
+import { AssetTouchController } from "../ui/asset-touch-controller";
 import { SquarePanelView } from "../ui/square-panel";
 import { WorkspacePanelController } from "../ui/toolbar";
 import {
@@ -7056,9 +7057,6 @@ const assetContextMenu = document.querySelector<HTMLElement>(
   "#asset-context-menu",
 )!;
 const assetContextMenuController = new ContextMenuController(assetContextMenu);
-let assetTouchHold: { pointerId: number; start: Point; timer: number } | null =
-    null,
-  assetTouchContextUntil = 0;
 function openAssetContextAt(asset: LibraryAsset, x: number, y: number) {
   const kind = asset.mimeType.startsWith("video/")
     ? ("video" as const)
@@ -7076,11 +7074,6 @@ function openAssetContextAt(asset: LibraryAsset, x: number, y: number) {
   const width = innerWidth <= 800 ? 210 : 190,
     height = 250;
   assetContextMenuController.openAt(x - 18, y - 24, width, height);
-}
-function clearAssetTouchHold() {
-  if (!assetTouchHold) return;
-  window.clearTimeout(assetTouchHold.timer);
-  assetTouchHold = null;
 }
 function visibleLibraryAssets() {
   return filterAssets(libraryAssets, {
@@ -7112,6 +7105,11 @@ function playLibraryAudio(asset: LibraryAsset) {
 function assetForRenderedItem(item: HTMLElement) {
   return libraryAssets.find((asset) => asset.id === item.dataset.assetId);
 }
+const assetTouchController = new AssetTouchController({
+  grid: assetGrid,
+  resolveAsset: assetForRenderedItem,
+  onContext: openAssetContextAt,
+});
 const assetLibraryView = new AssetLibraryView({
   grid: assetGrid,
   count: assetCount,
@@ -7123,7 +7121,7 @@ const assetLibraryView = new AssetLibraryView({
   bulkDownload: document.querySelector<HTMLButtonElement>(
     "#asset-bulk-download",
   )!,
-  isTouchContextBlocked: () => performance.now() < assetTouchContextUntil,
+  isTouchContextBlocked: () => assetTouchController.isContextBlocked(),
   onOpen: (asset, kind) => openAssetPreview(asset.url, asset.name, kind),
   onAudio: playLibraryAudio,
   onPickImage: (asset) => {
@@ -7134,62 +7132,6 @@ const assetLibraryView = new AssetLibraryView({
   },
   onContext: openAssetContextAt,
 });
-assetGrid.addEventListener(
-  "pointerdown",
-  (event) => {
-    if (event.pointerType !== "touch") return;
-    const item = (event.target as HTMLElement | null)?.closest<HTMLElement>(
-      ".asset-item",
-    );
-    if (!item) return;
-    clearAssetTouchHold();
-    const start = { x: event.clientX, y: event.clientY },
-      pointerId = event.pointerId,
-      asset = assetForRenderedItem(item);
-    if (!asset) return;
-    const timer = window.setTimeout(() => {
-      if (!assetTouchHold || assetTouchHold.pointerId !== pointerId) return;
-      assetTouchContextUntil = performance.now() + 900;
-      openAssetContextAt(asset, start.x, start.y);
-      if (navigator.vibrate) navigator.vibrate(16);
-      clearAssetTouchHold();
-    }, 450);
-    assetTouchHold = { pointerId, start, timer };
-  },
-  true,
-);
-assetGrid.addEventListener(
-  "pointermove",
-  (event) => {
-    if (
-      assetTouchHold?.pointerId === event.pointerId &&
-      Math.hypot(
-        event.clientX - assetTouchHold.start.x,
-        event.clientY - assetTouchHold.start.y,
-      ) > 9
-    )
-      clearAssetTouchHold();
-  },
-  true,
-);
-for (const type of ["pointerup", "pointercancel"] as const)
-  window.addEventListener(
-    type,
-    (event) => {
-      if (assetTouchHold?.pointerId === event.pointerId) clearAssetTouchHold();
-    },
-    true,
-  );
-assetGrid.addEventListener(
-  "click",
-  (event) => {
-    if (performance.now() < assetTouchContextUntil) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-    }
-  },
-  true,
-);
 const imageNodeUpload = document.createElement("input");
 imageNodeUpload.type = "file";
 imageNodeUpload.accept = "image/*";
