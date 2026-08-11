@@ -1,4 +1,6 @@
 import { apiFetch } from "./api";
+import type { FlowLink, FlowNode } from "../nodes/node-types";
+import { prepareGenerationRequest } from "../nodes/generation-request";
 
 export type GenerationJob = {
   id: string;
@@ -39,4 +41,54 @@ export async function fetchGenerationJob(jobId: string) {
     job = (await response.json().catch(() => ({}))) as GenerationJob;
   if (!response.ok) throw new Error(job.error || "任务状态获取失败");
   return job;
+}
+
+export function missingGenerationInputs(source: FlowNode, nodes: FlowNode[], links: FlowLink[]) {
+  return links
+    .filter((link) => link.to === source.id)
+    .map((link) => nodes.find((node) => node.id === link.from))
+    .filter((node): node is FlowNode => node?.kind === "image" && !node.mediaUrl);
+}
+
+export async function runGenerationJob(options: {
+  projectId: string;
+  source: FlowNode;
+  output: FlowNode;
+  nodes: FlowNode[];
+  links: FlowLink[];
+  normalizePrompt: (value: string) => string;
+}) {
+  const { source, output, nodes, links } = options;
+  try {
+    const prepared = prepareGenerationRequest(source, output, nodes, links, options.normalizePrompt);
+    if (prepared.corePrompt) {
+      source.corePrompt = prepared.corePrompt;
+      output.corePrompt = prepared.corePrompt;
+      output.originalPrompt = prepared.originalPrompt;
+    }
+    const job = await submitGenerationJob({
+      projectId: options.projectId,
+      nodeId: output.id,
+      kind: output.kind === "video" ? "video" : "image",
+      prompt: prepared.prompt,
+      promptProfile: source.promptProfile || "manual",
+      model: output.model,
+      inputUrls: prepared.inputUrls,
+      parameters: prepared.parameters,
+    });
+    const liveNode = nodes.find((node) => node.id === output.id);
+    if (!liveNode) throw new Error("任务已提交，但目标卡片已不存在");
+    Object.assign(liveNode, {
+      jobId: job.id,
+      status: job.status,
+      progress: job.progress,
+      generationPrompt: prepared.prompt,
+      agentAuto: false,
+    });
+    return { ok: true as const, job, node: liveNode };
+  } catch (error) {
+    const liveNode = nodes.find((node) => node.id === output.id);
+    if (liveNode) Object.assign(liveNode, { status: "failed", progress: 0 });
+    return { ok: false as const, error, node: liveNode };
+  }
 }

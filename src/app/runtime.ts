@@ -39,7 +39,8 @@ import {
 import { apiFetch } from "../services/api";
 import {
   fetchGenerationJob,
-  submitGenerationJob,
+  missingGenerationInputs,
+  runGenerationJob,
 } from "../services/generation";
 import {
   fetchAssets,
@@ -55,7 +56,6 @@ import {
 } from "../services/projects";
 import { streamComicDialogue } from "../services/comic";
 import { ComicSessionController } from "../services/comic-session";
-import { prepareGenerationRequest } from "../nodes/generation-request";
 import {
   clipVideoPrompt,
   composeStoryboardPrompt,
@@ -4694,12 +4694,7 @@ async function generate(sourceOverride?: FlowNode) {
     return;
   }
   const wasAgentAuto = Boolean(source.agentAuto),
-    missingImageUpstreams = links
-      .filter((link) => link.to === source.id)
-      .map((link) => nodes.find((item) => item.id === link.from))
-      .filter(
-        (item): item is FlowNode => item?.kind === "image" && !item.mediaUrl,
-      );
+    missingImageUpstreams = missingGenerationInputs(source, nodes, links);
   if (missingImageUpstreams.length) {
     if (wasAgentAuto) {
       source.status = "waiting";
@@ -4734,24 +4729,16 @@ async function generate(sourceOverride?: FlowNode) {
   node.progress = 0;
   updateEditor();
   draw();
-  try {
-    const prepared = prepareGenerationRequest(source, node, nodes, links, normalizePromptText);
-    const { prompt: requestPrompt, inputUrls, parameters } = prepared;
-    if (prepared.corePrompt) {
-      source.corePrompt = prepared.corePrompt;
-      node.corePrompt = prepared.corePrompt;
-      node.originalPrompt = prepared.originalPrompt;
-    }
-    const job = await submitGenerationJob({
-      projectId: currentProjectId,
-      nodeId: node.id,
-      kind: node.kind === "video" ? "video" : "image",
-      prompt: requestPrompt,
-      promptProfile: source.promptProfile || "manual",
-      model: node.model,
-      inputUrls,
-      parameters,
-    });
+  const result = await runGenerationJob({
+    projectId: currentProjectId,
+    source,
+    output: node,
+    nodes,
+    links,
+    normalizePrompt: normalizePromptText,
+  });
+  if (result.ok) {
+    const { job, node: liveNode } = result;
     if (authUser && typeof job.creditsAvailable === "number") {
       authUser = {
         ...authUser,
@@ -4763,23 +4750,12 @@ async function generate(sourceOverride?: FlowNode) {
       renderAuthenticatedUser();
       refreshNodeModelMenus();
     }
-    const liveNode = nodes.find((item) => item.id === node.id);
-    if (!liveNode) throw new Error("任务已提交，但目标卡片已不存在");
-    liveNode.jobId = job.id;
-    liveNode.status = job.status;
-    liveNode.progress = job.progress;
-    liveNode.generationPrompt = requestPrompt;
-    liveNode.agentAuto = false;
     updateEditor();
     scheduleSave();
     draw();
     pollJob(liveNode);
-  } catch (error) {
-    const liveNode = nodes.find((item) => item.id === node.id);
-    if (liveNode) {
-      liveNode.status = "failed";
-      liveNode.progress = 0;
-    }
+  } else {
+    const { error, node: liveNode } = result;
     jobLabel.textContent = "提交失败，请检查 API";
     showToast(
       "任务提交失败，请检查接口配置",
