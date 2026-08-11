@@ -249,7 +249,18 @@ test("connection overlay and quick group movement stay in the Pixi path", async 
   await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
 
   // Node 1 is at screen (340,260), node 3 starts at (980,260).
-  await page.mouse.click(460, 350);
+  // The Pixi canvas becomes visible before its first interactive frame has
+  // necessarily been submitted on software WebGL. Retry the real hit test
+  // instead of relying on an arbitrary sleep or weakening the assertion.
+  await expect
+    .poll(
+      async () => {
+        await page.mouse.click(460, 350);
+        return page.locator(".flow-node.selected").count();
+      },
+      { timeout: 10_000 },
+    )
+    .toBe(1);
   const output = page.locator(".flow-node.selected .node-port.output");
   await expect(output).toBeVisible();
   const outputBox = await output.boundingBox();
