@@ -65,10 +65,9 @@ import { PendingTaskCancellationController } from "../nodes/pending-task-cancell
 import { apiFetch } from "../services/api";
 import { AppUpdateController } from "../services/app-update-controller";
 import { GenerationCapabilitiesController } from "../services/generation-capabilities-controller";
+import { GenerationFinalizer } from "../services/generation-finalizer";
+import type { GenerationJob } from "../services/generation";
 import { ClientDiagnostics } from "../services/client-diagnostics";
-import {
-  type GenerationJob,
-} from "../services/generation";
 import { type LibraryAsset } from "../services/assets";
 import { ComicSessionController } from "../services/comic-session";
 import { ComicSessionState } from "../services/comic-session-state";
@@ -1603,43 +1602,28 @@ function removeFailedResult(node: FlowNode, sourceId = node.sourceNodeId) {
   if (selection.selectedId === node.id) selection.selectedId = sourceId ?? 0;
 }
 function runAgentWorkflow() { generationWorkflow.run(); }
+const generationFinalizer = new GenerationFinalizer({
+  imageCache,
+  jobLabel,
+  getUser: () => authUser,
+  setUser: (user) => { authUser = user; },
+  normalizePrompt: normalizePromptText,
+  removeFailedResult,
+  loadAssets: () => loadAssets(false),
+  isAssetPanelOpen: () => Boolean(
+    document.querySelector("#assets-panel")?.classList.contains("open"),
+  ),
+  renderAssets,
+  renderUser: renderAuthenticatedUser,
+  refreshModelMenus: refreshNodeModelMenus,
+  updateEditor,
+  draw,
+  save: scheduleSave,
+  runWorkflow: runAgentWorkflow,
+  toast: (message, tone, detail) => showToast(message, tone, detail),
+});
 async function finalizeGenerationJob(currentNode: FlowNode, job: GenerationJob) {
-  if (job.status === "succeeded" && job.result_url) {
-    currentNode.mediaUrl = job.result_url;
-    try {
-      const metadata = JSON.parse(job.result_metadata || "{}");
-      if (metadata && typeof metadata === "object") currentNode.videoResult = metadata;
-    } catch { /* 旧任务没有结果规格 */ }
-    imageCache.delete(job.result_url);
-    void loadAssets(false).then(() => {
-      if (document.querySelector("#assets-panel")?.classList.contains("open")) renderAssets();
-    });
-    if (currentNode.kind === "video") showToast("视频已生成并加入资产库", "success");
-  }
-  if (job.status === "failed") {
-    const message = job.error || "视频生成失败";
-    jobLabel.textContent = `生成失败：${message}`;
-    showToast(message, "error");
-    if (currentNode.role === "result") removeFailedResult(currentNode);
-  }
-  if (job.status === "canceled") {
-    currentNode.progress = 0;
-    if (!currentNode.body.trim()) currentNode.body = normalizePromptText(currentNode.originalPrompt || currentNode.generationPrompt || "");
-    delete currentNode.jobId;
-    jobLabel.textContent = "任务已取消，可重新生成";
-    showToast("等待任务已取消", "warning", "卡片描述和配置已保留，可随时重新生成。");
-  }
-  try {
-    const response = await apiFetch("/api/users/me");
-    if (response.ok) {
-      const previous = Math.max(0, Number(authUser?.credits ?? 0)-Number(authUser?.reservedCredits ?? 0));
-      authUser = (await response.json()) as AuthUser;
-      const next = Math.max(0, Number(authUser.credits ?? 0)-Number(authUser.reservedCredits ?? 0));
-      renderAuthenticatedUser();
-      if (previous >= 1 !== next >= 1 || previous >= 2 !== next >= 2) refreshNodeModelMenus();
-    }
-  } catch { /* 下次刷新同步余额 */ }
-  updateEditor(); draw(); scheduleSave(false); runAgentWorkflow();
+  await generationFinalizer.finalize(currentNode, job);
 }
 function pollJob(node: FlowNode) { generationPoller.poll(node); }
 function refreshBatchSelection() {
