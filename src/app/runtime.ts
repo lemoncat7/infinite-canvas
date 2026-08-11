@@ -125,6 +125,7 @@ import {
 } from "../ui/custom-api-controller";
 import { PromptAgentControls } from "../ui/prompt-agent-controls";
 import { PromptAgentContextController } from "../ui/prompt-agent-context";
+import { createComicStudioShell } from "../ui/comic-studio-shell";
 import { ComicSidePanelController } from "../ui/comic-side-panel";
 import { ComicStudioView } from "../ui/comic-studio";
 import { ComicLabelController } from "../ui/comic-labels";
@@ -4280,42 +4281,16 @@ const promptAgentControls = new PromptAgentControls({
   isBusy: () => Boolean(promptAgentRequestController),
 });
 const promptAgentGoalInput = promptAgentControls.goalInput;
-const comicStudio = document.createElement("section");
-comicStudio.className = "comic-studio comic-chat-studio";
-comicStudio.innerHTML = `<header><div><small>VIORA STORY</small><h2>和灵感一起写漫剧</h2></div><nav><div class="comic-label-control"><button type="button" data-comic-label-picker aria-label="关联标签"><span>◇</span><b>关联标签</b></button><div class="comic-label-menu" data-comic-label-menu></div></div><button type="button" data-comic-new aria-label="新会话"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>新会话</span></button><button type="button" data-comic-close aria-label="关闭"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.75 6.75 17.25 17.25M17.25 6.75 6.75 17.25"/></svg></button></nav></header><aside class="comic-linked-label" data-comic-linked-label hidden></aside><div class="comic-conversation" data-comic-conversation><div class="comic-message assistant comic-welcome"><i>✦</i><div><b>先聊聊你想做的故事</b><p>我会边聊边整理创作方案，不会因为一句话就直接生成。等方向明确后，由你确认生成完整剧本。</p></div></div><aside class="comic-brief" data-comic-brief hidden><header><span><small>当前方案</small><b data-comic-brief-title>正在整理</b></span><em data-comic-brief-state>讨论中</em></header><div data-comic-brief-content></div><button type="button" data-comic-confirm hidden><span>生成完整剧本</span><small>确认后开始正式构思</small></button></aside><section class="comic-plan" hidden><div class="comic-plan-head"><div><small data-comic-meta></small><h3 data-comic-title></h3><p data-comic-logline></p></div></div><div class="comic-plan-scroll"><article><h4>人物与世界</h4><div data-comic-characters></div></article><article><h4>剧情大纲</h4><ol data-comic-outline></ol></article><article><h4>制作分镜</h4><div data-comic-shots></div></article></div><div class="comic-plan-actions"><button type="button" data-comic-label><span>保存为标签</span></button><button type="button" data-comic-label-copy hidden><span>另存为标签</span></button><button type="button" data-comic-canvas><span>铺到画布</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></button></div></section></div><footer class="comic-composer"><textarea data-comic-message rows="1" placeholder="继续补充人物、剧情、风格或你不想要的内容…"></textarea><button type="button" data-comic-send aria-label="发送"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button></footer><output data-comic-status></output>`;
-document.body.append(comicStudio);
-const comicConversationElement = comicStudio.querySelector<HTMLElement>(
-    "[data-comic-conversation]",
-  )!,
-  comicPlanElement = comicStudio.querySelector<HTMLElement>(".comic-plan")!;
-comicPlanElement.classList.add("comic-plan-source");
-const comicPlanSidePanel = comicPlanElement.cloneNode(true) as HTMLElement;
-comicPlanSidePanel.classList.remove("comic-plan-source");
-comicPlanSidePanel.classList.add("comic-plan-side");
-document.body.append(comicPlanSidePanel);
-const comicHeaderNav = comicStudio.querySelector<HTMLElement>(
-    ":scope > header nav",
-  )!,
-  comicLabelControl = comicHeaderNav.querySelector<HTMLElement>(
-    ".comic-label-control",
-  )!;
-comicLabelControl.insertAdjacentHTML(
-  "beforebegin",
-  '<button type="button" data-comic-desktop-side="brief" aria-label="显示或隐藏当前方案"><span>当前方案</span></button><button type="button" data-comic-desktop-side="plan" aria-label="显示或隐藏完整方案"><span>完整方案</span></button><button type="button" data-comic-scheme aria-label="查看创作方案"><span>方案</span></button>',
-);
-const comicThinkingStatus = comicStudio.querySelector<HTMLOutputElement>(
-    "[data-comic-status]",
-  )!,
-  comicComposer = comicStudio.querySelector<HTMLElement>(".comic-composer")!,
-  comicMessageField = comicComposer.querySelector<HTMLTextAreaElement>(
-    "[data-comic-message]",
-  )!;
-comicThinkingStatus.setAttribute("aria-live", "polite");
-comicComposer.insertBefore(comicThinkingStatus, comicMessageField);
-const comicBriefPanel =
-  comicStudio.querySelector<HTMLElement>("[data-comic-brief]")!;
-comicBriefPanel.classList.add("comic-brief-side", "expanded");
-document.body.append(comicBriefPanel);
+const comicShell = createComicStudioShell();
+const comicStudio = comicShell.studio,
+  comicConversationElement = comicShell.conversation,
+  comicPlanElement = comicShell.sourcePlan,
+  comicPlanSidePanel = comicShell.sidePlan,
+  comicHeaderNav = comicShell.headerNav,
+  comicThinkingStatus = comicShell.thinkingStatus,
+  comicComposer = comicShell.composer,
+  comicMessageField = comicShell.messageField,
+  comicBriefPanel = comicShell.briefPanel;
 const comicSidePanel = new ComicSidePanelController({
   studio: comicStudio,
   briefPanel: comicBriefPanel,
