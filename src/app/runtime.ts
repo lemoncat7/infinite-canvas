@@ -105,8 +105,11 @@ import { ComicStudioView } from "../ui/comic-studio";
 import { ComicLabelController } from "../ui/comic-labels";
 import { buildComicWorkflow } from "../nodes/comic-workflow";
 import {
+  configurePromptAgentNode,
+  connectPromptAgentInputs,
   planComicWorkflowLayout,
   promptAgentStepPosition,
+  resolvePromptAgentInputs,
 } from "../nodes/prompt-agent-workflow";
 import { createNodeView } from "../nodes/node-view-factory";
 import { syncNodeMediaView } from "../nodes/node-media-view";
@@ -6564,6 +6567,7 @@ function applyPromptAgentPlan(result: PromptAgentResult) {
         (source) => source.kind === "image" && Boolean(source.mediaUrl),
       ),
       createdIds: number[] = [],
+      createdNodes: FlowNode[] = [],
       rightEdge = nodes.length
         ? Math.max(...nodes.map((node) => node.x + node.width))
         : 0,
@@ -6575,8 +6579,7 @@ function applyPromptAgentPlan(result: PromptAgentResult) {
       },
       comicLayout = planComicWorkflowLayout(planned, base);
     planned.forEach((step, index) => {
-      const stage = step.stage || "storyboard",
-        comicWorkflow = result.layout === "comic-workflow",
+      const comicWorkflow = result.layout === "comic-workflow",
         position = promptAgentStepPosition({
           index,
           step,
@@ -6587,130 +6590,27 @@ function applyPromptAgentPlan(result: PromptAgentResult) {
       addNode(step.kind, position, true);
       const created = nodes.find((node) => node.id === selection.selectedId);
       if (!created) return;
-      if (comicWorkflow && step.kind === "image") created.model = "gpt-image-2";
-      created.body = step.prompt.trim();
-      created.generationPrompt =
-        comicWorkflow && step.kind === "image" ? undefined : step.prompt.trim();
-      created.title =
-        step.title?.trim() ||
-        `Agent · ${step.kind === "video" ? "视频" : step.kind === "voice" ? "语音配置" : step.kind === "tts" ? "TTS" : "图像"} ${index + 1}`;
-      if (step.kind === "voice")
-        created.voiceSettings = {
-          ...(created.voiceSettings || {}),
-          providerId: "easyvoice-local",
-          voiceId:
-            step.voiceId ||
-            created.voiceSettings?.voiceId ||
-            "zh-CN-XiaoxiaoNeural",
-          language: "zh-CN",
-          defaultSpeed: Math.max(
-            0.5,
-            Math.min(2, Number(step.voiceSpeed) || 1),
-          ),
-          pitch: Math.max(-50, Math.min(50, Number(step.voicePitch) || 0)),
-          volume: Math.max(0, Math.min(2, Number(step.voiceVolume) || 1)),
-          roleName: step.roleName || "",
-          tone: step.voiceProfile || "自然",
-        };
-      if (comicWorkflow && step.kind === "image") {
-        delete created.corePrompt;
-        created.promptProfile =
-          step.promptProfile ||
-          (stage === "video" || stage === "voice" || stage === "tts"
-            ? "manual"
-            : stage);
-        created.styleConstraint = step.styleConstraint;
-        created.formConstraint = step.formConstraint;
-        created.continuityConstraint = step.continuityConstraint;
-        created.crowdConstraint = step.crowdConstraint;
-      }
-      created.agentAuto =
-        Boolean(result.shouldGenerate) && step.autoGenerate !== false;
-      created.status = created.agentAuto ? "waiting" : "idle";
-      if (step.kind === "video") {
-        created.videoSettings = {
-          ...(created.videoSettings || {}),
-          seconds: String(Math.max(3, Math.min(8, Number(step.duration) || 5))),
-          aspectRatio: ["9:16", "16:9", "1:1", "4:3"].includes(
-            String(step.aspectRatio),
-          )
-            ? String(step.aspectRatio)
-            : created.videoSettings?.aspectRatio || "16:9",
-        };
-      }
-      if (step.kind === "image") {
-        const imageSize = comicWorkflow
-          ? step.aspectRatio === "9:16"
-            ? "864x1536"
-            : step.aspectRatio === "1:1"
-              ? "1024x1024"
-              : "1536x864"
-          : created.imageSettings?.size;
-        created.imageSettings = {
-          ...(created.imageSettings || {}),
-          ...(imageSize ? { size: imageSize } : {}),
-          quality: "auto",
-        };
-      }
-      createdIds.push(created.id);
-      const indexes = (step.referenceIndexes || [])
-          .map(Number)
-          .filter(
-            (value) =>
-              Number.isInteger(value) &&
-              value >= 1 &&
-              value <= imageSources.length,
-          ),
-        references = indexes.map((value) => imageSources[value - 1]),
-        dependencies = (step.dependsOn || [])
-          .map(Number)
-          .filter(
-            (value) => Number.isInteger(value) && value >= 1 && value <= index,
-          )
-          .map((value) =>
-            nodes.find((node) => node.id === createdIds[value - 1]),
-          )
-          .filter((node): node is FlowNode => Boolean(node)),
-        orderedInputs =
-          comicWorkflow && step.kind === "image"
-            ? [...dependencies, ...references]
-            : [...references, ...dependencies],
-        uniqueInputs = orderedInputs.filter(
-          (source, inputIndex, list) =>
-            list.findIndex((candidate) => candidate.id === source.id) ===
-            inputIndex,
-        ),
-        inputs =
-          comicWorkflow && step.kind === "image"
-            ? uniqueInputs.slice(0, 2)
-            : uniqueInputs;
-      inputs.forEach((source, inputIndex) => {
-        if (
-          !links.some(
-            (link) => link.from === source.id && link.to === created.id,
-          )
-        )
-          links.push({
-            from: source.id,
-            to: created.id,
-            fromSide: "right",
-            toSide: "left",
-            inputOrder: inputIndex + 1,
-          });
+      configurePromptAgentNode({
+        node: created,
+        step,
+        index,
+        comicWorkflow,
+        shouldGenerate: Boolean(result.shouldGenerate),
       });
+      createdIds.push(created.id);
+      createdNodes.push(created);
+      connectPromptAgentInputs(
+        created,
+        resolvePromptAgentInputs({
+          step,
+          stepIndex: index,
+          imageSources,
+          createdNodes,
+          comicWorkflow,
+        }),
+        links,
+      );
     });
-    if (result.layout === "comic-workflow")
-      nodes
-        .filter((node) => createdIds.includes(node.id) && node.kind === "video")
-        .forEach((node) => {
-          node.videoSettings = {
-            seconds: "5",
-            aspectRatio: "16:9",
-            ...(node.videoSettings || {}),
-            resolution: "480p",
-            referenceMode: "keyframes",
-          };
-        });
     promptAgentAppliedNodeId = createdIds[0] || 0;
     promptAgentUndo = () => {
       for (let index = links.length - 1; index >= 0; index--)

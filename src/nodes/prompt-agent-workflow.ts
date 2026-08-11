@@ -1,4 +1,4 @@
-import type { Point } from "./node-types";
+import type { FlowLink, FlowNode, Point } from "./node-types";
 import type { PromptAgentStep } from "./comic-types";
 
 type WorkflowStage = NonNullable<PromptAgentStep["stage"]>;
@@ -126,4 +126,141 @@ export function promptAgentStepPosition(options: {
     x: base.x + Math.floor(index / 3) * 390,
     y: base.y + (index % 3) * 270,
   };
+}
+
+export function configurePromptAgentNode(options: {
+  node: FlowNode;
+  step: PromptAgentStep;
+  index: number;
+  comicWorkflow: boolean;
+  shouldGenerate: boolean;
+}) {
+  const { node, step, index, comicWorkflow, shouldGenerate } = options;
+  const stage = step.stage || "storyboard";
+  if (comicWorkflow && step.kind === "image") node.model = "gpt-image-2";
+  node.body = step.prompt.trim();
+  node.generationPrompt =
+    comicWorkflow && step.kind === "image" ? undefined : step.prompt.trim();
+  node.title =
+    step.title?.trim() ||
+    `Agent · ${step.kind === "video" ? "视频" : step.kind === "voice" ? "语音配置" : step.kind === "tts" ? "TTS" : "图像"} ${index + 1}`;
+
+  if (step.kind === "voice") {
+    node.voiceSettings = {
+      ...(node.voiceSettings || {}),
+      providerId: "easyvoice-local",
+      voiceId:
+        step.voiceId ||
+        node.voiceSettings?.voiceId ||
+        "zh-CN-XiaoxiaoNeural",
+      language: "zh-CN",
+      defaultSpeed: clamp(Number(step.voiceSpeed) || 1, 0.5, 2),
+      pitch: clamp(Number(step.voicePitch) || 0, -50, 50),
+      volume: clamp(Number(step.voiceVolume) || 1, 0, 2),
+      roleName: step.roleName || "",
+      tone: step.voiceProfile || "自然",
+    };
+  }
+  if (comicWorkflow && step.kind === "image") {
+    delete node.corePrompt;
+    node.promptProfile =
+      step.promptProfile ||
+      (stage === "character" ||
+      stage === "prop" ||
+      stage === "scene" ||
+      stage === "storyboard"
+        ? stage
+        : "manual");
+    node.styleConstraint = step.styleConstraint;
+    node.formConstraint = step.formConstraint;
+    node.continuityConstraint = step.continuityConstraint;
+    node.crowdConstraint = step.crowdConstraint;
+  }
+  node.agentAuto = shouldGenerate && step.autoGenerate !== false;
+  node.status = node.agentAuto ? "waiting" : "idle";
+  if (step.kind === "video") {
+    node.videoSettings = {
+      ...(node.videoSettings || {}),
+      seconds: String(clamp(Number(step.duration) || 5, 3, 8)),
+      aspectRatio: validAspectRatio(step.aspectRatio)
+        ? String(step.aspectRatio)
+        : node.videoSettings?.aspectRatio || "16:9",
+      ...(comicWorkflow
+        ? { resolution: "480p", referenceMode: "keyframes" as const }
+        : {}),
+    };
+  }
+  if (step.kind === "image") {
+    const imageSize = comicWorkflow
+      ? step.aspectRatio === "9:16"
+        ? "864x1536"
+        : step.aspectRatio === "1:1"
+          ? "1024x1024"
+          : "1536x864"
+      : node.imageSettings?.size;
+    node.imageSettings = {
+      ...(node.imageSettings || {}),
+      ...(imageSize ? { size: imageSize } : {}),
+      quality: "auto",
+    };
+  }
+}
+
+export function resolvePromptAgentInputs(options: {
+  step: PromptAgentStep;
+  stepIndex: number;
+  imageSources: FlowNode[];
+  createdNodes: FlowNode[];
+  comicWorkflow: boolean;
+}): FlowNode[] {
+  const { step, stepIndex, imageSources, createdNodes, comicWorkflow } = options;
+  const references = (step.referenceIndexes || [])
+    .map(Number)
+    .filter(
+      (value) =>
+        Number.isInteger(value) && value >= 1 && value <= imageSources.length,
+    )
+    .map((value) => imageSources[value - 1]);
+  const dependencies = (step.dependsOn || [])
+    .map(Number)
+    .filter(
+      (value) => Number.isInteger(value) && value >= 1 && value <= stepIndex,
+    )
+    .map((value) => createdNodes[value - 1])
+    .filter((node): node is FlowNode => Boolean(node));
+  const ordered =
+    comicWorkflow && step.kind === "image"
+      ? [...dependencies, ...references]
+      : [...references, ...dependencies];
+  const unique = ordered.filter(
+    (source, index, list) =>
+      list.findIndex((candidate) => candidate.id === source.id) === index,
+  );
+  return comicWorkflow && step.kind === "image" ? unique.slice(0, 2) : unique;
+}
+
+export function connectPromptAgentInputs(
+  target: FlowNode,
+  inputs: FlowNode[],
+  links: FlowLink[],
+) {
+  inputs.forEach((source, inputIndex) => {
+    if (links.some((link) => link.from === source.id && link.to === target.id))
+      return;
+    links.push({
+      from: source.id,
+      to: target.id,
+      fromSide: "right",
+      toSide: "left",
+      inputOrder: inputIndex + 1,
+    });
+  });
+}
+
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.max(minimum, Math.min(maximum, value));
+}
+
+function validAspectRatio(value: unknown) {
+  return ["9:16", "16:9", "1:1", "4:3"].includes(String(value));
 }
