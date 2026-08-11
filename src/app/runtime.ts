@@ -49,13 +49,11 @@ import {
   createProjectDialog,
 } from "../ui/dialogs/project-dialog";
 import type { AuthUser } from "../ui/user-menu-controller";
-import { NotificationFeature } from "../ui/notification-feature";
-import { AccountToolsFeature } from "../ui/account-tools-feature";
 import { CanvasCreationSuiteFeature } from "../ui/canvas-creation-suite-feature";
 import { CanvasNodeViewFeature } from "../nodes/canvas-node-view-feature";
 import { createDefaultGenerationCapabilities } from "./state";
 import { WorkspaceRuntimeFeature } from "./workspace-runtime-feature";
-import { AuthWorkspaceFeature } from "./auth-workspace-feature";
+import { AccountSessionFeature } from "./account-session-feature";
 import {
   connectionControlPoint,
   nodePortPosition,
@@ -393,64 +391,51 @@ const appUpdateController = new AppUpdateController({
 });
 appUpdateController.start();
 
-let notificationFeature: NotificationFeature;
-let accountTools: AccountToolsFeature;
-const authWorkspace: AuthWorkspaceFeature = new AuthWorkspaceFeature({
-  nodes,
-  links,
-  getProjectId: () => currentProjectId,
-  setProjectId: (id) => { currentProjectId = id; },
-  getLoadedProjectId: () => canvasPersistence.loadedProjectId,
-  isSaveBlocked: () => canvasPersistence.blocked,
-  getServerVersion: () => canvasPersistence.serverVersion,
-  ensureRenderer: () => canvasRender.ensure(),
-  stopSave: (logout) => canvasPersistence.stopAndReset(logout),
-  resetNodeLease: () => canvasNodeIds.reset(),
-  loadCanvas: (keepStatus) => loadCanvas(keepStatus),
-  loadAssets: () => loadAssets(false),
-  loadModels: () => accountTools.loadModels(),
-  apiFetch,
-  resize,
-  clearSelection: () => { selection.selectedId = 0; },
-  registerUserMenu: (close) => topbarMenus.register("user", close),
-  closeTopbarMenus: (opening) => closeTopbarMenus(opening ? "user" : undefined),
-  onUserRendered: (user) => {
-    if (user) {
-      void notificationFeature.load();
-      notificationFeature.connect();
-    } else notificationFeature.disconnect();
+const accountSession = new AccountSessionFeature({
+  auth: {
+    nodes,
+    links,
+    getProjectId: () => currentProjectId,
+    setProjectId: (id) => { currentProjectId = id; },
+    getLoadedProjectId: () => canvasPersistence.loadedProjectId,
+    isSaveBlocked: () => canvasPersistence.blocked,
+    getServerVersion: () => canvasPersistence.serverVersion,
+    ensureRenderer: () => canvasRender.ensure(),
+    stopSave: (logout) => canvasPersistence.stopAndReset(logout),
+    resetNodeLease: () => canvasNodeIds.reset(),
+    loadCanvas: (keepStatus) => loadCanvas(keepStatus),
+    loadAssets: () => loadAssets(false),
+    apiFetch,
+    resize,
+    clearSelection: () => { selection.selectedId = 0; },
+    registerUserMenu: (close) => topbarMenus.register("user", close),
+    closeTopbarMenus: (opening) => closeTopbarMenus(opening ? "user" : undefined),
+    notify: (message, type, detail) => showToast(message, type, detail),
   },
-  notify: (message, type, detail) => showToast(message, type, detail),
+  notifications: {
+    registerTopbarMenu: (close) => topbarMenus.register("notifications", close),
+    closeNotificationMenus: (opening) =>
+      closeTopbarMenus(opening ? "notifications" : undefined),
+    closePresenceMenus: (opening) =>
+      closeTopbarMenus(opening ? "presence" : undefined),
+    showGuide: showCanvasGuide,
+    hideGuide: hideCanvasGuide,
+    isGuideVisible: (key) => canvasFeedback.isGuideVisible(key),
+    checkAppUpdate: () => void appUpdateController.checkNow(),
+    restoreAfterReconnect: () => void creationSuite.comic.restoreAfterReconnect(),
+    toast: (message, type) => showToast(message, type),
+  },
+  account: {
+    getProjectId: () => currentProjectId,
+    refreshNodeModels: refreshNodeModelMenus,
+    toast: (message, type) => showToast(message, type),
+  },
 });
-notificationFeature = new NotificationFeature({
-  getUserId: () => authWorkspace.user?.id,
-  registerTopbarMenu: (close) => topbarMenus.register("notifications", close),
-  closeNotificationMenus: (opening) =>
-    closeTopbarMenus(opening ? "notifications" : undefined),
-  closePresenceMenus: (opening) =>
-    closeTopbarMenus(opening ? "presence" : undefined),
-  showGuide: showCanvasGuide,
-  hideGuide: hideCanvasGuide,
-  isGuideVisible: (key) => canvasFeedback.isGuideVisible(key),
-  checkAppUpdate: () => void appUpdateController.checkNow(),
-  restoreAfterReconnect: () => void creationSuite.comic.restoreAfterReconnect(),
-  toast: (message, type) => showToast(message, type),
-});
+const authWorkspace = accountSession.auth;
+const accountTools = accountSession.account;
 function showCanvasModeNotice(title: string, detail: string) {
   canvasFeedback.showModeNotice(title, detail);
 }
-accountTools = new AccountToolsFeature({
-  getUser: () => authWorkspace.user,
-  setUser: (user) => authWorkspace.setUser(user),
-  getProjectId: () => currentProjectId,
-  closeUserMenu: () => authWorkspace.userMenu.close(),
-  onCreditsChanged: () => {
-    authWorkspace.renderUser();
-    refreshNodeModelMenus();
-  },
-  refreshNodeModels: refreshNodeModelMenus,
-  toast: (message, type) => showToast(message, type),
-});
 function refreshNodeModelMenus() {
   nodeLayer
     .querySelectorAll(".flow-node")
