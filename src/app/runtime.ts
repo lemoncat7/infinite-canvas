@@ -25,6 +25,7 @@ import { GenerationPoller } from "../services/generation-poller";
 import { GenerationWorkflow } from "../services/generation-workflow";
 import { requestNodeIdLease } from "../services/node-id-lease";
 import { NotificationStreamController } from "../services/notification-stream";
+import { requestPromptAgent } from "../services/prompt-agent";
 import {
   appendRevisionNode,
   findOutputPosition,
@@ -6623,29 +6624,17 @@ promptAgentPanel
     status.textContent = "正在理解角色并匹配中文音色…";
     void (async () => {
       try {
-        const response = await apiFetch("/api/agents/prompt", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              idea,
-              kind: "image",
-              promptMode: "voice",
-              complexity: "simple",
-              model: promptAgentModelSelect.value,
-            }),
-            signal: controller.signal,
-          }),
-          responseText = await response.text();
-        let result: PromptAgentResult & { error?: string };
-        try {
-          result = JSON.parse(responseText) as PromptAgentResult & {
-            error?: string;
-          };
-        } catch {
-          throw new Error("音色服务暂时不可用，请稍后重试");
-        }
+        const result = await requestPromptAgent(
+          {
+            idea,
+            kind: "image",
+            promptMode: "voice",
+            complexity: "simple",
+            model: promptAgentModelSelect.value,
+          },
+          controller.signal,
+        );
         if (version !== promptAgentRequestVersion) return;
-        if (!response.ok) throw new Error(result.error || "音色配置生成失败");
         if (!result.voiceConfig) throw new Error("没有匹配到可用中文音色");
         promptAgentResult = result;
         applyPromptAgentVoice(result);
@@ -6732,10 +6721,8 @@ promptAgentPanel
     article.hidden = true;
     promptAgentPanel.classList.remove("prompt-result-open");
     try {
-      const response = await apiFetch("/api/agents/prompt", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
+      const result = await requestPromptAgent(
+        {
             idea,
             kind: promptAgentKind,
             promptMode: promptAgentMode,
@@ -6754,27 +6741,10 @@ promptAgentPanel
                   ),
                 }
               : null,
-          }),
-          signal: controller.signal,
-        }),
-        responseText = await response.text();
-      let result: PromptAgentResult & { error?: string };
-      try {
-        result = JSON.parse(responseText) as PromptAgentResult & {
-          error?: string;
-        };
-      } catch {
-        throw new Error(
-          response.status === 504
-            ? "提示词生成超时，请再次尝试"
-            : "灵感服务暂时不可用，请稍后重试",
-        );
-      }
+        },
+        controller.signal,
+      );
       if (version !== promptAgentRequestVersion) return;
-      if (!response.ok)
-        throw new Error(
-          result.error || (promptOnly ? "提示词生成失败" : "创作规划失败"),
-        );
       promptAgentResult = result;
       if (!promptOnly) {
         applyPromptAgentPlan(result);
