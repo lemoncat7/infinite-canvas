@@ -61,9 +61,8 @@ import {
   type GenerationJob,
 } from "../services/generation";
 import {
-  deleteAssets,
-  fetchAssetBlob,
   fetchAssets,
+  fetchAssetBlob,
   fetchShowcaseAssets,
   type LibraryAsset,
 } from "../services/assets";
@@ -109,6 +108,7 @@ import { AssetTouchController } from "../ui/asset-touch-controller";
 import { AssetPreviewController } from "../ui/asset-preview";
 import { AssetUploadController } from "../ui/asset-upload-controller";
 import { AssetContextController } from "../ui/asset-context-controller";
+import { AssetBulkController } from "../ui/asset-bulk-controller";
 import { SquarePanelView } from "../ui/square-panel";
 import { WorkspacePanelController } from "../ui/toolbar";
 import {
@@ -7032,8 +7032,7 @@ let draggingAsset: {
 } | null = null;
 let libraryAssets: LibraryAsset[] = [];
 const ASSET_PAGE_SIZE = 36;
-const selectedAssetIds = new Set<string>(),
-  assetSearch = document.querySelector<HTMLInputElement>("#asset-search")!,
+const assetSearch = document.querySelector<HTMLInputElement>("#asset-search")!,
   assetProjectFilter = document.querySelector<HTMLSelectElement>(
     "#asset-project-filter",
   )!,
@@ -7107,11 +7106,31 @@ const assetTouchController = new AssetTouchController({
   resolveAsset: assetForRenderedItem,
   onContext: openAssetContextAt,
 });
+const assetBulkController = new AssetBulkController({
+  deleteButton: document.querySelector<HTMLButtonElement>(
+    "#asset-bulk-delete",
+  )!,
+  downloadButton: document.querySelector<HTMLButtonElement>(
+    "#asset-bulk-download",
+  )!,
+  getAssets: () => libraryAssets,
+  confirmDelete: async (count) =>
+    Boolean(
+      await askProjectDialog({
+        title: "删除所选资产？",
+        description: `将永久删除所选的 ${count} 项资产，此操作无法撤销。`,
+        confirm: "确认删除",
+        danger: true,
+      }),
+    ),
+  reloadAssets: () => loadAssets(),
+  toast: (message, type) => showToast(message, type),
+});
 const assetLibraryView = new AssetLibraryView({
   grid: assetGrid,
   count: assetCount,
   pageSize: ASSET_PAGE_SIZE,
-  selectedIds: selectedAssetIds,
+  selectedIds: assetBulkController.selectedIds,
   bulkDelete: document.querySelector<HTMLButtonElement>(
     "#asset-bulk-delete",
   )!,
@@ -7232,43 +7251,6 @@ document
       renderAssets();
     }),
   );
-document
-  .querySelector("#asset-bulk-delete")!
-  .addEventListener("click", async () => {
-    if (!selectedAssetIds.size) return;
-    const confirmed = await askProjectDialog({
-      title: "删除所选资产？",
-      description: `将永久删除所选的 ${selectedAssetIds.size} 项资产，此操作无法撤销。`,
-      confirm: "确认删除",
-      danger: true,
-    });
-    if (!confirmed) return;
-    const failed = await deleteAssets(selectedAssetIds);
-    if (failed)
-      showToast("部分资产删除失败", "error");
-    else showToast("所选资产已删除", "success");
-    selectedAssetIds.clear();
-    await loadAssets();
-  });
-document
-  .querySelector("#asset-bulk-download")!
-  .addEventListener("click", async () => {
-    for (const asset of libraryAssets.filter((item) =>
-      selectedAssetIds.has(item.id),
-    )) {
-      let blob: Blob;
-      try {
-        blob = await fetchAssetBlob(asset.url);
-      } catch {
-        continue;
-      }
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = asset.name;
-      link.click();
-      window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-    }
-  });
 let projectSummaries: ProjectSummary[] = [];
 const projectSearch =
     document.querySelector<HTMLInputElement>("#project-search")!,
