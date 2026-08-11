@@ -32,7 +32,6 @@ import {
   canGenerateNode as evaluateCanGenerateNode,
   generationBlockedReason as evaluateGenerationBlockedReason,
 } from "../nodes/generation-eligibility";
-import { PendingTaskCancellationController } from "../nodes/pending-task-cancellation-controller";
 import { apiFetch } from "../services/api";
 import { AppUpdateController } from "../services/app-update-controller";
 import { GenerationCapabilitiesController } from "../services/generation-capabilities-controller";
@@ -52,7 +51,7 @@ import { CanvasToolbarController } from "../ui/canvas-toolbar-controller";
 import { NodeInfoController } from "../ui/node-info-controller";
 import { WorkspaceOverlayController } from "../ui/workspace-overlay-controller";
 import { WorkspaceKeyboardController } from "../ui/workspace-keyboard-controller";
-import { TaskMonitorController } from "../ui/task-monitor-controller";
+import { CanvasTaskFeature } from "../ui/canvas-task-feature";
 import { TopbarMenuCoordinator } from "../ui/topbar-menu-coordinator";
 import { QuickNodeMenuController } from "../ui/quick-node-menu-controller";
 import { AppearanceController } from "../ui/appearance-controller";
@@ -204,21 +203,35 @@ function syncDraggedNodeElements(ids: Iterable<number>) {
 }
 const nodes = canvasStore.nodes;
 const links = canvasStore.links;
-const taskMonitorController = new TaskMonitorController({
+const canvasTasks = new CanvasTaskFeature<AuthUser>({
   nodes,
+  links,
   resetButton,
   canGenerate: canGenerateNode,
   modelName: modelDisplayName,
-  focusNode: focusTaskNode,
-  startAllEmpty: startAllEmptyImages,
-  cancelPending: () => void cancelPendingProjectTasks(),
+  projectId: () => currentProjectId,
+  cancelPoll: (jobId) => generationPoller.cancel(jobId),
+  getUser: () => authWorkspace.user,
+  setUser: (user) => authWorkspace.setUser(user),
+  renderUser: () => authWorkspace.renderUser(),
+  refreshModels: refreshNodeModelMenus,
   closeOtherMenus: (opening) =>
     closeTopbarMenus(opening ? "task" : undefined),
+  focusNode: (node) => {
+    selection.selectedId = node.id;
+    camera.x = -(node.x + node.width / 2) * camera.zoom;
+    camera.y = -(node.y + node.height / 2) * camera.zoom;
+  },
+  runWorkflow: () => generationWorkflow.run(),
+  ask: async (options) => (await askProjectDialog(options)) === true,
+  save: scheduleSave,
+  updateEditor,
+  draw,
+  showGuide: showCanvasGuide,
+  toast: (message, tone, detail) => showToast(message, tone, detail),
 });
-const taskMonitorButton = taskMonitorController.button;
-const taskMonitorPanel = taskMonitorController.panel;
 const topbarMenus = new TopbarMenuCoordinator();
-topbarMenus.register("task", () => taskMonitorController.close());
+topbarMenus.register("task", () => canvasTasks.close());
 topbarMenus.register("presence", () =>
   document.querySelector("#online-status-panel")?.classList.remove("open"),
 );
@@ -244,74 +257,11 @@ function queueCanvasHistory() { canvasHistory.queue(); }
 function updateHistoryControls() { canvasHistory.refreshControls(); }
 function undoCanvas() { return canvasHistory.undo(); }
 function redoCanvas() { return canvasHistory.redo(); }
-function emptyImageCandidates() {
-  return taskMonitorController.emptyImageCandidates();
-}
 function startAllEmptyImages() {
-  const candidates = emptyImageCandidates();
-  if (!candidates.length) {
-    showCanvasGuide({
-      key: "empty-images-none",
-      title: "没有可启动的空图",
-      detail: "已有图片、提示词为空或已经进入任务的节点会被自动跳过。",
-      tone: "online",
-      duration: 2800,
-    });
-    return;
-  }
-  candidates.forEach((node) => {
-    node.agentAuto = true;
-    node.status = "waiting";
-  });
-  const ready = candidates.filter(
-      (node) =>
-        !links
-          .filter((link) => link.to === node.id)
-          .map((link) => nodes.find((item) => item.id === link.from))
-          .some((upstream) => upstream?.kind === "image" && !upstream.mediaUrl),
-    ).length,
-    waiting = candidates.length - ready;
-  scheduleSave();
-  draw();
-  runAgentWorkflow();
-  showCanvasGuide({
-    key: "empty-images-started",
-    title: `已启动 ${candidates.length} 个空图任务`,
-    detail: `${ready} 个立即进入队列${waiting ? `，${waiting} 个将在上游图片完成后自动继续` : ""}。可在旁边的“任务”中查看进度。`,
-    tone: "online",
-    duration: 5200,
-  });
-}
-const pendingTaskCancellation = new PendingTaskCancellationController<AuthUser>({
-  nodes,
-  links,
-  projectId: () => currentProjectId,
-  ask: async (options) => (await askProjectDialog(options)) === true,
-  cancelPoll: (jobId) => generationPoller.cancel(jobId),
-  getUser: () => authWorkspace.user,
-  setUser: (user) => authWorkspace.setUser(user),
-  renderUser: () => authWorkspace.renderUser(),
-  refreshModels: refreshNodeModelMenus,
-  save: scheduleSave,
-  update: updateEditor,
-  draw,
-  toast: (message, tone, detail) => showToast(message, tone, detail),
-});
-function cancelPendingProjectTasks() {
-  return pendingTaskCancellation.cancel();
-}
-function focusTaskNode(nodeId: number) {
-  const node = nodes.find((item) => item.id === nodeId);
-  if (!node) return;
-  selection.selectedId = node.id;
-  camera.x = -(node.x + node.width / 2) * camera.zoom;
-  camera.y = -(node.y + node.height / 2) * camera.zoom;
-  taskMonitorController.close();
-  updateEditor();
-  draw();
+  canvasTasks.startAllEmpty();
 }
 function updateTaskMonitor() {
-  taskMonitorController.update();
+  canvasTasks.update();
 }
 function closeTopbarMenus(
   except?: "workspace" | "task" | "user" | "notifications" | "presence",
@@ -319,7 +269,7 @@ function closeTopbarMenus(
   topbarMenus.closeAll(except);
 }
 document.addEventListener("click", () => {
-  taskMonitorController.close();
+  canvasTasks.close();
   topbarMenus.closeAll();
 });
 const canvasBatch = new CanvasBatchFeature({
