@@ -48,6 +48,7 @@ import type {
 import { makeNodePublicId } from "../nodes/node-service";
 import { NodeLifecycleController } from "../nodes/node-lifecycle-controller";
 import { ImageAssetController } from "../nodes/image-asset-controller";
+import { GenerationGraph } from "../nodes/generation-graph";
 import { decodePromptClipboardText, normalizePromptText } from "../nodes/prompt-text";
 import { downloadNodeImage as downloadNodeImageFile } from "../nodes/node-download";
 import { PromptNodeController } from "../nodes/prompt-node";
@@ -1006,76 +1007,28 @@ const world = (point: Point) =>
   screenToWorld(point, camera, viewportSize());
 const portWorld = nodePortPosition;
 const controlPoint = connectionControlPoint;
+const generationGraph = new GenerationGraph(nodes, links);
 
 function nodeIsActivelyGenerating(node: FlowNode | undefined) {
-  return node?.status === "queued" || node?.status === "running";
+  return generationGraph.isActive(node);
 }
 function canvasHasActiveGeneration() {
-  return nodes.some((node) => nodeIsActivelyGenerating(node));
+  return generationGraph.hasActiveGeneration();
 }
 function nodeFeedsActiveGeneration(nodeId: number) {
-  const visited = new Set<number>();
-  const pending = [nodeId];
-  while (pending.length) {
-    const currentId = pending.pop()!;
-    if (visited.has(currentId)) continue;
-    visited.add(currentId);
-    if (
-      currentId !== nodeId &&
-      nodeIsActivelyGenerating(nodes.find((node) => node.id === currentId))
-    )
-      return true;
-    links
-      .filter((link) => link.from === currentId)
-      .forEach((link) => pending.push(link.to));
-  }
-  return false;
+  return generationGraph.feedsActiveGeneration(nodeId);
 }
 function nodeIsGenerationProtected(node: FlowNode) {
-  return nodeIsActivelyGenerating(node) || nodeFeedsActiveGeneration(node.id);
+  return generationGraph.isProtected(node);
 }
 function orderedImageInputs(targetId: number) {
-  return links
-    .filter((link) => link.to === targetId)
-    .map((link) => ({
-      link,
-      node: nodes.find((node) => node.id === link.from),
-    }))
-    .filter((input): input is { link: FlowLink; node: FlowNode } =>
-      Boolean(input.node?.kind === "image" && input.node.mediaUrl),
-    )
-    .sort(
-      (left, right) =>
-        left.node.y - right.node.y ||
-        left.node.x - right.node.x ||
-        left.node.id - right.node.id,
-    );
+  return generationGraph.orderedImageInputs(targetId);
 }
 function imageInputOrder(link: FlowLink) {
-  const index = orderedImageInputs(link.to).findIndex(
-    (input) => input.link === link,
-  );
-  return index < 0 ? undefined : index + 1;
+  return generationGraph.imageInputOrder(link);
 }
 function orderedTargetLinks(targetId: number) {
-  return links
-    .filter((link) => link.to === targetId)
-    .map((link, originalIndex) => ({
-      link,
-      originalIndex,
-      source: nodes.find((node) => node.id === link.from),
-    }))
-    .sort((left, right) => {
-      const leftOrder = left.link.inputOrder ?? Number.MAX_SAFE_INTEGER;
-      const rightOrder = right.link.inputOrder ?? Number.MAX_SAFE_INTEGER;
-      return (
-        leftOrder - rightOrder ||
-        (left.source?.y ?? 0) - (right.source?.y ?? 0) ||
-        (left.source?.x ?? 0) - (right.source?.x ?? 0) ||
-        left.originalIndex - right.originalIndex
-      );
-    })
-    .map((item) => item.link);
+  return generationGraph.orderedTargetLinks(targetId);
 }
 const canvasGeometry = new CanvasGeometryController(
   nodes,
