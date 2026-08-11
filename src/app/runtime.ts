@@ -88,6 +88,7 @@ import { ComicSidePanelController } from "../ui/comic-side-panel";
 import { ComicStudioView } from "../ui/comic-studio";
 import { ComicLabelController } from "../ui/comic-labels";
 import { buildComicWorkflow } from "../nodes/comic-workflow";
+import { bindVoiceNodePanels } from "../nodes/voice-node-view";
 import { ContextMenuController } from "../ui/context-menu";
 import { createDefaultGenerationCapabilities } from "./state";
 import {
@@ -4568,6 +4569,9 @@ function createDomNode(node: FlowNode) {
     "beforeend",
     `<section class="voice-config-panel"><header><i>◉</i><span><b>角色声音</b><small>固定角色跨镜头声音</small></span></header><div class="voice-card-profile"><label><span>角色名称</span><input data-voice-field="roleName" placeholder="例如：林夜"></label><div class="voice-profile-readout"><i>∿</i><span><b data-voice-summary>晓晓 · 温暖女声</b><small data-voice-params>1.0× · 0Hz · 100%</small></span></div></div><label hidden><span>语音服务</span><select data-voice-field="provider"><option value="easyvoice-local">EasyVoice 中文语音</option></select></label><footer class="voice-card-footer"><span class="voice-current"><small>当前音色</small><b data-voice-current>晓晓</b></span><details class="voice-settings-picker"><summary><span>⚙</span><b>配置</b><i>⌄</i></summary><div class="voice-settings-popover"><header><b>声音配置</b><small>固定该角色的声音表现</small></header><label><span>音色</span><select data-voice-field="voiceId"><option value="zh-CN-XiaoxiaoNeural">晓晓 · 温暖女声</option><option value="zh-CN-YunxiNeural">云希 · 阳光男声</option></select></label><div class="video-setting-row"><b>语速</b><div class="voice-stepper"><button type="button" data-voice-step="speed" data-step="-0.05">−</button><output data-voice-output="speed">1.0×</output><button type="button" data-voice-step="speed" data-step="0.05">＋</button><input data-voice-field="speed" type="number" min="0.5" max="2" step="0.05" hidden></div></div><div class="video-setting-row"><b>音调</b><div class="voice-stepper"><button type="button" data-voice-step="pitch" data-step="-2">−</button><output data-voice-output="pitch">0Hz</output><button type="button" data-voice-step="pitch" data-step="2">＋</button><input data-voice-field="pitch" type="number" min="-50" max="50" step="1" hidden></div></div><div class="video-setting-row"><b>音量</b><div class="voice-stepper"><button type="button" data-voice-step="volume" data-step="-0.05">−</button><output data-voice-output="volume">100%</output><button type="button" data-voice-step="volume" data-step="0.05">＋</button><input data-voice-field="volume" type="number" min="0" max="2" step="0.05" hidden></div></div></div></details><button type="button" data-voice-preview><span>▶</span><b>试听</b></button></footer></section><section class="tts-config-panel"><header><span><b>TTS 文本生成</b><small data-tts-source>需要连接语音配置</small></span></header><textarea data-tts-text rows="4" placeholder="填写这一镜的对白、旁白或系统播报"></textarea><div class="tts-three-fields"><label><span>情绪</span><select data-tts-field="emotion"><option>中性</option><option>冷静</option><option>温柔</option><option>紧张</option><option>激动</option><option>沉重</option></select></label><label><span>格式</span><select data-tts-field="format"><option value="mp3">MP3</option></select></label></div><button type="button" data-tts-generate><span>▶</span><b>生成语音</b></button></section><section class="audio-result-panel"><div class="audio-result-heading"><span>AUDIO</span><strong data-audio-title>音频结果</strong></div><div class="audio-result-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><audio preload="metadata"></audio><button class="audio-result-toggle" type="button" data-audio-toggle aria-label="播放音频"><span>▶</span></button><small class="audio-result-meta" data-audio-meta>等待生成</small><small class="audio-result-hint">双击播放</small><button type="button" data-audio-download hidden>下载音频</button></section>`,
   );
+  const voicePanel = element.querySelector<HTMLElement>(".voice-config-panel")!,
+    ttsPanel = element.querySelector<HTMLElement>(".tts-config-panel")!,
+    audioPanel = element.querySelector<HTMLElement>(".audio-result-panel")!;
   const initialMediaCanvas =
     element.querySelector<HTMLCanvasElement>(".node-media-canvas")!;
   initialMediaCanvas.width = 2;
@@ -5361,244 +5365,20 @@ function createDomNode(node: FlowNode) {
       updateEditor();
       void generate(current);
     });
-  const voicePanel = element.querySelector<HTMLElement>(".voice-config-panel")!,
-    ttsPanel = element.querySelector<HTMLElement>(".tts-config-panel")!,
-    audioPanel = element.querySelector<HTMLElement>(".audio-result-panel")!;
-  voicePanel.querySelector(":scope > header")?.remove();
-  voicePanel.querySelector(".voice-profile-readout")?.remove();
-  audioPanel.innerHTML = `<header class="video-node-heading"><div><b data-audio-title>音频结果</b><small data-audio-meta>等待生成</small></div></header><div class="audio-player-slot"><div class="audio-track-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><audio preload="metadata"></audio></div><p>双击播放或暂停</p><button type="button" data-audio-toggle hidden><span>▶</span></button><button type="button" data-audio-download hidden>下载音频</button>`;
-  ttsPanel.classList.add("node-composer-panel");
-  ttsPanel.innerHTML = `<header><span>TTS</span><small data-tts-source>需要连接语音配置</small></header><textarea data-tts-text rows="5" placeholder="填写这一镜的对白、旁白或系统播报…"></textarea><footer class="node-composer-footer"><div class="tts-voice-readout node-composer-option"><span>◉</span><b data-tts-voice-label>关联音色</b></div><details class="video-settings-picker tts-settings-picker"><summary><span>⚙</span><b>语音属性</b></summary><div class="video-settings-popover tts-settings-popover"><header><b>语音设置</b><small>调整这一段文本的表达方式</small></header><div class="video-setting-row"><b>情绪</b><div class="video-pill-grid"><button type="button" data-tts-emotion="中性">中性</button><button type="button" data-tts-emotion="冷静">冷静</button><button type="button" data-tts-emotion="温柔">温柔</button><button type="button" data-tts-emotion="紧张">紧张</button><button type="button" data-tts-emotion="激动">激动</button><button type="button" data-tts-emotion="沉重">沉重</button></div><select data-tts-field="emotion" hidden><option>中性</option><option>冷静</option><option>温柔</option><option>紧张</option><option>激动</option><option>沉重</option></select></div><div class="video-setting-row"><b>格式</b><div class="video-pill-grid"><button type="button" class="active" data-tts-format="mp3">MP3</button></div><select data-tts-field="format" hidden><option value="mp3">MP3</option></select></div></div></details><button class="node-composer-submit" type="button" data-tts-generate><span>▶</span><b>生成</b></button></footer>`;
-  element
-    .querySelectorAll<HTMLElement>(".node-composer-footer>details>summary")
-    .forEach((summary) => summary.classList.add("node-composer-option"));
-  const providerField = voicePanel.querySelector<HTMLSelectElement>(
-    '[data-voice-field="provider"]',
-  )!;
-  providerField.value = "easyvoice-local";
-  providerField.hidden = true;
-  const providerLabel = providerField.closest("label")!;
-  providerLabel.hidden = false;
-  providerLabel.classList.add("voice-provider-field");
-  providerLabel.insertAdjacentHTML("beforeend", "<b>EasyVoice</b>");
-  voicePanel.querySelector<HTMLSelectElement>(
-    '[data-voice-field="voiceId"]',
-  )!.innerHTML =
-    '<option value="zh-CN-XiaoxiaoNeural">晓晓 · 温暖女声</option><option value="zh-CN-YunjianNeural">云健 · 激昂男声</option><option value="zh-CN-YunxiaNeural">云夏 · 少年男声</option><option value="zh-CN-YunyangNeural">云扬 · 稳重男声</option>';
-  const voiceFooter =
-      voicePanel.querySelector<HTMLElement>(".voice-card-footer")!,
-    voicePopover = voicePanel.querySelector<HTMLElement>(
-      ".voice-settings-popover",
-    )!,
-    voiceTone = voicePopover.querySelector<HTMLElement>(":scope > label")!,
-    voiceSelect = voiceTone.querySelector<HTMLSelectElement>(
-      '[data-voice-field="voiceId"]',
-    )!,
-    voicePreview = voicePanel.querySelector<HTMLButtonElement>(
-      "[data-voice-preview]",
-    )!,
-    voiceSliders = document.createElement("div"),
-    voiceActions = document.createElement("div"),
-    voiceModelPicker = document.createElement("details");
-  voiceSliders.className = "voice-slider-row";
-  voiceActions.className = "voice-action-row";
-  voicePreview.classList.add("node-composer-submit");
-  voiceModelPicker.className = "video-model-picker voice-model-picker";
-  voiceModelPicker.innerHTML =
-    '<summary class="node-composer-option"><span>◈</span><b>晓晓 · 温暖女声</b></summary><div class="video-model-popover voice-model-menu"></div>';
-  voiceSelect.hidden = true;
-  voiceModelPicker.append(voiceSelect);
-  voicePopover
-    .querySelectorAll<HTMLElement>(".video-setting-row")
-    .forEach((row) => voiceSliders.append(row));
-  voiceActions.append(voiceModelPicker, voicePreview);
-  voiceFooter.replaceChildren(voiceSliders, voiceActions);
-  for (const panel of [voicePanel, ttsPanel, audioPanel])
-    bindNodeConfigPanel(panel);
-  voicePanel
-    .querySelectorAll<HTMLInputElement>(
-      '[data-voice-field="speed"],[data-voice-field="pitch"],[data-voice-field="volume"]',
-    )
-    .forEach((input) => {
-      input.type = "range";
-      input.hidden = false;
-    });
-  voiceModelPicker.addEventListener("click", (event) => {
-    const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
-      "[data-voice-option]",
-    );
-    if (!button) return;
-    event.preventDefault();
-    event.stopPropagation();
-    voiceSelect.value = button.dataset.voiceOption!;
-    voiceSelect.dispatchEvent(new Event("input", { bubbles: true }));
-    voiceModelPicker.open = false;
-  });
-  voicePanel
-    .querySelectorAll<HTMLInputElement | HTMLSelectElement>(
-      "[data-voice-field]",
-    )
-    .forEach((field) =>
-      field.addEventListener("input", () => {
-        const current = liveNode();
-        if (!current) return;
-        current.voiceSettings = {
-          ...(current.voiceSettings || {}),
-          language: current.voiceSettings?.language || "zh-CN",
-          roleName: voicePanel.querySelector<HTMLInputElement>(
-            '[data-voice-field="roleName"]',
-          )!.value,
-          providerId: voicePanel.querySelector<HTMLSelectElement>(
-            '[data-voice-field="provider"]',
-          )!.value,
-          voiceId: voicePanel.querySelector<HTMLSelectElement>(
-            '[data-voice-field="voiceId"]',
-          )!.value,
-          defaultSpeed:
-            Number(
-              voicePanel.querySelector<HTMLInputElement>(
-                '[data-voice-field="speed"]',
-              )!.value,
-            ) || 1,
-          pitch:
-            Number(
-              voicePanel.querySelector<HTMLInputElement>(
-                '[data-voice-field="pitch"]',
-              )!.value,
-            ) || 0,
-          volume: Number(
-            voicePanel.querySelector<HTMLInputElement>(
-              '[data-voice-field="volume"]',
-            )!.value,
-          ),
-        };
-        if (current.voiceSettings.roleName)
-          current.title = `语音配置 · ${current.voiceSettings.roleName}`;
-        scheduleSave();
-        draw();
-      }),
-    );
-  voicePanel
-    .querySelectorAll<HTMLButtonElement>("[data-voice-step]")
-    .forEach((button) =>
-      button.addEventListener("click", (event) => {
-        event.preventDefault();
-        const field = button.dataset.voiceStep as "speed" | "pitch" | "volume",
-          input = voicePanel.querySelector<HTMLInputElement>(
-            `[data-voice-field="${field}"]`,
-          )!,
-          minimum = Number(input.min),
-          maximum = Number(input.max),
-          next = Math.max(
-            minimum,
-            Math.min(
-              maximum,
-              Number(input.value || 0) + Number(button.dataset.step || 0),
-            ),
-          );
-        input.value = String(Number(next.toFixed(2)));
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-      }),
-    );
-  voicePanel
-    .querySelector<HTMLButtonElement>("[data-voice-preview]")!
-    .addEventListener("click", () => {
-      const current = liveNode();
-      if (current) void previewVoice(current);
-    });
-  ttsPanel
-    .querySelector<HTMLTextAreaElement>("[data-tts-text]")!
-    .addEventListener("input", (event) => {
-      const current = liveNode();
-      if (!current) return;
-      current.body = (event.target as HTMLTextAreaElement).value;
-      scheduleSave();
-      draw();
-    });
-  ttsPanel
-    .querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-tts-field]")
-    .forEach((field) =>
-      field.addEventListener("input", () => {
-        const current = liveNode();
-        if (!current) return;
-        current.ttsSettings = {
-          emotion: ttsPanel.querySelector<HTMLSelectElement>(
-            '[data-tts-field="emotion"]',
-          )!.value,
-          format: ttsPanel.querySelector<HTMLSelectElement>(
-            '[data-tts-field="format"]',
-          )!.value as "wav" | "mp3" | "flac",
-        };
-        scheduleSave();
-        draw();
-      }),
-    );
-  ttsPanel
-    .querySelectorAll<HTMLButtonElement>("[data-tts-emotion]")
-    .forEach((button) =>
-      button.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const select = ttsPanel.querySelector<HTMLSelectElement>(
-          '[data-tts-field="emotion"]',
-        )!;
-        select.value = button.dataset.ttsEmotion!;
-        select.dispatchEvent(new Event("input", { bubbles: true }));
-      }),
-    );
-  ttsPanel
-    .querySelectorAll<HTMLButtonElement>("[data-tts-format]")
-    .forEach((button) =>
-      button.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const select = ttsPanel.querySelector<HTMLSelectElement>(
-          '[data-tts-field="format"]',
-        )!;
-        select.value = button.dataset.ttsFormat!;
-        select.dispatchEvent(new Event("input", { bubbles: true }));
-      }),
-    );
-  ttsPanel
-    .querySelector<HTMLButtonElement>("[data-tts-generate]")!
-    .addEventListener("click", () => {
-      const current = liveNode();
-      if (current) void generateTts(current);
-    });
-  audioPanel
-    .querySelector<HTMLButtonElement>("[data-audio-download]")!
-    .addEventListener("click", () => {
-      const current = liveNode();
-      if (!current?.mediaUrl) return;
-      const anchor = document.createElement("a");
-      anchor.href = current.mediaUrl;
-      anchor.download = `${current.title}.${current.ttsSettings?.format || "mp3"}`;
-      anchor.click();
-    });
-  const audioElement = audioPanel.querySelector<HTMLAudioElement>("audio")!,
-    audioToggle = audioPanel.querySelector<HTMLButtonElement>(
-      "[data-audio-toggle]",
-    )!;
-  audioToggle.addEventListener("click", (event) => {
-    event.stopPropagation();
-    const current = liveNode();
-    if (!current?.mediaUrl) return;
-    selection.selectedId = current.id;
-    updateEditor();
-    if (audioElement.paused) void audioElement.play();
-    else audioElement.pause();
-    audioToggle.querySelector("span")!.textContent = audioElement.paused
-      ? "▶"
-      : "Ⅱ";
-  });
-  audioElement.addEventListener("play", () => {
-    audioToggle.querySelector("span")!.textContent = "Ⅱ";
-  });
-  audioElement.addEventListener("pause", () => {
-    audioToggle.querySelector("span")!.textContent = "▶";
-  });
-  audioElement.addEventListener("ended", () => {
-    audioToggle.querySelector("span")!.textContent = "▶";
+  bindVoiceNodePanels({
+    element,
+    voicePanel,
+    ttsPanel,
+    audioPanel,
+    liveNode,
+    scheduleSave,
+    draw,
+    previewVoice,
+    generateTts,
+    selectNode: (id) => {
+      selection.selectedId = id;
+      updateEditor();
+    },
   });
   return element;
 }
