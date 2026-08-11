@@ -22,7 +22,6 @@ import type {
 import { NodeLifecycleController, defaultNodeCopy } from "../nodes/node-lifecycle-controller";
 import { GenerationGraph } from "../nodes/generation-graph";
 import { decodePromptClipboardText, normalizePromptText } from "../nodes/prompt-text";
-import { downloadNodeImage as downloadNodeImageFile } from "../nodes/node-download";
 import { PromptNodeController } from "../nodes/prompt-node";
 import { CanvasNodeEditorFeature } from "../nodes/canvas-node-editor-feature";
 import { TtsFeature } from "../services/tts-feature";
@@ -131,13 +130,6 @@ let colorTheme: "light" | "dark" =
   localStorage.getItem("flow-theme") === "light" ? "light" : "dark";
 document.body.dataset.theme = colorTheme;
 const clientLog = new RuntimeDiagnosticsFeature().log;
-function syncDraggedNodeElements(ids: Iterable<number>) {
-  for (const id of ids) {
-    const node = nodes.find((item) => item.id === id),
-      element = nodeLayer.querySelector<HTMLElement>(`.flow-node[data-id="${id}"]`);
-    if (node && element) element.style.transform = `translate(${node.x}px, ${node.y}px)`;
-  }
-}
 const nodes = canvasStore.nodes;
 const links = canvasStore.links;
 const canvasTasks = new CanvasTaskFeature<AuthUser>({
@@ -241,7 +233,7 @@ const canvasInput = new CanvasInputFeature({
   save: scheduleSave,
   setEditing: () => setSaveState("editing", "编辑中…"),
   updateEditor,
-  syncDraggedElements: syncDraggedNodeElements,
+  syncDraggedElements: (ids) => nodeViews.syncDraggedElements(ids, nodes),
   refreshBatchSelection,
   clearBatchSelection,
   toggleBatchNode,
@@ -973,15 +965,7 @@ function openAssetPreview(
   workspaceAssets.openPreview(url, name, kind);
 }
 async function downloadNodeImage(node: FlowNode) {
-  try {
-    await downloadNodeImageFile(node);
-  } catch (error) {
-    showToast(
-      "图片下载失败",
-      "error",
-      error instanceof Error ? error.message : "请稍后重试",
-    );
-  }
+  await workspaceAssets.downloadNodeImage(node);
 }
 function escapeHtml(value: string) {
   const element = document.createElement("span");

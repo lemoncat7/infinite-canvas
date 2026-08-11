@@ -181,4 +181,12 @@ export class CanvasNodeViewFeature {
   clearEditors() { this.editorCache.clear(); }
   clearStates() { this.states.clear(); }
   invalidateState(id: number) { this.states.delete(id); }
+  syncDraggedElements(ids: Iterable<number>, nodes: FlowNode[]) {
+    for (const id of ids) {
+      const node = nodes.find((item) => item.id === id);
+      const element = document.querySelector<HTMLElement>(`.flow-node[data-id="${id}"]`);
+      if (node && element)
+        element.style.transform = `translate(${node.x}px, ${node.y}px)`;
+    }
+  }
 }

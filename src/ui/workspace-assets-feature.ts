@@ -6,6 +6,7 @@ import { ProjectController } from "./project-controller";
 import { SquarePanelView } from "./square-panel";
 import { WorkspacePanelController } from "./toolbar";
 import { WorkspaceNavigationCoordinator } from "./workspace-navigation-coordinator";
+import { downloadNodeImage as downloadNodeImageFile } from "../nodes/node-download";
 
 type Tone = "success" | "warning" | "error" | "info";
 type Ask = (options: {
@@ -22,6 +23,7 @@ export class WorkspaceAssetsFeature {
   private readonly projectSwitch: ProjectSwitchController;
   private readonly projects: ProjectController;
   private readonly square: SquarePanelView;
+  private readonly toast: (message: string, tone: Tone, detail?: string) => void;
 
   constructor(options: {
     nodes: FlowNode[];
@@ -48,6 +50,7 @@ export class WorkspaceAssetsFeature {
     ask: Ask;
     toast: (message: string, tone: Tone, detail?: string) => void;
   }) {
+    this.toast = options.toast;
     const brand = document.querySelector<HTMLElement>(".topbar .brand")!;
     this.panels = new WorkspacePanelController(
       document.querySelectorAll<HTMLElement>(".workspace-panel"),
@@ -145,6 +148,17 @@ export class WorkspaceAssetsFeature {
   closePreview() { this.preview.close(); }
   get isPreviewOpen() { return this.preview.isOpen; }
   closeContextIfOutside(target: Node) { this.library.closeContextIfOutside(target); }
+  async downloadNodeImage(node: FlowNode) {
+    try {
+      await downloadNodeImageFile(node);
+    } catch (error) {
+      this.toast(
+        "图片下载失败",
+        "error",
+        error instanceof Error ? error.message : "请稍后重试",
+      );
+    }
+  }
 
   private openPanel(panel: string, trigger: string) {
     this.panels.open(
