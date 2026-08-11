@@ -8,7 +8,7 @@ import { CanvasSelectionController } from "../canvas/selection-controller";
 import { CanvasConnectionController } from "../canvas/connection-controller";
 import { CanvasInteractionController } from "../canvas/interaction-controller";
 import { CanvasInputFeature } from "../canvas/canvas-input-feature";
-import { BatchSelectionController } from "../canvas/batch-selection-controller";
+import { CanvasBatchFeature } from "../canvas/canvas-batch-feature";
 import { CanvasHistoryFeature } from "../canvas/canvas-history-feature";
 import { LinkInteractionView } from "../canvas/link-interaction-view";
 import { GenerationPoller } from "../services/generation-poller";
@@ -322,13 +322,24 @@ document.addEventListener("click", () => {
   taskMonitorController.close();
   topbarMenus.closeAll();
 });
-const marqueeBox = document.createElement("div"),
-  batchToolbar = document.createElement("div");
-marqueeBox.className = "canvas-marquee";
-batchToolbar.className = "canvas-batch-toolbar";
-batchToolbar.innerHTML =
-  '<span data-batch-count>已选 0 项</span><button type="button" data-batch-generate aria-label="生成所选卡片" title="生成">生成</button><button type="button" data-batch-delete aria-label="删除所选卡片" title="删除">删除</button><button type="button" data-batch-clear aria-label="退出多选模式" title="退出">退出</button>';
-document.body.append(marqueeBox, batchToolbar);
+const canvasBatch = new CanvasBatchFeature({
+  nodes,
+  links,
+  batchIds: selection.batchIds,
+  getSelectedId: () => selection.selectedId,
+  clearSelectedId: () => { selection.selectedId = 0; },
+  isMultiSelectMode: () => selection.multiSelectMode,
+  screen: (point) => screen(point),
+  viewportWidth: () => innerWidth,
+  generationActive: canvasHasActiveGeneration,
+  enqueue: (ids) => generationWorkflow.enqueue(ids),
+  exitMode: exitMultiSelectMode,
+  updateEditor,
+  draw,
+  save: scheduleSave,
+  toast: (message, tone, detail) => showToast(message, tone, detail),
+  confirm: (message) => window.confirm(message),
+});
 let promptAgentFeature: PromptAgentFeature;
 const canvasInput = new CanvasInputFeature({
   canvas,
@@ -337,8 +348,8 @@ const canvasInput = new CanvasInputFeature({
   camera,
   interaction,
   selection,
-  marqueeBox,
-  batchToolbar,
+  marqueeBox: canvasBatch.marqueeBox,
+  batchToolbar: canvasBatch.toolbar,
   draw,
   save: scheduleSave,
   setEditing: () => setSaveState("editing", "编辑中…"),
@@ -1028,42 +1039,22 @@ function finalizeGenerationJob(currentNode: FlowNode, job: import("../services/g
 }
 function pollJob(node: FlowNode) { generationPoller.poll(node); }
 function refreshBatchSelection() {
-  batchSelectionController.refresh();
+  canvasBatch.refresh();
 }
 function clearBatchSelection() {
-  batchSelectionController.clear();
+  canvasBatch.clear();
 }
 function toggleBatchNode(id: number) {
-  batchSelectionController.toggle(id);
+  canvasBatch.toggle(id);
 }
 function refreshCanvasModeHint() {
-  batchSelectionController.refreshModeHint();
+  canvasBatch.refreshModeHint();
 }
 function enterMultiSelectMode() { marqueeController.enter(); }
 function exitMultiSelectMode() { marqueeController.exit(); }
 function resetMarqueeRightGesture() { marqueeController.resetRightGesture(); }
-const batchSelectionController = new BatchSelectionController({
-  toolbar: batchToolbar,
-  nodes,
-  links,
-  batchIds: selection.batchIds,
-  selectedId: () => selection.selectedId,
-  clearSelectedId: () => { selection.selectedId = 0; },
-  multiSelectMode: () => selection.multiSelectMode,
-  screen,
-  viewportWidth: () => innerWidth,
-  generationActive: canvasHasActiveGeneration,
-  enqueue: (ids) => generationWorkflow.enqueue(ids),
-  clearSelection: clearBatchSelection,
-  exitMode: exitMultiSelectMode,
-  update: updateEditor,
-  draw,
-  save: scheduleSave,
-  toast: (message, tone, detail) => showToast(message, tone, detail),
-  confirm: (message) => window.confirm(message),
-});
 function cascadeSelectionIds(seed: Set<number>) {
-  return batchSelectionController.cascade(seed);
+  return canvasBatch.cascade(seed);
 }
 
 const linkHoverHint = document.querySelector<HTMLElement>("#link-hover-hint")!;
