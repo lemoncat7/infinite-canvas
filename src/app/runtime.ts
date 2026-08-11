@@ -31,7 +31,7 @@ import {
   findOutputPosition,
   removeResultNode,
 } from "../nodes/generation-node-lifecycle";
-import { MediaLruCache } from "../canvas/media-cache";
+import { MediaLifecycleController } from "../canvas/media-lifecycle-controller";
 import type {
   FlowLink,
   FlowNode,
@@ -90,6 +90,7 @@ import { TaskMonitorController } from "../ui/task-monitor-controller";
 import { TopbarMenuCoordinator } from "../ui/topbar-menu-coordinator";
 import { QuickNodeMenuController } from "../ui/quick-node-menu-controller";
 import { HomeSceneController } from "../ui/home-scene-controller";
+import { AppearanceController } from "../ui/appearance-controller";
 import {
   createProjectDialog,
 } from "../ui/dialogs/project-dialog";
@@ -1020,92 +1021,24 @@ function schedulePixiEditorWarmup() {
   if (requestIdle) requestIdle(warm, { timeout: 1200 });
   else globalThis.setTimeout(warm, 180);
 }
-const pendingMediaLoads = new Set<string>();
-const thumbnailLoadRetries = new Map<string, number>();
-function releaseCachedImage(url: string, image: HTMLImageElement) {
-  pendingMediaLoads.delete(url);
-  image.onload = null;
-  image.onerror = null;
-  image.removeAttribute("src");
-}
-const imageCache = new MediaLruCache<HTMLImageElement>(
-  innerWidth <= 780 ? 24 : 48,
-  releaseCachedImage,
-  (url) => pendingMediaLoads.has(url),
-);
-function clearThumbnailCache() {
-  imageCache.clear();
-  pendingMediaLoads.clear();
-  thumbnailLoadRetries.clear();
-}
+const mediaLifecycle = new MediaLifecycleController({
+  mobile: innerWidth <= 780,
+  nodeLayer,
+  suspendRenderer: () => pixiRenderer?.suspend(),
+  resumeRenderer: () => pixiRenderer?.resume(),
+  clearNodeStates: () => nodeDomStates.clear(),
+  resize,
+  draw,
+});
+const pendingMediaLoads = mediaLifecycle.pendingLoads;
+const thumbnailLoadRetries = mediaLifecycle.retries;
+const imageCache = mediaLifecycle.cache;
 function trimThumbnailCache() {
-  imageCache.trim();
+  mediaLifecycle.trim();
 }
 function rememberCachedImage(url: string, image: HTMLImageElement) {
-  imageCache.set(url, image);
+  mediaLifecycle.remember(url, image);
 }
-function releaseFullResolutionPreviews() {
-  document
-    .querySelectorAll<HTMLVideoElement>("#home-preview video,#preview-video")
-    .forEach((video) => {
-      video.pause();
-      video.removeAttribute("src");
-      video.load();
-    });
-  document
-    .querySelectorAll<HTMLImageElement>("#home-preview img,#preview-image")
-    .forEach((image) => image.removeAttribute("src"));
-  document
-    .querySelectorAll<HTMLElement>("#home-preview,#asset-preview")
-    .forEach((preview) => preview.classList.remove("open"));
-}
-document.addEventListener("visibilitychange", () => {
-  const backgrounded = document.hidden;
-  if (backgrounded) pixiRenderer?.suspend();
-  else pixiRenderer?.resume();
-  document.body.classList.toggle("page-backgrounded", backgrounded);
-  if (backgrounded) {
-    clearThumbnailCache();
-    releaseFullResolutionPreviews();
-    nodeDomStates.clear();
-    nodeLayer
-      .querySelectorAll<HTMLElement>(".node-media")
-      .forEach((media) => delete media.dataset.sourceKey);
-    nodeLayer
-      .querySelectorAll<HTMLCanvasElement>("[data-reference-url]")
-      .forEach((media) => delete media.dataset.paintedUrl);
-    nodeLayer
-      .querySelectorAll<HTMLCanvasElement>(".node-media-canvas")
-      .forEach((media) => {
-        media.width = 2;
-        media.height = 2;
-      });
-  } else {
-    nodeDomStates.clear();
-    draw(true);
-  }
-});
-window.addEventListener("pagehide", clearThumbnailCache);
-window.addEventListener("pageshow", () => {
-  document.body.classList.remove("page-backgrounded", "page-unfocused");
-  nodeDomStates.clear();
-  requestAnimationFrame(() => {
-    resize();
-    draw(true);
-  });
-});
-window.addEventListener("focus", () => {
-  if (document.visibilityState !== "visible") return;
-  document.body.classList.remove("page-backgrounded", "page-unfocused");
-  requestAnimationFrame(() => draw(true));
-});
-window.addEventListener("blur", () =>
-  document.body.classList.add("page-unfocused"),
-);
-window.addEventListener("focus", () => {
-  document.body.classList.remove("page-unfocused");
-  draw();
-});
 document.addEventListener("selectstart", (event) => {
   if (document.body.classList.contains("home-mode")) return;
   const target = event.target instanceof Element ? event.target : null;
@@ -3339,33 +3272,21 @@ const quickNodeMenuController = new QuickNodeMenuController({
 });
 const appearanceButton =
   document.querySelector<HTMLButtonElement>("#dock-appearance")!;
-let themeTransitioning = false;
-function refreshAppearanceButton() {
-  appearanceButton.disabled = themeTransitioning || pendingMediaLoads.size > 0;
-  appearanceButton.title = pendingMediaLoads.size
-    ? `等待 ${pendingMediaLoads.size} 个图片资源加载完成`
-    : "切换画布外观";
-}
-appearanceButton.addEventListener("click", () => {
-  if (themeTransitioning || appearanceButton.disabled) return;
-  themeTransitioning = true;
-  refreshAppearanceButton();
-  document.body.classList.add("theme-click-fade");
-  window.setTimeout(() => {
-    colorTheme = colorTheme === "dark" ? "light" : "dark";
+const appearanceController = new AppearanceController({
+  button: appearanceButton,
+  pendingMedia: () => pendingMediaLoads.size,
+  currentTheme: () => colorTheme,
+  applyTheme: (theme) => {
+    colorTheme = theme;
     document.body.dataset.theme = colorTheme;
     localStorage.setItem("flow-theme", colorTheme);
-    repaintAllMedia();
-    paint();
-    document.body.classList.add("theme-click-return");
-    document.body.classList.remove("theme-click-fade");
-  }, 90);
-  window.setTimeout(() => {
-    document.body.classList.remove("theme-click-return");
-    themeTransitioning = false;
-    refreshAppearanceButton();
-  }, 260);
+  },
+  repaintMedia: repaintAllMedia,
+  paint,
 });
+function refreshAppearanceButton() {
+  appearanceController.refresh();
+}
 const promptAgentTrigger = document.querySelector<HTMLButtonElement>(
     "#prompt-agent-trigger",
   )!,
