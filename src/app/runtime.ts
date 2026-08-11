@@ -106,12 +106,7 @@ import {
 import { AuthModalController } from "../ui/auth-modal-controller";
 import { NotificationFeature } from "../ui/notification-feature";
 import { AccountToolsFeature } from "../ui/account-tools-feature";
-import { PromptAgentControls } from "../ui/prompt-agent-controls";
-import { PromptAgentContextController } from "../ui/prompt-agent-context";
-import { PromptAgentRequestController } from "../ui/prompt-agent-request-controller";
-import { PromptAgentAnimationController } from "../ui/prompt-agent-animation";
-import { PromptAgentLifecycleController } from "../ui/prompt-agent-lifecycle-controller";
-import { createPromptAgentShell } from "../ui/prompt-agent-shell";
+import { PromptAgentFeature } from "../ui/prompt-agent-feature";
 import { createComicStudioShell } from "../ui/comic-studio-shell";
 import { ComicSidePanelController } from "../ui/comic-side-panel";
 import { ComicStudioView } from "../ui/comic-studio";
@@ -123,9 +118,6 @@ import { ComicStudioLifecycleController } from "../ui/comic-studio-lifecycle-con
 import { ComicPlanController } from "../ui/comic-plan-controller";
 import { ComicOutputController } from "../ui/comic-output-controller";
 import { ComicLabelController } from "../ui/comic-labels";
-import {
-  PromptAgentApplicationController,
-} from "../nodes/prompt-agent-application";
 import { BoundNodeViewFactory } from "../nodes/bound-node-view-factory";
 import { BoundNodeDomSynchronizer } from "../nodes/bound-node-dom-synchronizer";
 import { createDefaultGenerationCapabilities } from "./state";
@@ -428,8 +420,7 @@ batchToolbar.className = "canvas-batch-toolbar";
 batchToolbar.innerHTML =
   '<span data-batch-count>已选 0 项</span><button type="button" data-batch-generate aria-label="生成所选卡片" title="生成">生成</button><button type="button" data-batch-delete aria-label="删除所选卡片" title="删除">删除</button><button type="button" data-batch-clear aria-label="退出多选模式" title="退出">退出</button>';
 document.body.append(marqueeBox, batchToolbar);
-let promptAgentContextSelection = new Set<number>();
-let promptAgentSelecting = false;
+let promptAgentFeature: PromptAgentFeature;
 const cameraViewport = new CameraViewportController({
   camera,
   nodes,
@@ -451,13 +442,13 @@ const domPointer = new DomPointerLifecycle({
   selectNode: (id) => { selection.selectedId = id; updateEditor(); },
   clearSelection: () => { selection.selectedId = 0; updateEditor(); draw(); },
   selectedId: () => selection.selectedId,
-  isAgentSelected: (id) => promptAgentContextSelection.has(id),
-  agentSelectionSize: () => promptAgentContextSelection.size,
+  isAgentSelected: (id) => promptAgentFeature.selectedIds.has(id),
+  agentSelectionSize: () => promptAgentFeature.selectedIds.size,
   toggleAgentSelection: (id) => {
-    if (promptAgentContextSelection.has(id)) promptAgentContextSelection.delete(id);
-    else promptAgentContextSelection.add(id);
+    if (promptAgentFeature.selectedIds.has(id)) promptAgentFeature.selectedIds.delete(id);
+    else promptAgentFeature.selectedIds.add(id);
   },
-  renderAgentSelection: () => renderPromptAgentContext(false),
+  renderAgentSelection: () => promptAgentFeature.renderContext(false),
   warnAgentLimit: () => showToast("参考素材最多选择 8 个", "warning"),
   hasConnection: () => Boolean(connection.active),
   moveConnection: (event) => {
@@ -930,7 +921,7 @@ const canvasPaint = new CanvasPaintCoordinator({
     camera,
     selectedId: selection.selectedId,
     selectedIds: [
-      ...new Set([...selection.batchIds, ...promptAgentContextSelection]),
+      ...new Set([...selection.batchIds, ...promptAgentFeature.selectedIds]),
     ],
     dark: colorTheme === "dark",
     backgroundMode,
@@ -1004,8 +995,8 @@ const boundNodeDomSynchronizer = new BoundNodeDomSynchronizer({
   getBatchIds: () => selection.batchIds,
   getEditingId: () => promptNodeEditor.editingId,
   getDraggingId: () => domPointer.drag?.id ?? 0,
-  isAgentSelecting: () => promptAgentSelecting,
-  getAgentIds: () => promptAgentContextSelection,
+  isAgentSelecting: () => promptAgentFeature.selecting,
+  getAgentIds: () => promptAgentFeature.selectedIds,
   getColorTheme: () => colorTheme,
   getSwap: () => videoReferenceSwapSelection,
   setSwap: (value) => { videoReferenceSwapSelection = value; },
@@ -1048,8 +1039,8 @@ const boundNodeViewFactory = new BoundNodeViewFactory({
   setDrag: (drag) => { domPointer.drag = drag; },
   beginResize: (value) => domPointer.beginResize(value),
   isReleaseSuppressed: domPointer.isReleaseSuppressed,
-  isAgentSelecting: () => promptAgentSelecting,
-  isAgentCreateMode: () => promptAgentControls.mode === "create",
+  isAgentSelecting: () => promptAgentFeature.selecting,
+  isAgentCreateMode: () => promptAgentFeature.controls.mode === "create",
   updateEditor,
   draw,
   scheduleSave,
@@ -1504,29 +1495,24 @@ const appearanceController = new AppearanceController({
 function refreshAppearanceButton() {
   appearanceController.refresh();
 }
-const promptAgentTrigger = document.querySelector<HTMLButtonElement>(
-    "#prompt-agent-trigger",
-  )!;
-const {
-  panel: promptAgentPanel,
-  comicBusyProxy: promptAgentComicBusyProxy,
-} = createPromptAgentShell();
-let promptAgentRequests: PromptAgentRequestController | null = null;
-const promptAgentControls = new PromptAgentControls({
-  panel: promptAgentPanel,
+promptAgentFeature = new PromptAgentFeature({
+  nodes,
+  links,
+  nodeLayer,
+  camera,
+  getSelectedId: () => selection.selectedId,
+  setSelectedId: (id) => { selection.selectedId = id; },
+  worldCenter: () => world({ x: innerWidth / 2, y: innerHeight / 2 }),
+  addNode,
   onComic: openComicStudio,
-  onModeChanged: (mode) => {
-    promptAgentSelecting =
-      mode === "create" && promptAgentPanel.classList.contains("open");
-    if (mode !== "create") {
-      promptAgentContextSelection.clear();
-      renderPromptAgentContext(false);
-    }
-    draw();
-  },
-  isBusy: () => Boolean(promptAgentRequests?.busy),
+  updateEditor,
+  persist: scheduleSave,
+  draw,
+  runWorkflow: runAgentWorkflow,
+  loadVoices: (providerId) => { void loadTtsVoices(providerId); },
+  decodePrompt: decodePromptClipboardText,
+  toast: (message, tone) => showToast(message, tone),
 });
-const promptAgentGoalInput = promptAgentControls.goalInput;
 const comicShell = createComicStudioShell();
 const comicStudio = comicShell.studio,
   comicConversationElement = comicShell.conversation,
@@ -1564,75 +1550,9 @@ const comicStudioView = new ComicStudioView(
   comicBriefPanel,
   positionComicBriefPanel,
 );
-function clearPromptAgentResult() {
-  promptAgentRequests?.clearResult();
-}
-let promptAgentLifecycle: PromptAgentLifecycleController;
-function closePromptAgent() {
-  promptAgentLifecycle.close();
-}
-function cancelPromptAgentRequest() {
-  promptAgentLifecycle.cancelRequest();
-}
-function playAgentMeteor(nodeId: number) {
-  const node = nodes.find((item) => item.id === nodeId);
-  if (!node) return;
-  const panel = promptAgentPanel.getBoundingClientRect(),
-    start = {
-      x: panel.left + panel.width * 0.25,
-      y: panel.top + panel.height * 0.45,
-    },
-    end = {
-      x: innerWidth / 2 + camera.x + (node.x + node.width / 2) * camera.zoom,
-      y: innerHeight / 2 + camera.y + (node.y + node.height / 2) * camera.zoom,
-    };
-  const element = nodeLayer.querySelector<HTMLElement>(
-    `.flow-node[data-id="${node.id}"]`,
-  );
-  promptAgentAnimation.playMeteor(start, end, element);
-}
-const promptAgentContextController = new PromptAgentContextController({
-  panel: promptAgentPanel,
-  selectedIds: promptAgentContextSelection,
-  getNodes: () => nodes,
-  getLinks: () => links,
-  getPrimarySelectedId: () => selection.selectedId,
-  onChanged: () => draw(),
-});
 function selectedPromptAgentNodes() {
-  return promptAgentContextController.selectedNodes();
+  return promptAgentFeature.selectedNodes();
 }
-function renderPromptAgentContext(reset = false) {
-  promptAgentContextController.render(reset);
-}
-const promptAgentAnimation = new PromptAgentAnimationController({
-  trigger: promptAgentTrigger,
-  panel: promptAgentPanel,
-  isBusy: () => Boolean(promptAgentRequests?.busy),
-  onBusy: () => showToast("提示词生成中，请等待完成", "warning"),
-  onClose: closePromptAgent,
-  onCancel: cancelPromptAgentRequest,
-  onOpen: () => {
-    promptAgentContextSelection.clear();
-    renderPromptAgentContext(false);
-    promptAgentSelecting = true;
-    draw();
-  },
-});
-promptAgentLifecycle = new PromptAgentLifecycleController({
-  panel: promptAgentPanel,
-  trigger: promptAgentTrigger,
-  cancelFormation: () => promptAgentAnimation.cancelFormation(),
-  cancelRequest: () => promptAgentRequests?.cancel(),
-  clearResult: clearPromptAgentResult,
-  clearContext: () => promptAgentContextSelection.clear(),
-  setSelecting: (value) => { promptAgentSelecting = value; },
-  draw,
-  disperseDirect: () => promptAgentAnimation.disperse(false),
-  position: () => promptAgentAnimation.position(),
-});
-promptAgentLifecycle.bindWindow();
-function dispersePromptAgent() { promptAgentAnimation.disperse(true); }
 const comicState = new ComicSessionState();
 function setComicInteractionLocked(locked: boolean) {
   comicStudioView.setInteractionLocked(locked);
@@ -1700,7 +1620,7 @@ const comicStudioLifecycle = new ComicStudioLifecycleController({
   studio: comicStudio,
   briefPanel: comicBriefPanel,
   planPanel: comicPlanSidePanel,
-  promptPanel: promptAgentPanel,
+  promptPanel: promptAgentFeature.panel,
   getOwnerKey: currentComicOwnerKey,
   getStoredOwnerKey: () => comicState.ownerKey,
   setStoredOwnerKey: (owner) => { comicState.ownerKey = owner; },
@@ -1713,7 +1633,7 @@ const comicStudioLifecycle = new ComicStudioLifecycleController({
   resetMarqueeGesture: resetMarqueeRightGesture,
   isMultiSelect: () => selection.multiSelectMode,
   exitMultiSelect: exitMultiSelectMode,
-  closePromptAgent,
+  closePromptAgent: () => promptAgentFeature.close(),
   renderLabelState: renderComicLabelState,
   renderBrief: renderComicBrief,
 });
@@ -1798,7 +1718,7 @@ const comicOutputController = new ComicOutputController({
     resetMarqueeRightGesture();
     if (selection.multiSelectMode) exitMultiSelectMode();
   },
-  applyPlan: (result) => promptAgentApplication.applyPlan(result),
+  applyPlan: (result) => promptAgentFeature.application.applyPlan(result),
   closeStudio: closeComicStudio,
   onWorkflowReady: (stats) => {
     showToast(
@@ -1884,44 +1804,6 @@ new ComicStudioInteractionController({
   closeMobilePanel: () => showComicMobilePanel(null),
   renderLabelMenu: renderComicLabelMenu,
 }).bind();
-const promptAgentApplication = new PromptAgentApplicationController({
-  nodes,
-  links,
-  getSources: selectedPromptAgentNodes,
-  getSelectedId: () => selection.selectedId,
-  setSelectedId: (id) => { selection.selectedId = id; },
-  worldCenter: () => world({ x: innerWidth / 2, y: innerHeight / 2 }),
-  addNode,
-  persist: scheduleSave,
-  draw,
-  runWorkflow: runAgentWorkflow,
-  loadVoices: (providerId) => { void loadTtsVoices(providerId); },
-});
-promptAgentRequests = new PromptAgentRequestController({
-  panel: promptAgentPanel,
-  controls: promptAgentControls,
-  getNodes: () => nodes,
-  getSelectedId: () => selection.selectedId,
-  getContexts: selectedPromptAgentNodes,
-  applyPlan: (result) => promptAgentApplication.applyPlan(result),
-  applyVoice: (result) => promptAgentApplication.applyVoice(result),
-  playMeteor: playAgentMeteor,
-  locateNode: (nodeId) => {
-    const node = nodes.find((item) => item.id === nodeId);
-    if (!node) return;
-    selection.selectedId = node.id;
-    camera.x = -(node.x + node.width / 2) * camera.zoom;
-    camera.y = -(node.y + node.height / 2) * camera.zoom;
-    draw();
-    closePromptAgent();
-  },
-  updateEditor,
-  persist: scheduleSave,
-  draw,
-  decodePrompt: decodePromptClipboardText,
-  disperse: dispersePromptAgent,
-  showToast: (message, tone) => showToast(message, tone),
-});
 const canvasClearResultApplier = new CanvasClearResultApplier({
   nodes,
   links,
