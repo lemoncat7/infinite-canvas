@@ -107,6 +107,10 @@ import {
   createProjectDialog,
 } from "../ui/dialogs/project-dialog";
 import { ProjectController } from "../ui/project-controller";
+import {
+  UserMenuController,
+  type AuthUser,
+} from "../ui/user-menu-controller";
 import { ComicSidePanelController } from "../ui/comic-side-panel";
 import { ComicStudioView } from "../ui/comic-studio";
 import { ComicLabelController } from "../ui/comic-labels";
@@ -1781,17 +1785,6 @@ const homeGallery = document.querySelector<HTMLElement>("#home-gallery")!;
 const homeLoginModal =
   document.querySelector<HTMLElement>("#home-login-modal")!;
 const homePreview = document.querySelector<HTMLElement>("#home-preview")!;
-type AuthUser = {
-  id: string;
-  name: string;
-  username?: string;
-  email: string;
-  inviteCode?: string;
-  createdAt: string;
-  credits?: number;
-  reservedCredits?: number;
-  isAdmin?: boolean;
-};
 type CustomApiModel = {
   id: string;
   kind: "image" | "video";
@@ -1900,33 +1893,7 @@ function setAuthMode(mode: "login" | "register") {
     "";
 }
 function renderAuthenticatedUser() {
-  const login = document.querySelector<HTMLButtonElement>("#home-login")!,
-    enter = document.querySelector<HTMLButtonElement>("#home-enter")!,
-    userButton = document.querySelector<HTMLButtonElement>("#workspace-user")!,
-    menu = document.querySelector<HTMLElement>("#workspace-user-menu")!,
-    initial = authUser?.name?.slice(0, 1).toUpperCase() ?? "V",
-    available = Math.max(
-      0,
-      Number(authUser?.credits ?? 0) - Number(authUser?.reservedCredits ?? 0),
-    );
-  login.disabled = Boolean(authUser);
-  login.textContent = authUser ? `${authUser.name} · 已登录` : "登录";
-  enter.textContent = authUser ? "返回工作台" : "进入工作台";
-  userButton.querySelector("span")!.textContent = initial;
-  userButton.querySelector("b")!.textContent = authUser?.name ?? "用户";
-  menu.querySelector("header i")!.textContent = initial;
-  menu.querySelector("strong")!.textContent = authUser?.name ?? "";
-  menu.querySelector("header small")!.textContent = [
-    authUser?.username ? `@${authUser.username}` : "",
-    authUser?.email ?? "",
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  menu.querySelector<HTMLElement>("#copy-invite-code b")!.textContent =
-    authUser?.inviteCode ?? "—";
-  const credits = menu.querySelector<HTMLButtonElement>("#open-lab")!;
-  credits.querySelector("small")!.textContent = `${available} 点`;
-  credits.classList.toggle("enabled", available > 0);
+  userMenuController.render(authUser);
   if (authUser) {
     void loadNotifications();
     connectNotificationStream();
@@ -2267,103 +2234,6 @@ homePreview.addEventListener("click", (event) => {
 const workspaceUserMenu = document.querySelector<HTMLElement>(
   "#workspace-user-menu",
 )!;
-let visibleUserApiToken = "";
-async function loadUserApiTokenState() {
-  if (!authUser) return;
-  const code =
-      workspaceUserMenu.querySelector<HTMLElement>("[data-user-token]")!,
-    copy =
-      workspaceUserMenu.querySelector<HTMLButtonElement>("[data-token-copy]")!,
-    refresh = workspaceUserMenu.querySelector<HTMLButtonElement>(
-      "[data-token-refresh]",
-    )!;
-  try {
-    const response = await apiFetch("/api/users/me/api-token"),
-      result = (await response.json()) as { exists?: boolean; hint?: string };
-    if (!response.ok) throw new Error();
-    if (!visibleUserApiToken)
-      code.textContent = result.exists ? result.hint || "已生成" : "尚未生成";
-    copy.disabled = !visibleUserApiToken;
-    refresh.textContent = result.exists ? "刷新" : "生成";
-  } catch {
-    code.textContent = "读取失败";
-  }
-}
-const renameUserButton = document.createElement("button");
-renameUserButton.id = "rename-user";
-renameUserButton.type = "button";
-renameUserButton.title = "修改昵称";
-renameUserButton.setAttribute("aria-label", "修改昵称");
-renameUserButton.textContent = "✎";
-workspaceUserMenu.querySelector("header")!.append(renameUserButton);
-async function editUserNickname() {
-  if (!authUser) return;
-  const header = workspaceUserMenu.querySelector("header")!,
-    name = header.querySelector<HTMLElement>("strong")!,
-    input = document.createElement("input");
-  input.className = "user-name-input";
-  input.value = authUser.name;
-  input.maxLength = 40;
-  name.hidden = true;
-  renameUserButton.hidden = true;
-  name.after(input);
-  input.focus();
-  input.select();
-  let finished = false;
-  const finish = async (save: boolean) => {
-    if (finished) return;
-    finished = true;
-    const nextName = input.value.trim();
-    input.remove();
-    name.hidden = false;
-    renameUserButton.hidden = false;
-    if (!save || nextName === authUser!.name) return;
-    if (nextName.length < 2) {
-      showToast("昵称至少需要 2 个字符", "error");
-      return;
-    }
-    const response = await apiFetch("/api/users/me", {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: nextName }),
-    });
-    const result = (await response.json().catch(() => ({}))) as AuthUser & {
-      error?: string;
-    };
-    if (!response.ok) {
-      showToast(result.error || "昵称修改失败", "error");
-      return;
-    }
-    authUser = { ...authUser!, name: result.name };
-    renderAuthenticatedUser();
-    showToast("昵称已更新", "success");
-  };
-  input.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      void finish(true);
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      void finish(false);
-    }
-  });
-  input.addEventListener("blur", () => void finish(true));
-}
-renameUserButton.addEventListener("click", (event) => {
-  event.stopPropagation();
-  void editUserNickname();
-});
-document
-  .querySelector("#workspace-user")!
-  .addEventListener("click", (event) => {
-    event.stopPropagation();
-    const opening = !workspaceUserMenu.classList.contains("open");
-    closeTopbarMenus(opening ? "user" : undefined);
-    if (opening) {
-      workspaceUserMenu.classList.add("open");
-      void loadUserApiTokenState();
-    }
-  });
 async function logoutToHome(message?: string) {
   window.clearTimeout(saveTimer);
   canvasSaveQueued = false;
@@ -2376,85 +2246,32 @@ async function logoutToHome(message?: string) {
   canvasServerUpdatedAt = "";
   await apiFetch("/api/auth/logout", { method: "POST" }).catch(() => {});
   authUser = null;
-  visibleUserApiToken = "";
+  userMenuController.clearToken();
   nodes.splice(0);
   links.splice(0);
   selection.selectedId = 0;
-  workspaceUserMenu.classList.remove("open");
+  userMenuController.close();
   renderAuthenticatedUser();
   location.hash = "#/";
   applyAppRoute();
   if (message) showToast(message, "warning");
 }
-document
-  .querySelector("#workspace-logout")!
-  .addEventListener("click", () => void logoutToHome());
-document
-  .querySelector("#copy-invite-code")!
-  .addEventListener("click", async () => {
-    if (!authUser?.inviteCode) return;
-    await navigator.clipboard.writeText(authUser.inviteCode);
-    const label = document.querySelector<HTMLElement>(
-      "#copy-invite-code span",
-    )!;
-    label.textContent = "已复制";
-    window.setTimeout(() => {
-      label.textContent = "复制";
-    }, 1400);
-  });
-workspaceUserMenu
-  .querySelector<HTMLButtonElement>("[data-token-refresh]")!
-  .addEventListener("click", async (event) => {
-    event.stopPropagation();
-    const button = event.currentTarget as HTMLButtonElement,
-      code = workspaceUserMenu.querySelector<HTMLElement>("[data-user-token]")!,
-      copy =
-        workspaceUserMenu.querySelector<HTMLButtonElement>(
-          "[data-token-copy]",
-        )!;
-    button.disabled = true;
-    button.textContent = "生成中…";
-    try {
-      const response = await apiFetch("/api/users/me/api-token", {
-          method: "POST",
-        }),
-        result = (await response.json()) as { token?: string; error?: string };
-      if (!response.ok || !result.token)
-        throw new Error(result.error || "Token 生成失败");
-      visibleUserApiToken = result.token;
-      code.textContent = result.token;
-      code.title = result.token;
-      copy.disabled = false;
-      button.textContent = "刷新";
-      await navigator.clipboard.writeText(result.token).catch(() => {});
-      showToast("新 Token 已生成并复制，请妥善保存", "success");
-    } catch (reason) {
-      showToast(
-        reason instanceof Error ? reason.message : "Token 生成失败",
-        "error",
-      );
-      button.textContent = "重试";
-    } finally {
-      button.disabled = false;
-    }
-  });
-workspaceUserMenu
-  .querySelector<HTMLButtonElement>("[data-token-copy]")!
-  .addEventListener("click", async (event) => {
-    event.stopPropagation();
-    if (!visibleUserApiToken) return;
-    await navigator.clipboard.writeText(visibleUserApiToken);
-    const button = event.currentTarget as HTMLButtonElement;
-    button.textContent = "已复制";
-    window.setTimeout(() => (button.textContent = "复制"), 1200);
-  });
-document.addEventListener("pointerdown", (event) => {
-  if (
-    !(event.target as HTMLElement | null)?.closest(
-      "#workspace-user,#workspace-user-menu",
-    )
-  )
-    workspaceUserMenu.classList.remove("open");
+const userMenuController = new UserMenuController({
+  menu: workspaceUserMenu,
+  button: document.querySelector<HTMLButtonElement>("#workspace-user")!,
+  homeLogin: document.querySelector<HTMLButtonElement>("#home-login")!,
+  homeEnter: document.querySelector<HTMLButtonElement>("#home-enter")!,
+  logoutButton: document.querySelector<HTMLElement>("#workspace-logout")!,
+  inviteCopyButton:
+    document.querySelector<HTMLButtonElement>("#copy-invite-code")!,
+  getUser: () => authUser,
+  setUser: (user) => {
+    authUser = user;
+  },
+  closeTopbarMenus: (opening) =>
+    closeTopbarMenus(opening ? "user" : undefined),
+  logout: () => logoutToHome(),
+  toast: (message, type) => showToast(message, type),
 });
 const feedbackModal = document.querySelector<HTMLElement>("#feedback-modal")!,
   feedbackForm =
