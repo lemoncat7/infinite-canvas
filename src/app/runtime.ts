@@ -86,6 +86,7 @@ import {
 import { renderProjectList } from "../ui/project-panel";
 import { ComicSidePanelController } from "../ui/comic-side-panel";
 import { ComicStudioView } from "../ui/comic-studio";
+import { ComicLabelController } from "../ui/comic-labels";
 import { ContextMenuController } from "../ui/context-menu";
 import { createDefaultGenerationCapabilities } from "./state";
 import {
@@ -9025,87 +9026,57 @@ function comicLabels() {
     .filter((node) => node.kind === "prompt" && node.body.trim())
     .sort((a, b) => b.id - a.id);
 }
-function renderComicLabelState() {
-  const linked = nodes.find((node) => node.id === comicLinkedLabelId),
-    card = comicStudio.querySelector<HTMLElement>("[data-comic-linked-label]")!,
-    picker = comicStudio.querySelector<HTMLButtonElement>(
-      "[data-comic-label-picker]",
-    )!,
-    save = comicStudio.querySelector<HTMLButtonElement>("[data-comic-label]")!,
-    copy = comicStudio.querySelector<HTMLButtonElement>(
-      "[data-comic-label-copy]",
-    )!;
-  picker.querySelector("b")!.textContent = linked ? "更换标签" : "关联标签";
-  card.hidden = !linked;
-  card.innerHTML = linked
-    ? `<span><i>◇</i><span><small>正在延续</small><b>${escapeHtml(linked.title)}</b></span></span><button type="button" aria-label="取消关联">×</button>`
-    : "";
-  card.querySelector("button")?.addEventListener("click", () => {
-    comicLinkedLabelId = 0;
-    comicOriginalIdea = "";
-    resetComicConversationState(true);
+function unlinkComicLabel() {
+  comicLinkedLabelId = 0;
+  comicOriginalIdea = "";
+  resetComicConversationState(true);
+  comicStudio.querySelector<HTMLElement>(".comic-plan")!.hidden = true;
+  renderComicLabelState();
+}
+function selectComicLabel(label: FlowNode) {
+  comicLinkedLabelId = label.id;
+  comicOriginalIdea = label.body;
+  const stored = label.comicData as ComicPlan | undefined;
+  const saved =
+    stored?.shots && Array.isArray(stored.shots) ? structuredClone(stored) : null;
+  resetComicConversationState(true);
+  if (saved) {
+    comicPlan = saved;
+    comicBrief = briefFromComicPlan(saved);
+    renderComicPlan(saved);
+  } else {
+    comicPlan = null;
+    comicBrief = {
+      title: label.title.replace(/^漫剧方案\s*·\s*/, ""),
+      premise: label.body.replace(/\s+/g, " ").trim().slice(0, 360),
+      aspectRatio: "16:9",
+      openQuestions: ["继续对话，确认需要保留和调整的内容"],
+    };
     comicStudio.querySelector<HTMLElement>(".comic-plan")!.hidden = true;
-    renderComicLabelState();
-  });
-  save.querySelector("span")!.textContent = linked
-    ? "更新原标签"
-    : "保存为标签";
-  copy.hidden = !linked;
+  }
+  renderComicLabelState();
+  renderComicBrief();
+  const conversation = comicStudio.querySelector<HTMLElement>(
+      "[data-comic-conversation]",
+    )!,
+    notice = document.createElement("div");
+  notice.className = "comic-message assistant compact";
+  notice.innerHTML = `<i>◇</i><div><b>${saved ? "已恢复" : "已关联"}《${escapeHtml(label.title)}》</b><p>${saved ? "人物、剧情、风格和分镜已经载入，可以直接继续修改或续写。" : "标签内容已载入当前方案，可继续对话整理为完整剧本。"}</p></div>`;
+  conversation.insertBefore(notice, comicStudio.querySelector(".comic-plan"));
+  comicStudio.querySelector<HTMLTextAreaElement>("[data-comic-message]")!.focus();
+}
+const comicLabelController = new ComicLabelController({
+  studio: comicStudio,
+  getLabels: comicLabels,
+  getLinkedId: () => comicLinkedLabelId,
+  onSelect: selectComicLabel,
+  onUnlink: unlinkComicLabel,
+});
+function renderComicLabelState() {
+  comicLabelController.renderState();
 }
 function renderComicLabelMenu() {
-  const menu = comicStudio.querySelector<HTMLElement>(
-      "[data-comic-label-menu]",
-    )!,
-    labels = comicLabels();
-  menu.innerHTML = `<header><b>选择故事标签</b><small>读取后可继续对话修改</small></header>${labels.length ? labels.map((label) => `<button type="button" data-comic-label-id="${label.id}" class="${label.id === comicLinkedLabelId ? "active" : ""}"><i>◇</i><span><b>${escapeHtml(label.title || "未命名标签")}</b><small>${escapeHtml(label.body.replace(/\s+/g, " ").trim().slice(0, 90) || "暂无内容")}</small></span><em>${label.id === comicLinkedLabelId ? "✓" : "›"}</em></button>`).join("") : "<p>当前画布还没有可用标签</p>"}`;
-  menu
-    .querySelectorAll<HTMLButtonElement>("[data-comic-label-id]")
-    .forEach((button) =>
-      button.addEventListener("click", () => {
-        const label = nodes.find(
-          (node) => node.id === Number(button.dataset.comicLabelId),
-        );
-        if (!label) return;
-        comicLinkedLabelId = label.id;
-        comicOriginalIdea = label.body;
-        const stored = label.comicData as ComicPlan | undefined,
-          saved =
-            stored?.shots && Array.isArray(stored.shots)
-              ? structuredClone(stored)
-              : null;
-        resetComicConversationState(true);
-        if (saved) {
-          comicPlan = saved;
-          comicBrief = briefFromComicPlan(saved);
-          renderComicPlan(saved);
-        } else {
-          comicPlan = null;
-          comicBrief = {
-            title: label.title.replace(/^漫剧方案\s*·\s*/, ""),
-            premise: label.body.replace(/\s+/g, " ").trim().slice(0, 360),
-            aspectRatio: "16:9",
-            openQuestions: ["继续对话，确认需要保留和调整的内容"],
-          };
-          comicStudio.querySelector<HTMLElement>(".comic-plan")!.hidden = true;
-        }
-        menu.classList.remove("open");
-        renderComicLabelState();
-        renderComicBrief();
-        const conversation = comicStudio.querySelector<HTMLElement>(
-            "[data-comic-conversation]",
-          )!,
-          notice = document.createElement("div");
-        notice.className = "comic-message assistant compact";
-        notice.innerHTML = `<i>◇</i><div><b>${saved ? "已恢复" : "已关联"}《${escapeHtml(label.title)}》</b><p>${saved ? "人物、剧情、风格和分镜已经载入，可以直接继续修改或续写。" : "标签内容已载入当前方案，可继续对话整理为完整剧本。"}</p></div>`;
-        conversation.insertBefore(
-          notice,
-          comicStudio.querySelector(".comic-plan"),
-        );
-        comicStudio
-          .querySelector<HTMLTextAreaElement>("[data-comic-message]")!
-          .focus();
-      }),
-    );
+  comicLabelController.renderMenu();
 }
 function clearRestoredComicSession() {
   comicSubmitting = false;
