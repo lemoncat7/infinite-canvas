@@ -135,6 +135,7 @@ import { ComicSidePanelController } from "../ui/comic-side-panel";
 import { ComicStudioView } from "../ui/comic-studio";
 import { ComicSessionRecoveryView } from "../ui/comic-session-recovery";
 import { ComicDialogueController } from "../ui/comic-dialogue-controller";
+import { ComicNewSessionController } from "../ui/comic-new-session-controller";
 import { ComicPlanController } from "../ui/comic-plan-controller";
 import { ComicOutputController } from "../ui/comic-output-controller";
 import { ComicLabelController } from "../ui/comic-labels";
@@ -2460,34 +2461,17 @@ function saveComicAsLabel(copy = false) {
 comicStudio
   .querySelector("[data-comic-close]")!
   .addEventListener("click", closeComicStudio);
-comicStudio.querySelector("[data-comic-new]")!.addEventListener("click", () => {
-  if (comicState.submitting) {
-    showToast("请等待当前构思完成后再开始新会话", "warning");
-    return;
-  }
-  showComicMobilePanel(null);
-  comicStudio
-    .querySelector<HTMLElement>("[data-comic-label-menu]")
-    ?.classList.remove("open");
-  comicState.originalIdea = "";
-  comicState.linkedLabelId = 0;
-  resetComicConversationState(true);
-  renderComicLabelState();
-  comicStudio
-    .querySelectorAll(".comic-message:not(.comic-welcome)")
-    .forEach((message) => message.remove());
-  comicStudio.querySelector<HTMLElement>(".comic-plan")!.hidden = true;
-  comicStudio.querySelector<HTMLTextAreaElement>(
-    "[data-comic-message]",
-  )!.value = "";
-  comicStudio
-    .querySelector<HTMLOutputElement>("[data-comic-status]")!
-    .classList.remove("visible");
-  comicStudio
-    .querySelector<HTMLTextAreaElement>("[data-comic-message]")!
-    .focus();
-  showToast("已开始新的漫剧会话", "success");
+const comicNewSession = new ComicNewSessionController({
+  studio: comicStudio,
+  state: comicState,
+  closeMobilePanel: () => showComicMobilePanel(null),
+  resetConversation: () => resetComicConversationState(true),
+  renderLabelState: renderComicLabelState,
+  notify: (message, tone) => showToast(message, tone),
 });
+comicStudio.querySelector("[data-comic-new]")!.addEventListener("click", () =>
+  comicNewSession.start(),
+);
 const comicMessage = comicStudio.querySelector<HTMLTextAreaElement>(
   "[data-comic-message]",
 )!;
