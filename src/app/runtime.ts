@@ -9,8 +9,6 @@ import { CanvasInteractionController } from "../canvas/interaction-controller";
 import { CanvasInputFeature } from "../canvas/canvas-input-feature";
 import { CanvasBatchFeature } from "../canvas/canvas-batch-feature";
 import { CanvasHistoryFeature } from "../canvas/canvas-history-feature";
-import { GenerationPoller } from "../services/generation-poller";
-import { GenerationWorkflow } from "../services/generation-workflow";
 import { CanvasNodeIdAllocator } from "../services/canvas-node-id-allocator";
 import { CanvasMediaFeature } from "../canvas/canvas-media-feature";
 import type {
@@ -30,7 +28,7 @@ import { TtsFeature } from "../services/tts-feature";
 import { apiFetch } from "../services/api";
 import { AppUpdateController } from "../services/app-update-controller";
 import { GenerationCapabilitiesController } from "../services/generation-capabilities-controller";
-import { CanvasGenerationFeature } from "../services/canvas-generation-feature";
+import { CanvasGenerationRuntimeFeature } from "../services/canvas-generation-runtime-feature";
 import { ClientDiagnostics } from "../services/client-diagnostics";
 import {
   clipVideoPrompt,
@@ -72,7 +70,7 @@ let canvasRender: CanvasRenderFeature;
 
 let generationCapabilities: GenerationCapabilities =
   createDefaultGenerationCapabilities();
-let canvasGeneration: CanvasGenerationFeature;
+let generationRuntime: CanvasGenerationRuntimeFeature;
 let nodeEditorFeature: CanvasNodeEditorFeature;
 function loadTtsProviders() {
   return ttsFeature.loadProviders();
@@ -170,7 +168,7 @@ const canvasTasks = new CanvasTaskFeature<AuthUser>({
   canGenerate: canGenerateNode,
   modelName: modelDisplayName,
   projectId: () => currentProjectId,
-  cancelPoll: (jobId) => generationPoller.cancel(jobId),
+  cancelPoll: (jobId) => generationRuntime.cancel(jobId),
   getUser: () => authWorkspace.user,
   setUser: (user) => authWorkspace.setUser(user),
   renderUser: () => authWorkspace.renderUser(),
@@ -182,7 +180,7 @@ const canvasTasks = new CanvasTaskFeature<AuthUser>({
     camera.x = -(node.x + node.width / 2) * camera.zoom;
     camera.y = -(node.y + node.height / 2) * camera.zoom;
   },
-  runWorkflow: () => generationWorkflow.run(),
+  runWorkflow: () => generationRuntime.run(),
   ask: async (options) => (await askProjectDialog(options)) === true,
   save: scheduleSave,
   updateEditor,
@@ -242,7 +240,7 @@ const canvasBatch = new CanvasBatchFeature({
   screen: (point) => screen(point),
   viewportWidth: () => innerWidth,
   generationActive: canvasHasActiveGeneration,
-  enqueue: (ids) => generationWorkflow.enqueue(ids),
+  enqueue: (ids) => generationRuntime.enqueue(ids),
   exitMode: exitMultiSelectMode,
   updateEditor,
   draw,
@@ -395,24 +393,6 @@ function modelDisplayName(value?: string) {
     "自定义模型"
   );
 }
-const generationPoller = new GenerationPoller({
-  nodes,
-  onProgress: (node, _job, changed) => { if (changed) updateNodeJobProgressUi(node); },
-  onRetry: () => showToast("首次生成请求超时，正在自动重试一次", "warning"),
-  onTerminal: finalizeGenerationJob,
-  onSyncFailure: (_failures, notify) => {
-    jobLabel.textContent = "状态同步中断，正在重试…";
-    if (notify) showToast("任务状态暂时无法同步，服务恢复后将自动重试", "error");
-  },
-});
-const generationWorkflow = new GenerationWorkflow({
-  nodes,
-  links,
-  generate,
-  save: scheduleSave,
-  draw,
-  canGenerate: canGenerateNode,
-});
 const toastStack = document.querySelector<HTMLElement>("#toast-stack")!;
 const canvasGuideController = new CanvasGuideController(escapeHtml);
 const toastController = new ToastController(
@@ -775,7 +755,7 @@ canvasPersistence = new CanvasPersistenceFeature({
     nodeLayer.replaceChildren();
     nodeViews.clearEditors();
   },
-  cancelPolling: () => generationPoller.cancelAll(),
+  cancelPolling: () => generationRuntime.cancelAll(),
   getLease: () => ({ nextId: canvasNodeIds.nextId, end: canvasNodeIds.end }),
   restoreLease: (nextId, end) => canvasNodeIds.restore(nextId, end),
   resetLease: (value) => canvasNodeIds.reset(value),
@@ -838,49 +818,55 @@ function previewVoice(voice: FlowNode) {
 function generateTts(source: FlowNode) {
   return ttsFeature.generate(source);
 }
-canvasGeneration = new CanvasGenerationFeature({
-  nodes,
-  links,
-  imageCache,
-  jobLabel,
-  getSelectedId: () => selection.selectedId,
-  setSelectedId: (id) => { selection.selectedId = id; },
-  selectedNode,
-  blockedReason: generationBlockedReason,
-  normalizePrompt: normalizePromptText,
-  getProjectId: () => currentProjectId,
-  allocateNodeId: allocateCanvasNodeId,
-  clearSelection: () => {
-    selection.selectedId = 0;
-    updateEditor();
-    draw();
+generationRuntime = new CanvasGenerationRuntimeFeature({
+  generation: {
+    nodes,
+    links,
+    imageCache,
+    jobLabel,
+    getSelectedId: () => selection.selectedId,
+    setSelectedId: (id) => { selection.selectedId = id; },
+    selectedNode,
+    blockedReason: generationBlockedReason,
+    normalizePrompt: normalizePromptText,
+    getProjectId: () => currentProjectId,
+    allocateNodeId: allocateCanvasNodeId,
+    clearSelection: () => {
+      selection.selectedId = 0;
+      updateEditor();
+      draw();
+    },
+    updateEditor,
+    draw,
+    save: scheduleSave,
+    focusPrompt: () => promptInput.focus(),
+    generateTts,
+    getUser: () => authWorkspace.user,
+    setUser: (user) => authWorkspace.setUser(user),
+    renderUser: () => authWorkspace.renderUser(),
+    refreshModelMenus: refreshNodeModelMenus,
+    loadAssets: () => loadAssets(false),
+    renderAssets,
+    isAssetPanelOpen: () => Boolean(
+      document.querySelector("#assets-panel")?.classList.contains("open"),
+    ),
+    toast: (message, tone, detail) => showToast(message, tone, detail),
   },
-  updateEditor,
-  draw,
-  save: scheduleSave,
-  focusPrompt: () => promptInput.focus(),
-  generateTts,
-  pollJob,
-  getUser: () => authWorkspace.user,
-  setUser: (user) => authWorkspace.setUser(user),
-  renderUser: () => authWorkspace.renderUser(),
-  refreshModelMenus: refreshNodeModelMenus,
-  loadAssets: () => loadAssets(false),
-  renderAssets,
-  isAssetPanelOpen: () => Boolean(
-    document.querySelector("#assets-panel")?.classList.contains("open"),
-  ),
-  runWorkflow: () => generationWorkflow.run(),
-  toast: (message, tone, detail) => showToast(message, tone, detail),
+  canGenerate: canGenerateNode,
+  onProgress: (node, _job, changed) => {
+    if (changed) updateNodeJobProgressUi(node);
+  },
+  onRetry: () => showToast("首次生成请求超时，正在自动重试一次", "warning"),
+  onSyncFailure: (_failures, notify) => {
+    jobLabel.textContent = "状态同步中断，正在重试…";
+    if (notify) showToast("任务状态暂时无法同步，服务恢复后将自动重试", "error");
+  },
 });
 function generate(sourceOverride?: FlowNode) {
-  return canvasGeneration.generate(sourceOverride);
+  return generationRuntime.generate(sourceOverride);
 }
-function runAgentWorkflow() { generationWorkflow.run(); }
-function finalizeGenerationJob(currentNode: FlowNode, job: import("../services/generation").GenerationJob) {
-  return canvasGeneration.finalize(currentNode, job);
-}
-function pollJob(node: FlowNode) { generationPoller.poll(node); }
+function runAgentWorkflow() { generationRuntime.run(); }
+function pollJob(node: FlowNode) { generationRuntime.poll(node); }
 function refreshBatchSelection() {
   canvasBatch.refresh();
 }
