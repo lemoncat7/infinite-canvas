@@ -86,7 +86,6 @@ import type {
 } from "../nodes/comic-types";
 import {
   briefFromComicPlan,
-  formatComicPlan,
   stripCharactersFromScenePrompt,
 } from "../nodes/comic-format";
 import {
@@ -131,8 +130,8 @@ import { ComicStudioView } from "../ui/comic-studio";
 import { ComicSessionRecoveryView } from "../ui/comic-session-recovery";
 import { ComicDialogueController } from "../ui/comic-dialogue-controller";
 import { ComicPlanController } from "../ui/comic-plan-controller";
+import { ComicOutputController } from "../ui/comic-output-controller";
 import { ComicLabelController } from "../ui/comic-labels";
-import { buildComicWorkflow } from "../nodes/comic-workflow";
 import {
   configurePromptAgentNode,
   connectPromptAgentInputs,
@@ -4631,17 +4630,18 @@ function requestComicPlan() {
 function scenePromptWithoutCharacters(value: string) {
   return stripCharactersFromScenePrompt(value, comicState.plan);
 }
-function applyComicToCanvas() {
-  if (!comicState.plan) return;
-  resetMarqueeRightGesture();
-  if (selection.multiSelectMode) exitMultiSelectMode();
-  try {
-    const { result, storyboardCount, compositeCount, sceneCount } =
-      buildComicWorkflow(comicState.plan);
-    applyPromptAgentPlan(result);
-    closeComicStudio();
+const comicOutputController = new ComicOutputController({
+  state: comicState,
+  getNodes: () => nodes,
+  prepareCanvas: () => {
+    resetMarqueeRightGesture();
+    if (selection.multiSelectMode) exitMultiSelectMode();
+  },
+  applyPlan: applyPromptAgentPlan,
+  closeStudio: closeComicStudio,
+  onWorkflowReady: (stats) => {
     showToast(
-      `工作流已铺到画布：${comicState.plan.characters.length} 个角色、${comicState.plan.props?.length || 0} 个道具、${sceneCount} 个场景、${storyboardCount} 张关键帧${compositeCount ? `、${compositeCount} 张合成底图` : ""}`,
+      `工作流已铺到画布：${stats.characterCount} 个角色、${stats.propCount} 个道具、${stats.sceneCount} 个场景、${stats.storyboardCount} 张关键帧${stats.compositeCount ? `、${stats.compositeCount} 张合成底图` : ""}`,
       "success",
     );
     window.setTimeout(
@@ -4649,7 +4649,7 @@ function applyComicToCanvas() {
         showCanvasGuide({
           key: "comic-empty-images-guide",
           title: "连续分镜工作流已就绪",
-          detail: `每次生图最多使用 2 张参考${compositeCount ? `，${compositeCount} 个复杂画面会逐层合成` : ""}；检查素材和提示词后，可点击顶栏“启动空图”。`,
+          detail: `每次生图最多使用 2 张参考${stats.compositeCount ? `，${stats.compositeCount} 个复杂画面会逐层合成` : ""}；检查素材和提示词后，可点击顶栏“启动空图”。`,
           tone: "online",
           priority: 58,
           duration: 10000,
@@ -4670,25 +4670,12 @@ function applyComicToCanvas() {
         }),
       420,
     );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "未知错误";
+  },
+  onWorkflowError: (message, shots, nodeCount) => {
     showToast("铺设漫剧工作流失败", "error", message);
-    clientLog("comic_canvas_apply_failed", {
-      message,
-      shots: comicState.plan.shots.length,
-      nodes: nodes.length,
-    });
-  }
-}
-function comicPlanText(plan: ComicPlan) {
-  return formatComicPlan(plan);
-}
-function saveComicAsLabel(copy = false) {
-  if (!comicState.plan) return;
-  let label = !copy
-    ? nodes.find((node) => node.id === comicState.linkedLabelId)
-    : undefined;
-  if (!label) {
+    clientLog("comic_canvas_apply_failed", { message, shots, nodes: nodeCount });
+  },
+  createLabel: () => {
     const rightEdge = nodes.length
       ? Math.max(...nodes.map((node) => node.x + node.width))
       : world({ x: innerWidth / 2, y: innerHeight / 2 }).x - 220;
@@ -4696,23 +4683,22 @@ function saveComicAsLabel(copy = false) {
       x: rightEdge + 180,
       y: world({ x: innerWidth / 2, y: innerHeight / 2 }).y - 280,
     });
-    label = nodes.find((node) => node.id === selection.selectedId);
-  }
-  if (!label) return;
-  label.title = `漫剧方案 · ${comicState.plan.title}`;
-  label.body = comicPlanText(comicState.plan);
-  label.comicData = structuredClone(comicState.plan);
-  label.width = 440;
-  label.height = 560;
-  label.fontScale = 0.92;
-  comicState.linkedLabelId = label.id;
-  renderComicLabelState();
-  scheduleSave();
-  draw();
-  showToast(
-    copy ? "漫剧方案已另存为新标签" : "漫剧方案已保存并可继续修改",
-    "success",
-  );
+    return nodes.find((node) => node.id === selection.selectedId);
+  },
+  renderLabelState: renderComicLabelState,
+  persistCanvas: scheduleSave,
+  draw,
+  showSaved: (copy) =>
+    showToast(
+      copy ? "漫剧方案已另存为新标签" : "漫剧方案已保存并可继续修改",
+      "success",
+    ),
+});
+function applyComicToCanvas() {
+  comicOutputController.applyToCanvas();
+}
+function saveComicAsLabel(copy = false) {
+  comicOutputController.saveAsLabel(copy);
 }
 comicStudio
   .querySelector("[data-comic-close]")!
