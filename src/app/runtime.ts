@@ -55,9 +55,7 @@ import {
 } from "../services/projects";
 import { streamComicDialogue } from "../services/comic";
 import { ComicSessionController } from "../services/comic-session";
-import {
-  composeImageGenerationPrompt as buildImageGenerationPrompt,
-} from "../nodes/image-node";
+import { prepareGenerationRequest } from "../nodes/generation-request";
 import {
   clipVideoPrompt,
   composeStoryboardPrompt,
@@ -4737,96 +4735,13 @@ async function generate(sourceOverride?: FlowNode) {
   updateEditor();
   draw();
   try {
-    const upstream = links
-      .filter((link) => link.to === source.id && link.from !== node.id)
-      .map((link) => ({
-        link,
-        node: nodes.find((item) => item.id === link.from),
-      }))
-      .filter((item): item is { link: FlowLink; node: FlowNode } =>
-        Boolean(item.node),
-      )
-      .sort((left, right) => {
-        const leftOrder = left.link.inputOrder,
-          rightOrder = right.link.inputOrder;
-        if (leftOrder !== undefined || rightOrder !== undefined)
-          return (
-            (leftOrder ?? Number.MAX_SAFE_INTEGER) -
-            (rightOrder ?? Number.MAX_SAFE_INTEGER)
-          );
-        return (
-          left.node.y - right.node.y ||
-          left.node.x - right.node.x ||
-          left.node.id - right.node.id
-        );
-      })
-      .map((item) => item.node);
-    const inputMedia = (
-        source.kind === "image" && source.mediaUrl ? [source] : []
-      ).concat(upstream.filter((item) => Boolean(item.mediaUrl))),
-      uniqueInputMedia = inputMedia.filter(
-        (item, index, list) =>
-          list.findIndex(
-            (candidate) => candidate.mediaUrl === item.mediaUrl,
-          ) === index,
-      );
-    const effectiveInputMedia =
-      source.kind === "image" && source.promptProfile === "storyboard"
-        ? uniqueInputMedia.slice(0, 2)
-        : uniqueInputMedia;
-    const inputUrls =
-      source.kind === "video"
-        ? upstream
-            .filter((item) => item.kind === "image")
-            .map((item) => item.mediaUrl)
-            .filter((url): url is string => Boolean(url))
-            .filter((url, index, list) => list.indexOf(url) === index)
-        : effectiveInputMedia.map((item) => item.mediaUrl!).filter(Boolean);
-    const legacyPrompt = normalizePromptText(source.body)
-        .replace(
-          /\n?严格参考(?:连接|实际输入)素材：[^\n]*不得互换或重新设计。?/g,
-          "",
-        )
-        .replace(/\n?参考图1「[^\n]*保持人物身份、服装、道具和场景一致。?/g, "")
-        .replace(/\n?角色实例约束：[^\n]*/g, "")
-        .trim(),
-      imagePrompt =
-        source.kind === "image"
-          ? buildImageGenerationPrompt(
-              source,
-              legacyPrompt,
-              effectiveInputMedia,
-            )
-          : null;
-    const requestPrompt = imagePrompt?.prompt ?? legacyPrompt;
-    if (imagePrompt) {
-      source.corePrompt = imagePrompt.corePrompt;
-      node.corePrompt = imagePrompt.corePrompt;
-      node.originalPrompt = legacyPrompt;
+    const prepared = prepareGenerationRequest(source, node, nodes, links, normalizePromptText);
+    const { prompt: requestPrompt, inputUrls, parameters } = prepared;
+    if (prepared.corePrompt) {
+      source.corePrompt = prepared.corePrompt;
+      node.corePrompt = prepared.corePrompt;
+      node.originalPrompt = prepared.originalPrompt;
     }
-    const parameters =
-      node.kind === "video"
-        ? Object.fromEntries(
-            Object.entries({
-              seconds: node.videoSettings?.seconds,
-              resolution: node.videoSettings?.resolution,
-              aspect_ratio: node.videoSettings?.aspectRatio,
-              reference_mode: node.videoSettings?.referenceMode ?? "references",
-              seed: node.videoSettings?.seed,
-              negative_prompt:
-                node.videoSettings?.referenceMode === "keyframes"
-                  ? "extra action, separate attack, weapon separation, pose reset, character redesign, identity change, clothing change, prop change, scene change, camera-axis break, text, subtitle, watermark"
-                  : "",
-            }).filter(
-              ([, value]) =>
-                value !== undefined && value !== "" && value !== "auto",
-            ),
-          )
-        : Object.fromEntries(
-            Object.entries(node.imageSettings ?? {}).filter(
-              ([, value]) => value && value !== "auto",
-            ),
-          );
     const job = await submitGenerationJob({
       projectId: currentProjectId,
       nodeId: node.id,
