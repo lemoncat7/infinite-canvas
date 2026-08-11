@@ -4319,32 +4319,6 @@ const comicStudioView = new ComicStudioView(
   positionComicBriefPanel,
 );
 const promptAgentModelSelect = promptAgentControls.modelSelect;
-const promptAgentEffects = document.createElement("canvas"),
-  promptAgentEffectsFront = document.createElement("canvas");
-promptAgentEffects.className = "agent-capsule-effects";
-promptAgentEffectsFront.className = "agent-capsule-effects front";
-document.body.append(promptAgentEffects, promptAgentEffectsFront);
-const promptAgentRibbonBack = document.createElement("div"),
-  promptAgentRibbonFront = document.createElement("div");
-promptAgentRibbonBack.className = "agent-capsule-ribbon back";
-promptAgentRibbonFront.className = "agent-capsule-ribbon front";
-promptAgentRibbonBack.innerHTML = `<svg viewBox="0 0 720 180" preserveAspectRatio="none"><defs><linearGradient id="agent-ribbon-back" x1="0" y1="0" x2="720" y2="180" gradientUnits="userSpaceOnUse"><stop stop-color="#80ddd4" stop-opacity="0"/><stop offset=".28" stop-color="#74d8d0" stop-opacity=".5"/><stop offset=".68" stop-color="#829ee0" stop-opacity=".38"/><stop offset="1" stop-color="#829ee0" stop-opacity="0"/></linearGradient><filter id="agent-ribbon-blur"><feGaussianBlur stdDeviation="1.7"/></filter></defs><path d="M-42 118C92 12 188 151 318 73C431 5 527 150 762 46" fill="none" stroke="url(#agent-ribbon-back)" stroke-width="15" stroke-linecap="round" filter="url(#agent-ribbon-blur)"/></svg>`;
-promptAgentRibbonFront.innerHTML = `<svg viewBox="0 0 720 180" preserveAspectRatio="none"><defs><linearGradient id="agent-ribbon-front" x1="0" y1="180" x2="720" y2="0" gradientUnits="userSpaceOnUse"><stop stop-color="#819de2" stop-opacity="0"/><stop offset=".32" stop-color="#8ba9e8" stop-opacity=".36"/><stop offset=".64" stop-color="#8de7da" stop-opacity=".55"/><stop offset="1" stop-color="#8de7da" stop-opacity="0"/></linearGradient><filter id="agent-ribbon-front-blur"><feGaussianBlur stdDeviation="1.25"/></filter></defs><path d="M-35 42C123 151 226 23 356 111C484 198 575 22 755 126" fill="none" stroke="url(#agent-ribbon-front)" stroke-width="9" stroke-linecap="round" filter="url(#agent-ribbon-front-blur)"/></svg>`;
-document.body.append(promptAgentRibbonBack, promptAgentRibbonFront);
-promptAgentRibbonBack.innerHTML = `<svg viewBox="0 0 720 180" preserveAspectRatio="none"><defs><linearGradient id="agent-ribbon-surface-back" x1="0" y1="20" x2="720" y2="160" gradientUnits="userSpaceOnUse"><stop stop-color="#75ddd3" stop-opacity="0"/><stop offset=".2" stop-color="#72d9d0" stop-opacity=".48"/><stop offset=".53" stop-color="#94e7dd" stop-opacity=".34"/><stop offset=".8" stop-color="#809de0" stop-opacity=".4"/><stop offset="1" stop-color="#809de0" stop-opacity="0"/></linearGradient><filter id="agent-ribbon-surface-soft"><feGaussianBlur stdDeviation="1.1"/></filter></defs><path fill="url(#agent-ribbon-surface-back)" filter="url(#agent-ribbon-surface-soft)" d="M-45 113C73 17 181 153 315 72C439-3 548 145 765 43L765 73C557 169 447 27 322 105C188 187 72 49-45 145Z"><animate attributeName="d" dur="7.6s" repeatCount="indefinite" calcMode="spline" keyTimes="0;.34;.68;1" keySplines=".42 0 .58 1;.42 0 .58 1;.42 0 .58 1" values="M-45 113C73 17 181 153 315 72C439-3 548 145 765 43L765 73C557 169 447 27 322 105C188 187 72 49-45 145Z;M-45 126C82 34 173 133 304 59C430-12 557 158 765 55L765 91C550 177 453 38 329 91C196 164 65 65-45 153Z;M-45 102C61 8 194 165 326 82C451 3 535 129 765 35L765 63C570 155 438 17 314 116C176 197 83 39-45 134Z;M-45 113C73 17 181 153 315 72C439-3 548 145 765 43L765 73C557 169 447 27 322 105C188 187 72 49-45 145Z"/></path></svg>`;
-promptAgentRibbonFront.innerHTML = `<svg viewBox="0 0 720 180" preserveAspectRatio="none"><defs><linearGradient id="agent-ribbon-surface-front" x1="0" y1="170" x2="720" y2="10" gradientUnits="userSpaceOnUse"><stop stop-color="#829fe3" stop-opacity="0"/><stop offset=".24" stop-color="#8ca8e7" stop-opacity=".36"/><stop offset=".58" stop-color="#9be9df" stop-opacity=".5"/><stop offset=".84" stop-color="#78dcd2" stop-opacity=".42"/><stop offset="1" stop-color="#78dcd2" stop-opacity="0"/></linearGradient><filter id="agent-ribbon-front-soft"><feGaussianBlur stdDeviation=".8"/></filter></defs><path fill="url(#agent-ribbon-surface-front)" filter="url(#agent-ribbon-front-soft)" d="M-40 35C112 143 218 18 354 104C482 185 579 17 760 119L760 145C574 51 484 211 348 129C214 48 117 171-40 62Z"><animate attributeName="d" dur="9.1s" repeatCount="indefinite" calcMode="spline" keyTimes="0;.38;.72;1" keySplines=".42 0 .58 1;.42 0 .58 1;.42 0 .58 1" values="M-40 35C112 143 218 18 354 104C482 185 579 17 760 119L760 145C574 51 484 211 348 129C214 48 117 171-40 62Z;M-40 48C125 159 207 7 341 92C469 174 590 31 760 132L760 157C585 68 471 198 360 119C224 30 103 187-40 78Z;M-40 24C98 127 231 32 366 116C495 196 563 5 760 105L760 134C563 39 497 220 337 140C201 62 132 154-40 51Z;M-40 35C112 143 218 18 354 104C482 185 579 17 760 119L760 145C574 51 484 211 348 129C214 48 117 171-40 62Z"/></path></svg>`;
-promptAgentRibbonBack.innerHTML = `<svg viewBox="0 0 720 180" preserveAspectRatio="none"><defs><linearGradient id="agent-silk-back" x1="0" y1="20" x2="720" y2="130" gradientUnits="userSpaceOnUse"><stop stop-color="#72d8cf" stop-opacity="0"/><stop offset=".18" stop-color="#7cddd4" stop-opacity=".34"/><stop offset=".46" stop-color="#b5f3e9" stop-opacity=".42"/><stop offset=".72" stop-color="#91a9e7" stop-opacity=".3"/><stop offset="1" stop-color="#849fe2" stop-opacity="0"/></linearGradient><linearGradient id="agent-silk-shine" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#fff" stop-opacity=".34"/><stop offset=".45" stop-color="#fff" stop-opacity=".05"/><stop offset="1" stop-color="#557fc8" stop-opacity=".12"/></linearGradient><filter id="agent-silk-soft"><feGaussianBlur stdDeviation=".65"/></filter></defs><path fill="url(#agent-silk-back)" filter="url(#agent-silk-soft)" d="M-35 103C72 20 214 33 356 37C502 41 642 17 755 93L755 113C635 45 503 62 355 59C208 56 75 42-35 126Z"><animate attributeName="d" dur="10.5s" repeatCount="indefinite" calcMode="spline" keyTimes="0;.5;1" keySplines=".42 0 .58 1;.42 0 .58 1" values="M-35 103C72 20 214 33 356 37C502 41 642 17 755 93L755 113C635 45 503 62 355 59C208 56 75 42-35 126Z;M-35 109C78 26 205 38 353 33C508 28 635 25 755 99L755 120C628 51 511 55 358 61C203 67 81 48-35 131Z;M-35 103C72 20 214 33 356 37C502 41 642 17 755 93L755 113C635 45 503 62 355 59C208 56 75 42-35 126Z"/></path><path fill="url(#agent-silk-shine)" opacity=".42" d="M-20 104C101 31 220 42 357 45C505 48 626 30 741 96L741 101C625 41 501 56 357 53C215 50 101 40-20 114Z"/></svg>`;
-promptAgentRibbonFront.innerHTML = `<svg viewBox="0 0 720 180" preserveAspectRatio="none"><defs><linearGradient id="agent-silk-front-left" x1="0" y1="0" x2="240" y2="120" gradientUnits="userSpaceOnUse"><stop stop-color="#7edfd5" stop-opacity="0"/><stop offset=".48" stop-color="#a4eee4" stop-opacity=".58"/><stop offset="1" stop-color="#8ca9e8" stop-opacity="0"/></linearGradient><linearGradient id="agent-silk-front-right" x1="470" y1="30" x2="720" y2="150" gradientUnits="userSpaceOnUse"><stop stop-color="#8ca7e7" stop-opacity="0"/><stop offset=".48" stop-color="#9feadf" stop-opacity=".52"/><stop offset="1" stop-color="#79dcd2" stop-opacity="0"/></linearGradient><filter id="agent-silk-front-soft"><feGaussianBlur stdDeviation=".45"/></filter></defs><path fill="url(#agent-silk-front-left)" filter="url(#agent-silk-front-soft)" d="M-25 112C45 137 115 146 212 132L225 151C122 168 46 154-25 128Z"><animate attributeName="d" dur="9.8s" repeatCount="indefinite" values="M-25 112C45 137 115 146 212 132L225 151C122 168 46 154-25 128Z;M-25 116C51 142 119 140 220 127L231 148C126 163 48 158-25 132Z;M-25 112C45 137 115 146 212 132L225 151C122 168 46 154-25 128Z"/></path><path fill="url(#agent-silk-front-right)" filter="url(#agent-silk-front-soft)" d="M490 41C586 27 670 48 755 100L755 120C660 67 584 53 482 62Z"><animate attributeName="d" dur="11.2s" repeatCount="indefinite" values="M490 41C586 27 670 48 755 100L755 120C660 67 584 53 482 62Z;M476 46C579 29 665 54 755 106L755 126C654 70 575 56 470 67Z;M490 41C586 27 670 48 755 100L755 120C660 67 584 53 482 62Z"/></path></svg>`;
-const physicalAgentRibbon = (id: string, front: boolean) =>
-  `<svg viewBox="0 0 720 180" preserveAspectRatio="none"><defs><linearGradient id="${id}-fabric" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#496f78"/><stop offset=".12" stop-color="#759ca4"/><stop offset=".3" stop-color="#b9d4d2"/><stop offset=".47" stop-color="#739ca2"/><stop offset=".7" stop-color="#9bbbc0"/><stop offset=".9" stop-color="#526f82"/><stop offset="1" stop-color="#354c60"/></linearGradient><linearGradient id="${id}-fade" x1="0" y1="0" x2="720" y2="0" gradientUnits="userSpaceOnUse"><stop stop-color="#fff" stop-opacity="0"/><stop offset=".13" stop-color="#fff" stop-opacity="1"/><stop offset=".87" stop-color="#fff" stop-opacity="1"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient><mask id="${id}-end-fade"><rect width="720" height="180" fill="url(#${id}-fade)"/></mask>${front ? `<clipPath id="${id}-front"><rect x="0" y="0" width="178" height="180"/><rect x="548" y="0" width="172" height="180"/></clipPath>` : ""}</defs><g mask="url(#${id}-end-fade)" ${front ? `clip-path="url(#${id}-front)"` : ""}><path class="physical-ribbon-body" fill="url(#${id}-fabric)" d="M-42 112C74 18 190 157 326 68C450-13 557 151 762 48L762 80C564 178 455 20 333 101C195 190 82 55-42 147Z"/><path class="physical-ribbon-fold light" d="M-30 114C86 33 194 153 327 77C451 6 556 155 750 62"/><path class="physical-ribbon-fold shade" d="M-28 136C91 67 196 176 332 92C458 14 560 168 748 73"/></g></svg>`;
-promptAgentRibbonBack.innerHTML = physicalAgentRibbon(
-  "physical-agent-back",
-  false,
-);
-promptAgentRibbonFront.innerHTML = physicalAgentRibbon(
-  "physical-agent-front",
-  true,
-);
 const promptAgentBurst = document.createElement("div");
 promptAgentBurst.className = "agent-particle-burst";
 promptAgentBurst.innerHTML = Array.from({ length: 28 }, () => "<i></i>").join(
@@ -4367,164 +4341,9 @@ promptAgentBurst
 let promptAgentResult: PromptAgentResult | null = null,
   promptAgentAppliedNodeId = 0,
   promptAgentUndo: (() => void) | null = null;
-let promptAgentEffectFrame: number | null = null;
 let promptAgentRequestController: AbortController | null = null,
   promptAgentRequestVersion = 0,
   promptAgentFormTimer = 0;
-const promptAgentEffectParticles = Array.from({ length: 46 }, (_, index) => ({
-  offset: (index * 0.754877666) % 1,
-  speed: 0.026 + (index % 9) * 0.004,
-  size: 0.8 + (index % 6) * 0.32,
-  ribbon: index % 2,
-  phase: index * 1.37,
-  lag: 10 + (index % 8) * 3,
-}));
-function paintPromptAgentEffects(now: number) {
-  if (!promptAgentPanel.classList.contains("open")) {
-    promptAgentEffects.hidden = true;
-    promptAgentEffectsFront.hidden = true;
-    promptAgentEffectFrame = null;
-    return;
-  }
-  promptAgentEffects.hidden = false;
-  promptAgentEffectsFront.hidden = false;
-  const rect = promptAgentPanel.getBoundingClientRect(),
-    padX = 46,
-    padY = 42,
-    width = Math.ceil(rect.width + padX * 2),
-    height = Math.ceil(rect.height + padY * 2),
-    ratio = Math.min(2, devicePixelRatio || 1),
-    canvases = [promptAgentEffects, promptAgentEffectsFront];
-  for (const canvas of canvases) {
-    canvas.style.left = `${rect.left - padX}px`;
-    canvas.style.top = `${rect.top - padY}px`;
-    canvas.style.width = `${width}px`;
-    canvas.style.height = `${height}px`;
-    if (canvas.width !== width * ratio || canvas.height !== height * ratio) {
-      canvas.width = width * ratio;
-      canvas.height = height * ratio;
-    }
-  }
-  const contexts = canvases.map((canvas) => canvas.getContext("2d")!);
-  for (const context of contexts) {
-    context.setTransform(ratio, 0, 0, ratio, 0, 0);
-    context.clearRect(0, 0, width, height);
-  }
-  const time = now / 1000,
-    center = height / 2;
-  const ribbonY = (progress: number, ribbon: number) =>
-    center +
-    (ribbon ? 1 : -1) * (rect.height / 2 + 8) +
-    Math.sin(
-      progress * (ribbon ? 7.1 : 6.35) +
-        time * (ribbon ? 0.7 : 0.86) +
-        (ribbon ? 1.8 : 0.25),
-    ) *
-      4.8 +
-    Math.sin(progress * (ribbon ? 15.2 : 12.7) - time * 0.42 + ribbon) * 1.9;
-  const drawRibbon = (
-    context: CanvasRenderingContext2D,
-    ribbon: number,
-    start = 0,
-    end = 1,
-    alpha = 0.5,
-  ) => {
-    const thickness = ribbon ? 5.5 : 7,
-      from = 12 + start * (width - 24),
-      to = 12 + end * (width - 24),
-      gradient = context.createLinearGradient(from, 0, to, 0);
-    gradient.addColorStop(0, "rgba(95,214,207,0)");
-    gradient.addColorStop(
-      0.18,
-      ribbon ? "rgba(123,151,236,.72)" : "rgba(86,225,212,.78)",
-    );
-    gradient.addColorStop(
-      0.78,
-      ribbon ? "rgba(145,167,241,.62)" : "rgba(139,240,226,.68)",
-    );
-    gradient.addColorStop(1, "rgba(108,220,213,0)");
-    context.beginPath();
-    for (let x = from; x <= to; x += 4) {
-      const y = ribbonY(x / width, ribbon);
-      if (x === from) context.moveTo(x, y - thickness / 2);
-      else context.lineTo(x, y - thickness / 2);
-    }
-    for (let x = to; x >= from; x -= 4)
-      context.lineTo(x, ribbonY(x / width, ribbon) + thickness / 2);
-    context.closePath();
-    context.fillStyle = gradient;
-    context.globalAlpha = alpha;
-    context.shadowColor = ribbon
-      ? "rgba(116,145,235,.5)"
-      : "rgba(80,222,211,.62)";
-    context.shadowBlur = 11;
-    context.fill();
-  };
-  drawRibbon(contexts[0], 0, 0, 1, 0.46);
-  drawRibbon(contexts[0], 1, 0, 1, 0.4);
-  const frontCenter0 = (time * 0.075) % 1,
-    frontCenter1 = (0.55 + time * 0.061) % 1;
-  for (const [ribbon, frontCenter] of [
-    [0, frontCenter0],
-    [1, frontCenter1],
-  ] as const) {
-    const start = frontCenter - 0.15,
-      end = frontCenter + 0.15;
-    if (start < 0) {
-      drawRibbon(contexts[1], ribbon, start + 1, 1, 0.68);
-      drawRibbon(contexts[1], ribbon, 0, end, 0.68);
-    } else if (end > 1) {
-      drawRibbon(contexts[1], ribbon, start, 1, 0.68);
-      drawRibbon(contexts[1], ribbon, 0, end - 1, 0.68);
-    } else drawRibbon(contexts[1], ribbon, start, end, 0.68);
-  }
-  for (const particle of promptAgentEffectParticles) {
-    const life = (particle.offset + time * particle.speed) % 1,
-      progress = Math.max(0.015, life - particle.lag / width),
-      frontCenter = particle.ribbon ? frontCenter1 : frontCenter0,
-      distance = Math.min(
-        Math.abs(progress - frontCenter),
-        1 - Math.abs(progress - frontCenter),
-      ),
-      context = contexts[distance < 0.17 ? 1 : 0],
-      x = 12 + progress * (width - 24),
-      trailFade = Math.sin(life * Math.PI),
-      outward = particle.ribbon ? 1 : -1,
-      scatter = outward * (5 + Math.sin(life * 17 + particle.phase) * 4);
-    context.beginPath();
-    context.arc(
-      x,
-      ribbonY(progress, particle.ribbon) + scatter,
-      particle.size,
-      0,
-      Math.PI * 2,
-    );
-    context.fillStyle = particle.ribbon
-      ? "rgba(145,169,246,.9)"
-      : "rgba(137,244,231,.94)";
-    context.globalAlpha = trailFade * trailFade * 0.72;
-    context.shadowColor = particle.ribbon ? "#91a8f2" : "#8cf1e5";
-    context.shadowBlur = 7;
-    context.fill();
-  }
-  for (const context of contexts) context.globalAlpha = 1;
-  promptAgentEffectFrame = requestAnimationFrame(paintPromptAgentEffects);
-}
-function positionPromptAgentRibbons() {
-  const rect = promptAgentPanel.getBoundingClientRect();
-  for (const ribbon of [promptAgentRibbonBack, promptAgentRibbonFront]) {
-    ribbon.style.left = `${rect.left - 54}px`;
-    ribbon.style.top = `${rect.top - 38}px`;
-    ribbon.style.width = `${rect.width + 108}px`;
-    ribbon.style.height = `${rect.height + 76}px`;
-  }
-}
-function startPromptAgentEffects() {
-  promptAgentEffects.hidden = true;
-  promptAgentEffectsFront.hidden = true;
-  promptAgentRibbonBack.classList.remove("visible");
-  promptAgentRibbonFront.classList.remove("visible");
-}
 function clearPromptAgentResult() {
   promptAgentResult = null;
   promptAgentUndo = null;
@@ -4549,13 +4368,6 @@ function closePromptAgent() {
   promptAgentSelecting = false;
   promptAgentContextSelection.clear();
   clearPromptAgentResult();
-  if (promptAgentEffectFrame !== null)
-    cancelAnimationFrame(promptAgentEffectFrame);
-  promptAgentEffectFrame = null;
-  promptAgentEffects.hidden = true;
-  promptAgentEffectsFront.hidden = true;
-  promptAgentRibbonBack.classList.remove("visible");
-  promptAgentRibbonFront.classList.remove("visible");
   draw();
 }
 function cancelPromptAgentRequest() {
@@ -4779,7 +4591,6 @@ function formPromptAgent() {
     promptAgentPanel.classList.add("open");
     promptAgentSelecting = true;
     promptAgentPanel.querySelector("textarea")?.focus();
-    startPromptAgentEffects();
     draw();
   }, 40);
 }
@@ -5963,7 +5774,6 @@ window.addEventListener(
 window.addEventListener("resize", () => {
   if (promptAgentPanel.classList.contains("open")) {
     positionPromptAgentCapsule();
-    positionPromptAgentRibbons();
   }
 });
 document.querySelector("#dock-clear")!.addEventListener("click", async () => {
