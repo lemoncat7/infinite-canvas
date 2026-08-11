@@ -57,14 +57,10 @@ import {
 } from "../nodes/video-node";
 import { inferVoiceConfig } from "../nodes/voice-node";
 import { bindNodeConfigPanel } from "../ui/node-editor";
-import { AssetPreviewController } from "../ui/asset-preview";
-import { AssetLibraryFeature } from "../ui/asset-library-feature";
+import { WorkspaceAssetsFeature } from "../ui/workspace-assets-feature";
 import { CanvasToolbarController } from "../ui/canvas-toolbar-controller";
 import { NodeInfoController } from "../ui/node-info-controller";
 import { WorkspaceOverlayController } from "../ui/workspace-overlay-controller";
-import { SquarePanelView } from "../ui/square-panel";
-import { WorkspacePanelController } from "../ui/toolbar";
-import { WorkspaceNavigationCoordinator } from "../ui/workspace-navigation-coordinator";
 import { WorkspaceKeyboardController } from "../ui/workspace-keyboard-controller";
 import { TaskMonitorController } from "../ui/task-monitor-controller";
 import { TopbarMenuCoordinator } from "../ui/topbar-menu-coordinator";
@@ -76,7 +72,6 @@ import { ToastController, type ToastType } from "../ui/toast-controller";
 import {
   createProjectDialog,
 } from "../ui/dialogs/project-dialog";
-import { ProjectController } from "../ui/project-controller";
 import type { AuthUser } from "../ui/user-menu-controller";
 import { NotificationFeature } from "../ui/notification-feature";
 import { AccountToolsFeature } from "../ui/account-tools-feature";
@@ -84,7 +79,6 @@ import { PromptAgentFeature } from "../ui/prompt-agent-feature";
 import { ComicStudioFeature } from "../ui/comic-studio-feature";
 import { CanvasNodeViewFeature } from "../nodes/canvas-node-view-feature";
 import { createDefaultGenerationCapabilities } from "./state";
-import { ProjectSwitchController } from "./project-switch-controller";
 import { ApplicationBootstrapController } from "./application-bootstrap-controller";
 import { AuthWorkspaceFeature } from "./auth-workspace-feature";
 import {
@@ -1288,143 +1282,54 @@ new CanvasClearController({
   toast: (message, tone, detail) => showToast(message, tone, detail),
 });
 
-const panelBackdrop = document.querySelector<HTMLElement>("#panel-backdrop")!;
-const workspacePanels =
-  document.querySelectorAll<HTMLElement>(".workspace-panel");
-const workspaceBrand = document.querySelector<HTMLElement>(".topbar .brand")!,
-  mobileNavToggle =
-    document.querySelector<HTMLButtonElement>("#mobile-nav-toggle")!;
-let assetLibraryFeature: AssetLibraryFeature;
-const workspacePanelController = new WorkspacePanelController(
-  workspacePanels,
-  panelBackdrop,
-  workspaceBrand,
-  mobileNavToggle,
-  () => {
-    assetLibraryFeature?.setImageTarget(null);
-  },
-);
-function closeMobileWorkspaceMenu() {
-  workspacePanelController.closeMobileMenu();
-}
-topbarMenus.register("workspace", closeMobileWorkspaceMenu);
-function closeWorkspacePanels() {
-  workspacePanelController.close();
-}
-function openWorkspacePanel(id: string, trigger: string) {
-  workspacePanelController.open(
-    document.querySelector<HTMLElement>(id)!,
-    document.querySelector<HTMLElement>(trigger)!,
-  );
-}
-new WorkspaceNavigationCoordinator({
-  panels: workspacePanelController,
-  brand: workspaceBrand,
-  hasAssets: () => assetLibraryFeature.hasAssets,
-  loadAssets: () => loadAssets(false),
-  renderAssets,
-  loadProjects: () => { void projectController.load(); },
-  loadSquare: () => { void loadSquare(); },
-  toggleTopbar: (opening) => closeTopbarMenus(opening ? "workspace" : undefined),
-}).bind();
-const assetPreviewController = new AssetPreviewController({
-  modal: document.querySelector<HTMLElement>("#asset-preview")!,
-  image: document.querySelector<HTMLImageElement>("#preview-image")!,
-  video: document.querySelector<HTMLVideoElement>("#preview-video")!,
-  name: document.querySelector<HTMLElement>("#preview-name")!,
-  closeButton: document.querySelector<HTMLElement>("#close-preview")!,
-});
-const ASSET_PAGE_SIZE = 36;
-assetLibraryFeature = new AssetLibraryFeature({
-  nodes,
-  getProjectId: () => currentProjectId,
-  center: () => world({ x: innerWidth / 2, y: innerHeight / 2 }),
-  addMedia: addMediaNode,
-  preview: openAssetPreview,
-  closePanels: closeWorkspacePanels,
-  openPanel: () => openWorkspacePanel("#assets-panel", "#open-assets"),
-  invalidateShowcase: () => authWorkspace.invalidateShowcase(),
-  deleteCachedImage: (url) => { imageCache.delete(url); },
-  selectNode: (id) => { selection.selectedId = id; },
-  save: scheduleSave,
-  updateEditor,
-  draw,
-  confirmDelete: async (count) => Boolean(await askProjectDialog({
-    title: "删除所选资产？",
-    description: `将永久删除所选的 ${count} 项资产，此操作无法撤销。`,
-    confirm: "确认删除",
-    danger: true,
-  })),
-  toast: (message, tone, detail) => showToast(message, tone, detail),
-});
-function openAssetUploadAt(position: Point | null = null) {
-  assetLibraryFeature.openUploadAt(position);
-}
-function beginImageNodeUpload(nodeId: number) {
-  assetLibraryFeature.beginNodeUpload(nodeId);
-}
-async function beginImageNodeLibrary(nodeId: number) {
-  await assetLibraryFeature.beginNodeLibrary(nodeId);
-}
 const projectDialog = document.querySelector<HTMLElement>("#project-dialog")!;
 const askProjectDialog = createProjectDialog(projectDialog);
-const projectSwitchController = new ProjectSwitchController({
-  currentProjectId: () => currentProjectId,
-  setCurrentProjectId: (id) => { currentProjectId = id; },
-  loadedProjectId: () => canvasSaveCoordinator.loadedProjectId,
-  save: saveCanvas,
+const workspaceAssets = new WorkspaceAssetsFeature({
+  nodes,
+  getProjectId: () => currentProjectId,
+  setProjectId: (id) => { currentProjectId = id; },
+  getLoadedProjectId: () => canvasSaveCoordinator.loadedProjectId,
+  center: () => world({ x: innerWidth / 2, y: innerHeight / 2 }),
+  addMedia: addMediaNode,
+  selectNode: (id) => { selection.selectedId = id; },
+  saveCanvas,
+  scheduleSave,
   stopSave: () => canvasSaveCoordinator.stopAndReset(),
   resetNodeLease: () => canvasNodeIds.reset(),
+  loadCanvas: () => loadCanvas(),
   closeComic: () => comicStudioFeature.close(),
   resetComic: () => comicStudioFeature.reset(true),
   unlinkComicLabel: () => comicStudioFeature.unlinkLabel(),
-  loadCanvas: () => loadCanvas(),
-  loadAssets: () => loadAssets(),
-  closePanels: closeWorkspacePanels,
-});
-const projectController = new ProjectController({
-  list: document.querySelector<HTMLElement>("#project-list")!,
-  count: document.querySelector<HTMLElement>("#project-count")!,
-  search: document.querySelector<HTMLInputElement>("#project-search")!,
-  sort: document.querySelector<HTMLSelectElement>("#project-sort")!,
-  newButton: document.querySelector<HTMLElement>("#new-project")!,
+  invalidateShowcase: () => authWorkspace.invalidateShowcase(),
+  deleteCachedImage: (url) => { imageCache.delete(url); },
+  updateEditor,
+  draw,
+  closeTopbarMenus: (opening) => closeTopbarMenus(opening ? "workspace" : undefined),
+  registerWorkspaceMenu: (close) => topbarMenus.register("workspace", close),
   ask: askProjectDialog,
-  getCurrentProjectId: () => currentProjectId,
-  switchProject,
-  deleteCurrentProject: (nextProjectId) =>
-    projectSwitchController.selectAfterDelete(nextProjectId),
-  toast: (message, type, detail) => showToast(message, type, detail),
+  toast: (message, tone, detail) => showToast(message, tone, detail),
 });
-async function switchProject(projectId: string) {
-  await projectSwitchController.switch(projectId);
+function openAssetUploadAt(position: Point | null = null) {
+  workspaceAssets.openUploadAt(position);
+}
+function beginImageNodeUpload(nodeId: number) {
+  workspaceAssets.beginNodeUpload(nodeId);
+}
+async function beginImageNodeLibrary(nodeId: number) {
+  await workspaceAssets.beginNodeLibrary(nodeId);
 }
 async function loadAssets(render = true) {
-  await assetLibraryFeature.load(render);
+  await workspaceAssets.loadAssets(render);
 }
 function renderAssets() {
-  assetLibraryFeature.render();
+  workspaceAssets.renderAssets();
 }
-const squareGrid = document.querySelector<HTMLElement>("#square-grid")!,
-  squareSearch = document.querySelector<HTMLInputElement>("#square-search")!;
-const squarePanelView = new SquarePanelView({
-  grid: squareGrid,
-  count: document.querySelector<HTMLElement>("#square-count")!,
-  search: squareSearch,
-  pageSize: ASSET_PAGE_SIZE,
-  onOpen: (asset, kind) => openAssetPreview(asset.url, asset.name, kind),
-});
-async function loadSquare() {
-  await squarePanelView.load();
-}
-document
-  .querySelector("#square-refresh")!
-  .addEventListener("click", () => void loadSquare());
 function openAssetPreview(
   url: string,
   name: string,
   kind: "image" | "video" = "image",
 ) {
-  assetPreviewController.open(url, name, kind);
+  workspaceAssets.openPreview(url, name, kind);
 }
 async function downloadNodeImage(node: FlowNode) {
   try {
@@ -1446,7 +1351,7 @@ new WorkspaceOverlayController({
   quickMenu: quickNodeMenu,
   closeQuickMenu: closeQuickNodeMenu,
   closeAssetContextIfOutside: (target) =>
-    assetLibraryFeature.closeContextIfOutside(target),
+    workspaceAssets.closeContextIfOutside(target),
 }).bind();
 new WorkspaceKeyboardController({
   closeQuickMenu: () => {
@@ -1460,8 +1365,8 @@ new WorkspaceKeyboardController({
     return true;
   },
   closeAssetPreview: () => {
-    if (!assetPreviewController.isOpen) return false;
-    assetPreviewController.close();
+    if (!workspaceAssets.isPreviewOpen) return false;
+    workspaceAssets.closePreview();
     return true;
   },
   undo: () => { void undoCanvas(); },
