@@ -50,6 +50,7 @@ import { makeNodePublicId } from "../nodes/node-service";
 import { NodeLifecycleController } from "../nodes/node-lifecycle-controller";
 import { ImageAssetController } from "../nodes/image-asset-controller";
 import { GenerationGraph } from "../nodes/generation-graph";
+import { ConnectionRules } from "../nodes/connection-rules";
 import { decodePromptClipboardText, normalizePromptText } from "../nodes/prompt-text";
 import { downloadNodeImage as downloadNodeImageFile } from "../nodes/node-download";
 import { PromptNodeController } from "../nodes/prompt-node";
@@ -990,6 +991,11 @@ const world = (point: Point) =>
 const portWorld = nodePortPosition;
 const controlPoint = connectionControlPoint;
 const generationGraph = new GenerationGraph(nodes, links);
+const connectionRules = new ConnectionRules({
+  nodes,
+  links,
+  notify: (message) => showToast(message, "warning"),
+});
 
 function nodeIsActivelyGenerating(node: FlowNode | undefined) {
   return generationGraph.isActive(node);
@@ -1050,42 +1056,7 @@ function directedLink(
   secondId: number,
   secondSide: PortSide,
 ): FlowLink | null {
-  if (firstId === secondId || firstSide !== "right" || secondSide !== "left")
-    return null;
-  const source = nodes.find((node) => node.id === firstId),
-    target = nodes.find((node) => node.id === secondId);
-  if (!source || !target) return null;
-  if (
-    target.kind === "voice" &&
-    (source.kind !== "image" || !/\bBase\b/i.test(source.title))
-  ) {
-    showToast("语音配置只能关联角色 Base 卡片", "warning");
-    return null;
-  }
-  if (target.kind === "voice" && links.some((link) => link.to === target.id)) {
-    showToast("一个固定音色只能关联一个 Base 角色", "warning");
-    return null;
-  }
-  if (target.kind === "tts" && source.kind !== "voice") {
-    showToast("TTS 文本卡片只能接收语音配置", "warning");
-    return null;
-  }
-  if (
-    target.kind === "tts" &&
-    links.some(
-      (link) =>
-        link.to === target.id &&
-        nodes.find((node) => node.id === link.from)?.kind === "voice",
-    )
-  ) {
-    showToast("一张 TTS 卡片只能连接一个固定音色", "warning");
-    return null;
-  }
-  if (target.kind === "audio") {
-    showToast("音频结果由 TTS 生成，无需手动连接", "warning");
-    return null;
-  }
-  return { from: firstId, to: secondId, fromSide: "right", toSide: "left" };
+  return connectionRules.create(firstId, firstSide, secondId, secondSide);
 }
 function updateConnectionPointer(sx: number, sy: number) {
   if (!connection.active) return;
