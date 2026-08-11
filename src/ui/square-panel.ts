@@ -1,4 +1,4 @@
-import type { SquareAsset } from "../services/assets";
+import { fetchShowcaseAssets, type SquareAsset } from "../services/assets";
 
 type SquarePanelOptions = {
   grid: HTMLElement;
@@ -32,6 +32,17 @@ export class SquarePanelView {
   showLoadError() {
     this.options.grid.innerHTML =
       '<div class="asset-empty"><b>◇</b><span>作品暂时无法加载</span><small>稍后再试</small></div>';
+  }
+
+  async load() {
+    this.setLoading(true);
+    try {
+      this.setAssets(await fetchShowcaseAssets());
+    } catch {
+      this.showLoadError();
+    } finally {
+      this.setLoading(false);
+    }
   }
 
   private render() {

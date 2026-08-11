@@ -65,10 +65,7 @@ import { GenerationCapabilitiesController } from "../services/generation-capabil
 import {
   type GenerationJob,
 } from "../services/generation";
-import {
-  fetchShowcaseAssets,
-  type LibraryAsset,
-} from "../services/assets";
+import { type LibraryAsset } from "../services/assets";
 import { ComicSessionController } from "../services/comic-session";
 import { ComicSessionState } from "../services/comic-session-state";
 import {
@@ -2825,14 +2822,7 @@ const squarePanelView = new SquarePanelView({
   onOpen: (asset, kind) => openAssetPreview(asset.url, asset.name, kind),
 });
 async function loadSquare() {
-  squarePanelView.setLoading(true);
-  try {
-    squarePanelView.setAssets(await fetchShowcaseAssets());
-  } catch {
-    squarePanelView.showLoadError();
-  } finally {
-    squarePanelView.setLoading(false);
-  }
+  await squarePanelView.load();
 }
 document
   .querySelector("#square-refresh")!
