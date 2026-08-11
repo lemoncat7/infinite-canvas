@@ -6973,10 +6973,6 @@ function openWorkspacePanel(id: string, trigger: string) {
     document.querySelector<HTMLElement>(trigger)!,
   );
 }
-document.querySelector("#open-projects")!.addEventListener("click", () => {
-  openWorkspacePanel("#projects-panel", "#open-projects");
-  void loadProjects();
-});
 function renderAssetsAfterPanelOpen() {
   requestAnimationFrame(() =>
     requestAnimationFrame(() => {
@@ -6985,35 +6981,25 @@ function renderAssetsAfterPanelOpen() {
     }),
   );
 }
-document.querySelector("#open-assets")!.addEventListener("click", () => {
-  openWorkspacePanel("#assets-panel", "#open-assets");
-  if (!libraryAssets.length)
-    void loadAssets(false).then(renderAssetsAfterPanelOpen);
-  else renderAssetsAfterPanelOpen();
+workspacePanelController.bindNavigation({
+  projectsButton: document.querySelector<HTMLElement>("#open-projects")!,
+  projectsPanel: document.querySelector<HTMLElement>("#projects-panel")!,
+  assetsButton: document.querySelector<HTMLElement>("#open-assets")!,
+  assetsPanel: document.querySelector<HTMLElement>("#assets-panel")!,
+  squareButton: document.querySelector<HTMLElement>("#open-square")!,
+  squarePanel: document.querySelector<HTMLElement>("#square-panel")!,
+  mainNav: workspaceBrand.querySelector<HTMLElement>(".main-nav")!,
+  closeButtons: document.querySelectorAll<HTMLElement>(".panel-close"),
+  onProjectsOpen: () => void loadProjects(),
+  onAssetsOpen: () => {
+    if (!libraryAssets.length)
+      void loadAssets(false).then(renderAssetsAfterPanelOpen);
+    else renderAssetsAfterPanelOpen();
+  },
+  onSquareOpen: () => void loadSquare(),
+  onMobileToggle: (opening) =>
+    closeTopbarMenus(opening ? "workspace" : undefined),
 });
-document.querySelector("#open-square")!.addEventListener("click", () => {
-  openWorkspacePanel("#square-panel", "#open-square");
-  void loadSquare();
-});
-mobileNavToggle.addEventListener("click", (event) => {
-  if (innerWidth > 780) return;
-  event.stopPropagation();
-  const opening = !workspaceBrand.classList.contains("mobile-menu-open");
-  closeTopbarMenus(opening ? "workspace" : undefined);
-  if (opening) workspaceBrand.classList.add("mobile-menu-open");
-  mobileNavToggle.setAttribute("aria-expanded", String(opening));
-});
-workspaceBrand
-  .querySelector(".main-nav")!
-  .addEventListener("click", (event) => event.stopPropagation());
-document.addEventListener("click", closeMobileWorkspaceMenu);
-window.addEventListener("resize", () => {
-  if (innerWidth > 780) closeMobileWorkspaceMenu();
-});
-document
-  .querySelectorAll(".panel-close")
-  .forEach((button) => button.addEventListener("click", closeWorkspacePanels));
-panelBackdrop.addEventListener("click", closeWorkspacePanels);
 const assetUpload = document.querySelector<HTMLInputElement>("#asset-upload")!,
   assetGrid = document.querySelector<HTMLElement>("#asset-grid")!,
   assetCount = document.querySelector<HTMLElement>("#asset-count")!;
