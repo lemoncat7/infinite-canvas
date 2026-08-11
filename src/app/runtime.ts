@@ -13,6 +13,7 @@ import { CanvasSelectionController } from "../canvas/selection-controller";
 import { CanvasConnectionController } from "../canvas/connection-controller";
 import { CanvasInteractionController } from "../canvas/interaction-controller";
 import { DomPointerLifecycle } from "../canvas/dom-pointer-lifecycle";
+import { MarqueeController } from "../canvas/marquee-controller";
 import { MediaLruCache } from "../canvas/media-cache";
 import type {
   FlowLink,
@@ -268,11 +269,6 @@ const selection = new CanvasSelectionController();
 let videoReferenceSwapSelection: { videoId: number; sourceId: number } | null =
   null;
 const activeVoicePreviews = new Map<number, HTMLAudioElement>();
-let marqueeAutoPanFrame = 0,
-  marqueeContextSuppressedUntil = 0,
-  marqueeHoldTimer: number | undefined,
-  marqueeHoldPointer: { id: number; start: Point; pointerType: string } | null =
-    null;
 const promptNodeEditor = new PromptNodeController();
 let nextId = 1;
 let canvasNodeIdBlockEnd = 0;
@@ -1123,6 +1119,23 @@ const domPointer = new DomPointerLifecycle({
     draw();
   },
   finishConnection: finishDomConnection,
+});
+const marqueeController = new MarqueeController({
+  canvas,
+  nodeLayer,
+  box: marqueeBox,
+  nodes,
+  camera,
+  interaction,
+  selection,
+  screen: (point) => worldToScreen(point, camera, { width: innerWidth, height: innerHeight }),
+  world: (point) => screenToWorld(point, camera, { width: innerWidth, height: innerHeight }),
+  updateEditor,
+  refreshSelection: refreshBatchSelection,
+  clearSelection: clearBatchSelection,
+  refreshHint: refreshCanvasModeHint,
+  draw,
+  notice: showCanvasModeNotice,
 });
 let saveTimer: number | undefined;
 let drawFrame: number | null = null;
@@ -5449,70 +5462,6 @@ function toggleBatchNode(id: number) {
   updateEditor();
   refreshBatchSelection();
 }
-function updateMarqueeSelection() {
-  if (!interaction.marquee?.active) return;
-  const origin = screen(interaction.marquee.worldStart),
-    left = Math.min(origin.x, interaction.marquee.current.x),
-    top = Math.min(origin.y, interaction.marquee.current.y),
-    right = Math.max(origin.x, interaction.marquee.current.x),
-    bottom = Math.max(origin.y, interaction.marquee.current.y),
-    currentWorld = world(interaction.marquee.current),
-    worldLeft = Math.min(interaction.marquee.worldStart.x, currentWorld.x),
-    worldTop = Math.min(interaction.marquee.worldStart.y, currentWorld.y),
-    worldRight = Math.max(interaction.marquee.worldStart.x, currentWorld.x),
-    worldBottom = Math.max(interaction.marquee.worldStart.y, currentWorld.y);
-  Object.assign(marqueeBox.style, {
-    left: `${left}px`,
-    top: `${top}px`,
-    width: `${right - left}px`,
-    height: `${bottom - top}px`,
-  });
-  selection.batchIds.clear();
-  interaction.marquee.baseSelection.forEach((id) => selection.batchIds.add(id));
-  nodes.forEach((node) => {
-    if (
-      node.x < worldRight &&
-      node.x + node.width > worldLeft &&
-      node.y < worldBottom &&
-      node.y + node.height > worldTop
-    )
-      selection.batchIds.add(node.id);
-  });
-  draw();
-}
-function stopMarqueeAutoPan() {
-  if (marqueeAutoPanFrame) cancelAnimationFrame(marqueeAutoPanFrame);
-  marqueeAutoPanFrame = 0;
-}
-function startMarqueeAutoPan() {
-  if (marqueeAutoPanFrame) return;
-  let previous = performance.now();
-  const tick = (now: number) => {
-    if (!interaction.marquee?.active) {
-      marqueeAutoPanFrame = 0;
-      return;
-    }
-    const elapsed = Math.min(2, (now - previous) / 16.67),
-      edge = 82,
-      maxSpeed = 13,
-      axisSpeed = (position: number, limit: number) =>
-        position < edge
-          ? -Math.min(1, 1 - position / edge) * maxSpeed
-          : position > limit - edge
-            ? Math.min(1, 1 - (limit - position) / edge) * maxSpeed
-            : 0,
-      vx = axisSpeed(interaction.marquee.current.x, innerWidth),
-      vy = axisSpeed(interaction.marquee.current.y, innerHeight);
-    if (vx || vy) {
-      camera.x -= vx * elapsed;
-      camera.y -= vy * elapsed;
-      updateMarqueeSelection();
-    }
-    previous = now;
-    marqueeAutoPanFrame = requestAnimationFrame(tick);
-  };
-  marqueeAutoPanFrame = requestAnimationFrame(tick);
-}
 function refreshCanvasModeHint() {
   const hint = document.querySelector<HTMLElement>(".dock-create-hint")!,
     title = hint.querySelector<HTMLElement>("strong")!,
@@ -5526,37 +5475,9 @@ function refreshCanvasModeHint() {
     detail.textContent = "长按空白框选 · 双击空白退出";
   }
 }
-function clearMarqueeHold() {
-  window.clearTimeout(marqueeHoldTimer);
-  marqueeHoldTimer = undefined;
-  marqueeHoldPointer = null;
-}
-function enterMultiSelectMode() {
-  selection.enterMultiSelect();
-  interaction.marqueeMode = true;
-  document.body.classList.add("marquee-mode");
-  refreshCanvasModeHint();
-  showCanvasModeNotice(
-    "已进入多选",
-    "点按卡片选择 · 长按空白框选 · 普通滑动移动画布",
-  );
-}
-function exitMultiSelectMode() {
-  clearMarqueeHold();
-  stopMarqueeAutoPan();
-  selection.exitMultiSelect();
-  interaction.marqueeMode = false;
-  interaction.clearMarquee();
-  document.body.classList.remove("marquee-mode");
-  marqueeBox.classList.remove("open");
-  clearBatchSelection();
-  refreshCanvasModeHint();
-  showCanvasModeNotice("已退出多选", "已恢复画布移动与节点操作");
-}
-function resetMarqueeRightGesture() {
-  clearMarqueeHold();
-  marqueeContextSuppressedUntil = 0;
-}
+function enterMultiSelectMode() { marqueeController.enter(); }
+function exitMultiSelectMode() { marqueeController.exit(); }
+function resetMarqueeRightGesture() { marqueeController.resetRightGesture(); }
 function cascadeSelectionIds(seed: Set<number>) {
   const result = new Set(seed);
   let changed = true;
@@ -5647,156 +5568,6 @@ batchToolbar
 batchToolbar
   .querySelector("[data-batch-clear]")!
   .addEventListener("click", exitMultiSelectMode);
-
-document.addEventListener(
-  "pointerdown",
-  (event) => {
-    const target = event.target as HTMLElement | null,
-      onCanvasSurface = target === canvas || target === nodeLayer;
-    if (event.button !== 0 || !onCanvasSurface) return;
-    const start = { x: event.clientX, y: event.clientY };
-    if (event.ctrlKey) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      clearMarqueeHold();
-      selection.multiSelectMode = true;
-      document.body.classList.add("marquee-mode");
-      pointer.down = false;
-      pointer.draggingNode = null;
-      canvas.classList.remove("dragging");
-      interaction.beginMarquee({
-        pointerId: event.pointerId,
-        start,
-        worldStart: world(start),
-        current: { ...start },
-        active: true,
-        baseSelection: new Set(selection.batchIds),
-      }, true);
-      selection.selectedId = 0;
-      updateEditor();
-      marqueeBox.classList.add("open");
-      updateMarqueeSelection();
-      startMarqueeAutoPan();
-      return;
-    }
-    if (!selection.multiSelectMode) return;
-    clearMarqueeHold();
-    marqueeHoldPointer = {
-      id: event.pointerId,
-      start,
-      pointerType: event.pointerType,
-    };
-    marqueeHoldTimer = window.setTimeout(() => {
-      if (
-        !marqueeHoldPointer ||
-        marqueeHoldPointer.id !== event.pointerId ||
-        !selection.multiSelectMode
-      )
-        return;
-      const touch = marqueeHoldPointer.pointerType === "touch";
-      pointer.down = false;
-      pointer.draggingNode = null;
-      canvas.classList.remove("dragging");
-      interaction.beginMarquee({
-        pointerId: event.pointerId,
-        start,
-        worldStart: world(start),
-        current: { ...start },
-        active: true,
-        baseSelection: new Set(selection.batchIds),
-      });
-      selection.selectedId = 0;
-      updateEditor();
-      marqueeBox.classList.add("open");
-      updateMarqueeSelection();
-      startMarqueeAutoPan();
-      if (touch) {
-        if (navigator.vibrate) navigator.vibrate(18);
-        showCanvasModeNotice(
-          "框选已开启",
-          "保持按住并移动，可继续扩大选择范围",
-        );
-      }
-      clearMarqueeHold();
-    }, 360);
-  },
-  true,
-);
-document.addEventListener(
-  "pointermove",
-  (event) => {
-    if (
-      marqueeHoldPointer?.id === event.pointerId &&
-      Math.hypot(
-        event.clientX - marqueeHoldPointer.start.x,
-        event.clientY - marqueeHoldPointer.start.y,
-      ) > 8
-    )
-      clearMarqueeHold();
-    if (!interaction.marquee || event.pointerId !== interaction.marquee.pointerId) return;
-    interaction.marquee.current = { x: event.clientX, y: event.clientY };
-    if (!interaction.marquee.active) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    updateMarqueeSelection();
-  },
-  true,
-);
-document.addEventListener(
-  "pointerup",
-  (event) => {
-    if (marqueeHoldPointer?.id === event.pointerId) clearMarqueeHold();
-    if (!interaction.marquee || event.pointerId !== interaction.marquee.pointerId) return;
-    const active = interaction.marquee.active,
-      wasQuickMarquee = interaction.quickMarqueeMode;
-    stopMarqueeAutoPan();
-    interaction.clearMarquee();
-    marqueeBox.classList.remove("open");
-    if (wasQuickMarquee) {
-      refreshCanvasModeHint();
-    }
-    if (active) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      marqueeContextSuppressedUntil = performance.now() + 650;
-      selection.selectedId = 0;
-      updateEditor();
-      refreshBatchSelection();
-    }
-  },
-  true,
-);
-document.addEventListener(
-  "pointercancel",
-  (event) => {
-    if (marqueeHoldPointer?.id === event.pointerId) clearMarqueeHold();
-    if (!interaction.marquee || event.pointerId !== interaction.marquee.pointerId) return;
-    stopMarqueeAutoPan();
-    const wasQuickMarquee = interaction.quickMarqueeMode;
-    interaction.clearMarquee();
-    marqueeBox.classList.remove("open");
-    if (wasQuickMarquee) {
-      selection.multiSelectMode = false;
-      interaction.marqueeMode = false;
-      document.body.classList.remove("marquee-mode");
-      refreshCanvasModeHint();
-    }
-  },
-  true,
-);
-document.addEventListener(
-  "contextmenu",
-  (event) => {
-    if (!selection.multiSelectMode && performance.now() >= marqueeContextSuppressedUntil)
-      return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-  },
-  true,
-);
-window.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && selection.multiSelectMode) exitMultiSelectMode();
-});
 
 canvas.addEventListener("pointerdown", (e) => {
   if (e.button !== 0) return;
@@ -6109,7 +5880,7 @@ canvas.addEventListener("pointerleave", () => {
 });
 canvas.addEventListener("contextmenu", (event) => {
   event.preventDefault();
-  if (performance.now() < marqueeContextSuppressedUntil) return;
+  if (marqueeController.isContextSuppressed()) return;
   const index = hitLink(event.clientX, event.clientY);
   if (index < 0) return;
   if (canvasHasActiveGeneration()) {
