@@ -38,16 +38,13 @@ import {
 } from "../nodes/video-node";
 import { inferVoiceConfig } from "../nodes/voice-node";
 import { bindNodeConfigPanel } from "../ui/node-editor";
-import { WorkspaceAssetsFeature } from "../ui/workspace-assets-feature";
+import { WorkspaceAssetsRuntimeFeature } from "../ui/workspace-assets-runtime-feature";
 import { CanvasTaskFeature } from "../ui/canvas-task-feature";
 import { TopbarMenuCoordinator } from "../ui/topbar-menu-coordinator";
 import { CanvasControlsFeature } from "../ui/canvas-controls-feature";
 import type { CanvasGuideMessage } from "../ui/canvas-guide-controller";
 import type { ToastType } from "../ui/toast-controller";
 import { CanvasFeedbackFeature } from "../ui/canvas-feedback-feature";
-import {
-  createProjectDialog,
-} from "../ui/dialogs/project-dialog";
 import type { AuthUser } from "../ui/user-menu-controller";
 import { CanvasCreationSuiteFeature } from "../ui/canvas-creation-suite-feature";
 import { CanvasNodeViewFeature } from "../nodes/canvas-node-view-feature";
@@ -68,6 +65,7 @@ let generationCapabilities: GenerationCapabilities =
 let generationRuntime: CanvasGenerationRuntimeFeature;
 let nodeEditorFeature: CanvasNodeEditorFeature;
 let nodeLifecycleFeature: CanvasNodeLifecycleFeature;
+let assetRuntime: WorkspaceAssetsRuntimeFeature;
 const canvas = document.querySelector<HTMLElement>("#canvas")!;
 const nodeViewport = document.querySelector<HTMLElement>("#node-viewport")!;
 const nodeLayer = document.querySelector<HTMLElement>("#node-layer")!;
@@ -145,7 +143,7 @@ const canvasTasks = new CanvasTaskFeature<AuthUser>({
     camera.y = -(node.y + node.height / 2) * camera.zoom;
   },
   runWorkflow: () => generationRuntime.run(),
-  ask: async (options) => (await askProjectDialog(options)) === true,
+  ask: async (options) => (await assetRuntime.ask(options)) === true,
   save: scheduleSave,
   updateEditor,
   draw,
@@ -331,7 +329,7 @@ const nodeViews = new CanvasNodeViewFeature({
   generate,
   downloadImage: downloadNodeImage,
   deleteNode: () => { void deleteSelectedNode(); },
-  confirmClearImage: async () => Boolean(await askProjectDialog({
+  confirmClearImage: async () => Boolean(await assetRuntime.ask({
     title: "清除当前卡片的图片？",
     description: "资产库中的原图不会删除。原提示词、当前描述、模型、图像设置和参考连线都会保留。",
     confirm: "清除图片",
@@ -574,7 +572,7 @@ nodeLifecycleFeature = new CanvasNodeLifecycleFeature({
   save: scheduleSave,
   draw,
   cascadeIds: cascadeSelectionIds,
-  confirmDelete: async (input) => Boolean(await askProjectDialog(input)),
+  confirmDelete: async (input) => Boolean(await assetRuntime.ask(input)),
   notify: (message, tone) => showToast(message, tone),
   guide: showCanvasGuide,
   hideGuide: hideCanvasGuide,
@@ -884,9 +882,7 @@ creationSuite = new CanvasCreationSuiteFeature({
     toast: (message, tone, detail) => showToast(message, tone, detail),
   },
 });
-const projectDialog = document.querySelector<HTMLElement>("#project-dialog")!;
-const askProjectDialog = createProjectDialog(projectDialog);
-const workspaceAssets = new WorkspaceAssetsFeature({
+assetRuntime = new WorkspaceAssetsRuntimeFeature({
   nodes,
   getProjectId: () => currentProjectId,
   setProjectId: (id) => { currentProjectId = id; },
@@ -908,33 +904,32 @@ const workspaceAssets = new WorkspaceAssetsFeature({
   draw,
   closeTopbarMenus: (opening) => closeTopbarMenus(opening ? "workspace" : undefined),
   registerWorkspaceMenu: (close) => topbarMenus.register("workspace", close),
-  ask: askProjectDialog,
   toast: (message, tone, detail) => showToast(message, tone, detail),
 });
 function openAssetUploadAt(position: Point | null = null) {
-  workspaceAssets.openUploadAt(position);
+  assetRuntime.openUploadAt(position);
 }
 function beginImageNodeUpload(nodeId: number) {
-  workspaceAssets.beginNodeUpload(nodeId);
+  assetRuntime.beginNodeUpload(nodeId);
 }
 async function beginImageNodeLibrary(nodeId: number) {
-  await workspaceAssets.beginNodeLibrary(nodeId);
+  await assetRuntime.beginNodeLibrary(nodeId);
 }
 async function loadAssets(render = true) {
-  await workspaceAssets.loadAssets(render);
+  await assetRuntime.load(render);
 }
 function renderAssets() {
-  workspaceAssets.renderAssets();
+  assetRuntime.render();
 }
 function openAssetPreview(
   url: string,
   name: string,
   kind: "image" | "video" = "image",
 ) {
-  workspaceAssets.openPreview(url, name, kind);
+  assetRuntime.openPreview(url, name, kind);
 }
 async function downloadNodeImage(node: FlowNode) {
-  await workspaceAssets.downloadNodeImage(node);
+  await assetRuntime.downloadNodeImage(node);
 }
 function escapeHtml(value: string) {
   const element = document.createElement("span");
@@ -974,7 +969,7 @@ const workspaceRuntime = new WorkspaceRuntimeFeature<AuthUser>({
   overlay: {
     quickMenu: quickNodeMenu,
     closeQuickMenu: closeQuickNodeMenu,
-    closeAssetContextIfOutside: (target) => workspaceAssets.closeContextIfOutside(target),
+    closeAssetContextIfOutside: (target) => assetRuntime.closeContextIfOutside(target),
   },
   keyboard: {
     closeQuickMenu: () => {
@@ -988,8 +983,8 @@ const workspaceRuntime = new WorkspaceRuntimeFeature<AuthUser>({
       return true;
     },
     closeAssetPreview: () => {
-      if (!workspaceAssets.isPreviewOpen) return false;
-      workspaceAssets.closePreview();
+      if (!assetRuntime.isPreviewOpen) return false;
+      assetRuntime.closePreview();
       return true;
     },
     undo: () => { void undoCanvas(); },
