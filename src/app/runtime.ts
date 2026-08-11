@@ -1,6 +1,5 @@
 import "../style.css";
-import { CanvasPerformanceMonitor } from "../canvas/performance-monitor";
-import { CanvasPaintCoordinator } from "../canvas/canvas-paint-coordinator";
+import { CanvasRenderFeature } from "../canvas/canvas-render-feature";
 import { CanvasPersistenceFeature } from "../canvas/canvas-persistence-feature";
 import { CanvasConnectionFeature } from "../canvas/canvas-connection-feature";
 import { CanvasStore } from "../canvas/store";
@@ -77,39 +76,7 @@ import {
   worldToScreen,
 } from "../canvas/camera-controller";
 
-const canvasPerformance = new CanvasPerformanceMonitor(
-  new URLSearchParams(location.search).has("canvasPerf"),
-);
-if (canvasPerformance.enabled)
-  Object.assign(window, { __canvasPerformance: canvasPerformance });
-let pixiRenderer:
-  | import("../canvas/pixi-renderer").PixiCanvasRenderer
-  | undefined;
-let pixiRendererPromise: Promise<void> | null = null;
-
-function ensurePixiRenderer() {
-  if (pixiRenderer) return Promise.resolve();
-  if (pixiRendererPromise) return pixiRendererPromise;
-  pixiRendererPromise = import("../canvas/pixi-renderer")
-    .then(async ({ PixiCanvasRenderer }) => {
-      const renderer = new PixiCanvasRenderer();
-      await renderer.mount(document.body);
-      pixiRenderer = renderer;
-      document.body.classList.add("renderer-pixi");
-      document.body.classList.remove("canvas-context-lost");
-      draw(false);
-    })
-    .catch((error) => {
-      pixiRendererPromise = null;
-      document.body.classList.remove("renderer-pixi");
-      document.body.classList.add("canvas-context-lost");
-      clientLog("pixi-renderer-init-failed", {
-        message: error instanceof Error ? error.message : String(error),
-      });
-      throw error;
-    });
-  return pixiRendererPromise;
-}
+let canvasRender: CanvasRenderFeature;
 
 let generationCapabilities: GenerationCapabilities =
   createDefaultGenerationCapabilities();
@@ -407,8 +374,8 @@ const canvasMedia = new CanvasMediaFeature({
   nodes,
   nodeLayer,
   theme: () => colorTheme,
-  suspendRenderer: () => pixiRenderer?.suspend(),
-  resumeRenderer: () => pixiRenderer?.resume(),
+  suspendRenderer: () => canvasRender.suspend(),
+  resumeRenderer: () => canvasRender.resume(),
   clearNodeStates: () => nodeViews.clearStates(),
   invalidateNode: (id) => nodeViews.invalidateState(id),
   resize,
@@ -516,7 +483,7 @@ const authWorkspace: AuthWorkspaceFeature = new AuthWorkspaceFeature({
   getLoadedProjectId: () => canvasPersistence.loadedProjectId,
   isSaveBlocked: () => canvasPersistence.blocked,
   getServerVersion: () => canvasPersistence.serverVersion,
-  ensureRenderer: ensurePixiRenderer,
+  ensureRenderer: () => canvasRender.ensure(),
   stopSave: (logout) => canvasPersistence.stopAndReset(logout),
   resetNodeLease: () => canvasNodeIds.reset(),
   loadCanvas: (keepStatus) => loadCanvas(keepStatus),
@@ -642,8 +609,7 @@ function startConnectionAutoPan(sx: number, sy: number) { connectionFeature.star
 function hitLink(sx: number, sy: number, tolerance = 9) {
   return connectionFeature.hitLink(sx, sy, tolerance);
 }
-const canvasPaint = new CanvasPaintCoordinator({
-  performance: canvasPerformance,
+canvasRender = new CanvasRenderFeature({
   viewport: nodeViewport,
   zoomSlider,
   zoomPercent,
@@ -681,15 +647,15 @@ const canvasPaint = new CanvasPaintCoordinator({
       : undefined,
     };
   },
-  renderer: () => pixiRenderer,
   rebuildIndexes: rebuildPaintIndexes,
   syncDom: () => nodeViews.sync(),
   warmEditors: () => nodeViews.scheduleWarmup(),
   updateTasks: updateTaskMonitor,
   updateHistory: updateHistoryControls,
+  log: clientLog,
 });
-function paint() { canvasPaint.paint(); }
-function draw(syncDom = true) { canvasPaint.draw(syncDom); }
+function paint() { canvasRender.paint(); }
+function draw(syncDom = true) { canvasRender.draw(syncDom); }
 function resize() {
   draw();
 }
@@ -840,7 +806,7 @@ const nodeEditorState = new NodeEditorStateController({
   selectedId: () => selection.selectedId,
   activelyGenerating: nodeIsActivelyGenerating,
   canGenerate: canGenerateNode,
-  pixiActive: () => Boolean(pixiRenderer),
+  pixiActive: canvasRender.active,
   draw,
   save: scheduleSave,
   updateTasks: updateTaskMonitor,
