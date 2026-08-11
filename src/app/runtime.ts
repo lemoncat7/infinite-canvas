@@ -149,6 +149,7 @@ import { BoundNodeDomSynchronizer } from "../nodes/bound-node-dom-synchronizer";
 import { createDefaultGenerationCapabilities } from "./state";
 import { WorkspaceSessionController } from "./workspace-session-controller";
 import { ProjectSwitchController } from "./project-switch-controller";
+import { ApplicationBootstrapController } from "./application-bootstrap-controller";
 import {
   connectionControlPoint,
   nodePortPosition,
@@ -2930,44 +2931,22 @@ async function loadGenerationCapabilities(redraw = false) {
     /* 使用通用默认配置 */
   }
 }
-async function bootstrapApplication() {
-  setWorkspaceBootStatus("正在检测登录状态");
-  try {
-    const response = await apiFetch("/api/users/me");
-    if (response.ok) authUser = (await response.json()) as AuthUser;
-  } catch {
-    authUser = null;
-  }
-  authReady = true;
-  localStorage.removeItem("flow-authenticated");
-  renderAuthenticatedUser();
-  if (authUser) {
-    sessionActivity.touch();
-  }
-  const capabilities = loadGenerationCapabilities();
-  if (authUser && location.hash === "#/canvas") {
-    document.body.classList.add(
-      "home-mode",
-      "workspace-loading",
-      "workspace-preparing",
-    );
-    randomizeHomeTheme();
-    setWorkspaceBootStatus("登录成功，正在同步项目");
-    const restored = await synchronizeCanvasAfterAuthentication(true);
-    if (restored) {
-      setWorkspaceBootStatus("正在加载资产索引与创作模型");
-      await Promise.all([loadAssets(false), capabilities]);
-      setWorkspaceBootStatus("工作区已准备完成");
-    } else {
-      location.hash = "#/";
-      showToast("工作区同步失败，请重新进入创作", "error");
-    }
-    document.body.classList.remove("workspace-loading", "workspace-preparing");
-  } else await capabilities;
-  setWorkspaceBootStatus("", false);
-  applyAppRoute();
-}
+const applicationBootstrap = new ApplicationBootstrapController<AuthUser>({
+  apiFetch,
+  setUser: (user) => { authUser = user; },
+  user: () => authUser,
+  setReady: () => { authReady = true; },
+  renderUser: renderAuthenticatedUser,
+  touchSession: () => sessionActivity.touch(),
+  loadCapabilities: () => loadGenerationCapabilities(),
+  synchronizeCanvas: () => synchronizeCanvasAfterAuthentication(true),
+  loadAssets: () => loadAssets(false),
+  status: setWorkspaceBootStatus,
+  randomizeTheme: randomizeHomeTheme,
+  applyRoute: applyAppRoute,
+  notifyError: (message) => showToast(message, "error"),
+});
 window.addEventListener("resize", resize);
 resize();
 updateEditor();
-void bootstrapApplication();
+void applicationBootstrap.run();
