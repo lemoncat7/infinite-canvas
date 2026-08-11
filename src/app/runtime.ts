@@ -90,7 +90,17 @@ import { ComicLabelController } from "../ui/comic-labels";
 import { buildComicWorkflow } from "../nodes/comic-workflow";
 import { bindVoiceNodePanels } from "../nodes/voice-node-view";
 import { bindVideoNodePanel } from "../nodes/video-node-view";
-import { bindImageNodePanel } from "../nodes/image-node-view";
+import {
+  bindClearImageAction,
+  bindImageNodePanel,
+} from "../nodes/image-node-view";
+import {
+  bindNodeLabelHeading,
+  bindNodePointerInteraction,
+  bindNodePorts,
+  bindNodeToolbarActions,
+  type DomNodeDrag,
+} from "../nodes/node-interaction-view";
 import { ContextMenuController } from "../ui/context-menu";
 import { createDefaultGenerationCapabilities } from "./state";
 import {
@@ -420,19 +430,7 @@ if (interruptedThemeTransition) {
     });
   }
 }
-let domDrag: {
-  id: number;
-  pointerId: number;
-  startX: number;
-  startY: number;
-  initialX: number;
-  initialY: number;
-  element: HTMLElement;
-  moved: boolean;
-  agentSelect?: boolean;
-  groupInitial?: Map<number, Point>;
-  nativeControl?: boolean;
-} | null = null;
+let domDrag: DomNodeDrag | null = null;
 let domDragFrame: number | null = null;
 function syncDraggedNodeElements(ids: Iterable<number>) {
   for (const id of ids) {
@@ -4776,347 +4774,94 @@ function createDomNode(node: FlowNode) {
   settingsPopover.querySelector("[data-custom-size]")?.remove();
   settingsPopover.querySelector("header small")!.textContent =
     "常用画面比例与输出规格";
-  element.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0 || domDrag) return;
-    const current = liveNode();
-    if (!current) return;
-    const target = event.target as HTMLElement;
-    if (target.closest("audio") && current.kind === "audio") {
-      const groupInitial = selection.batchIds.has(current.id)
-        ? new Map(
-            nodes
-              .filter((item) => selection.batchIds.has(item.id))
-              .map((item) => [item.id, { x: item.x, y: item.y }]),
-          )
-        : undefined;
-      domDrag = {
-        id: current.id,
-        pointerId: event.pointerId,
-        startX: event.clientX,
-        startY: event.clientY,
-        initialX: current.x,
-        initialY: current.y,
-        element,
-        moved: false,
-        groupInitial,
-        nativeControl: true,
-      };
-      return;
-    }
-    if (
-      target.closest(
-        "button,input,textarea,select,audio,details,.node-port,.image-config-panel,.video-config-panel,.video-result-prompt,.voice-config-panel,.tts-config-panel,.node-floating-tools,.node-label-heading",
-      ) ||
-      target.closest('.node-copy[contenteditable="true"]')
-    )
-      return;
-    if (promptAgentSelecting && promptAgentMode === "create") {
-      event.preventDefault();
-      event.stopPropagation();
-      element.setPointerCapture(event.pointerId);
-      domDrag = {
-        id: current.id,
-        pointerId: event.pointerId,
-        startX: event.clientX,
-        startY: event.clientY,
-        initialX: current.x,
-        initialY: current.y,
-        element,
-        moved: false,
-        agentSelect: true,
-      };
-      element.classList.add("dragging");
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    if (
-      (current.status === "queued" || current.status === "running") &&
-      !selection.batchIds.has(current.id)
-    ) {
-      selection.selectedId = current.id;
+  bindNodePointerInteraction({
+    element,
+    liveNode,
+    allNodes: nodes,
+    batchIds: selection.batchIds,
+    isMultiSelectMode: () => selection.multiSelectMode,
+    getDrag: () => domDrag,
+    setDrag: (drag) => {
+      domDrag = drag;
+    },
+    isAgentSelecting: () => promptAgentSelecting,
+    isAgentCreateMode: () => promptAgentMode === "create",
+    isReleaseSuppressed: () => performance.now() < suppressNodeReleaseUntil,
+    selectNode: (id) => {
+      selection.selectedId = id;
       updateEditor();
-      draw();
-      return;
-    }
-    // Window activation (especially Safari) can consume the first pointerup.
-    // Select on pointerdown so the card composer still opens after returning
-    // from another window. The drag threshold below clears it once this turns
-    // into an actual card move.
-    if (!selection.multiSelectMode && !selection.batchIds.has(current.id)) {
-      selection.selectedId = current.id;
-      updateEditor();
-    }
-    const groupInitial = selection.batchIds.has(current.id)
-      ? new Map(
-          nodes
-            .filter((item) => selection.batchIds.has(item.id))
-            .map((item) => [item.id, { x: item.x, y: item.y }]),
-        )
-      : undefined;
-    element.setPointerCapture(event.pointerId);
-    domDrag = {
-      id: current.id,
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      initialX: current.x,
-      initialY: current.y,
-      element,
-      moved: false,
-      groupInitial,
-    };
-    element.classList.add("dragging");
-    draw();
-  });
-  element.addEventListener("dblclick", (event) => {
-    if (performance.now() < suppressNodeReleaseUntil) {
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
-    if (
-      (event.target as HTMLElement).closest(
-        ".image-config-panel,.video-config-panel,.node-floating-tools,.node-port",
-      )
-    )
-      return;
-    const current = liveNode();
-    if (!current) return;
-    if (current.kind === "audio") {
-      event.preventDefault();
-      event.stopPropagation();
-      const current = liveNode(),
-        audio = audioPanel.querySelector<HTMLAudioElement>("audio");
-      if (!current?.mediaUrl || !audio) return;
-      selection.selectedId = current.id;
-      updateEditor();
-      if (audio.paused) void audio.play();
-      else audio.pause();
-      return;
-    }
-    if (current.kind === "prompt") {
-      event.preventDefault();
-      event.stopPropagation();
-      selection.selectedId = current.id;
-      updateEditor();
-      enterTextEdit(current, element);
-      return;
-    }
-    if (
-      (current.kind !== "image" && current.kind !== "video") ||
-      !current.mediaUrl
-    )
-      return;
-    const rect = element
-        .querySelector<HTMLElement>(".node-media")!
-        .getBoundingClientRect(),
-      insideImage =
-        event.clientX >= rect.left &&
-        event.clientX <= rect.right &&
-        event.clientY >= rect.top &&
-        event.clientY <= rect.bottom;
-    if (!insideImage) return;
-    event.preventDefault();
-    event.stopPropagation();
-    selection.selectedId = current.id;
-    updateEditor();
-    openAssetPreview(current.mediaUrl, current.title, current.kind);
-  });
-  element.addEventListener("dragstart", (event) => event.preventDefault());
-  element.addEventListener("contextmenu", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-  });
-  const labelHeading = element.querySelector<HTMLElement>(
-    ".node-label-heading",
-  )!;
-  labelHeading.addEventListener("dblclick", (event) => {
-    if (node.kind !== "prompt") return;
-    event.preventDefault();
-    event.stopPropagation();
-    labelHeading.contentEditable = "true";
-    labelHeading.classList.add("editing");
-    labelHeading.focus();
-    const range = document.createRange();
-    range.selectNodeContents(labelHeading);
-    const selection = getSelection();
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-  });
-  labelHeading.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" || event.key === "Escape") {
-      event.preventDefault();
-      labelHeading.blur();
-    }
-  });
-  labelHeading.addEventListener("input", () => {
-    node.title = labelHeading.innerText;
-    setSaveState("editing", "编辑中…");
-  });
-  labelHeading.addEventListener("blur", () => {
-    if (!labelHeading.isContentEditable) return;
-    node.title = labelHeading.innerText.trim() || "未命名标签";
-    labelHeading.contentEditable = "false";
-    labelHeading.classList.remove("editing");
-    scheduleSave();
-    draw();
-  });
-  element.querySelectorAll<HTMLElement>(".node-port").forEach((port) => {
-    const output = port.dataset.side === "right";
-    port.dataset.label = output ? "输出" : "输入";
-    port.title = output
-      ? "输出：拖动到其他卡片的输入端"
-      : "输入：接收其他卡片的输出";
-    port.setAttribute("aria-label", output ? "输出端点" : "输入端点");
-    port.addEventListener("pointerdown", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (!output) return;
+    },
+    clearSelection: () => {
       selection.selectedId = 0;
       updateEditor();
-      connection.begin(node.id, "right", {
-        x: event.clientX,
-        y: event.clientY,
-      });
-      draw();
-    });
+    },
+    draw,
+    editPrompt: enterTextEdit,
+    previewMedia: (current) =>
+      openAssetPreview(current.mediaUrl!, current.title, current.kind as "image" | "video"),
   });
-  element
-    .querySelector('[data-action="info"]')!
-    .addEventListener("click", (event) => {
-      event.stopPropagation();
-      const current = liveNode();
-      if (current) openNodeInfo(current);
-    });
-  element
-    .querySelector('[data-action="edit"]')!
-    .addEventListener("click", (event) => {
-      event.stopPropagation();
-      const current = liveNode();
-      if (!current) return;
-      selection.selectedId = current.id;
+  bindNodeLabelHeading({
+    element,
+    liveNode,
+    setEditingState: () => setSaveState("editing", "编辑中…"),
+    scheduleSave,
+    draw,
+  });
+  bindNodePorts(element, node.id, (nodeId, point) => {
+    selection.selectedId = 0;
+    updateEditor();
+    connection.begin(nodeId, "right", point);
+    draw();
+  });
+  bindNodeToolbarActions({
+    element,
+    liveNode,
+    selectNode: (id) => {
+      selection.selectedId = id;
       updateEditor();
-      if (current.kind === "prompt") enterTextEdit(current, element);
-      else promptInput.focus();
-    });
-  element
-    .querySelector('[data-action="zoom-in"]')!
-    .addEventListener("click", (event) => {
-      event.stopPropagation();
-      const current = liveNode();
-      if (!current) return;
-      current.fontScale = Math.min(2, (current.fontScale ?? 1) + 0.1);
-      scheduleSave();
-      draw();
-    });
-  element
-    .querySelector('[data-action="zoom-out"]')!
-    .addEventListener("click", (event) => {
-      event.stopPropagation();
-      const current = liveNode();
-      if (!current) return;
-      current.fontScale = Math.max(0.7, (current.fontScale ?? 1) - 0.1);
-      scheduleSave();
-      draw();
-    });
-  element
-    .querySelector('[data-action="generate"]')!
-    .addEventListener("click", (event) => {
-      event.stopPropagation();
-      const current = liveNode();
-      if (!current) return;
-      selection.selectedId = current.id;
-      updateEditor();
-      void generate(current);
-    });
-  element
-    .querySelector('[data-action="preview"]')!
-    .addEventListener("click", (event) => {
-      event.stopPropagation();
-      const current = liveNode();
-      if (
-        current?.mediaUrl &&
-        (current.kind === "image" || current.kind === "video")
-      )
-        openAssetPreview(current.mediaUrl, current.title, current.kind);
-    });
-  element
-    .querySelector('[data-action="download"]')!
-    .addEventListener("click", (event) => {
-      event.stopPropagation();
-      const current = liveNode();
-      if (!current?.mediaUrl) return;
-      if (current.kind === "audio")
+    },
+    showInfo: openNodeInfo,
+    editPrompt: enterTextEdit,
+    focusEditor: () => promptInput.focus(),
+    scheduleSave,
+    draw,
+    generate,
+    previewMedia: (current) =>
+      openAssetPreview(current.mediaUrl!, current.title, current.kind as "image" | "video"),
+    downloadMedia: (current) => {
+      if (current.kind === "audio") {
         audioPanel
           .querySelector<HTMLButtonElement>("[data-audio-download]")!
           .click();
-      else void downloadNodeImage(current);
-    });
-  const clearImageButton = element.querySelector<HTMLButtonElement>(
-      '[data-action="clear-image"]',
-    )!,
-    requestClearImage = async (event: Event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      const current = nodes.find(
-        (item) => item.id === Number(element.dataset.id),
-      );
-      if (
-        !current?.mediaUrl ||
-        current.status === "queued" ||
-        current.status === "running"
-      )
         return;
-      const confirmed = await askProjectDialog({
+      }
+      return downloadNodeImage(current);
+    },
+    deleteNode: (current) => {
+      selection.selectedId = current.id;
+      deleteSelectedNode();
+    },
+  });
+  bindClearImageAction({
+    element,
+    allNodes: nodes,
+    confirm: async () =>
+      Boolean(await askProjectDialog({
         title: "清除当前卡片的图片？",
         description:
           "资产库中的原图不会删除。原提示词、当前描述、模型、图像设置和参考连线都会保留。",
         confirm: "清除图片",
-      });
-      if (!confirmed) return;
-      const latest = nodes.find((item) => item.id === current.id);
-      if (
-        !latest?.mediaUrl ||
-        latest.status === "queued" ||
-        latest.status === "running"
-      )
-        return;
-      imageCache.delete(latest.mediaUrl);
-      if (!latest.corePrompt)
-        latest.body = normalizePromptText(
-          latest.generationPrompt || latest.body,
-        );
-      delete latest.mediaUrl;
-      delete latest.jobId;
-      latest.status = "idle";
-      latest.progress = 0;
-      latest.agentAuto = false;
-      selection.selectedId = latest.id;
+      })),
+    removeCachedImage: (url) => imageCache.delete(url),
+    normalizePrompt: normalizePromptText,
+    selectNode: (id) => {
+      selection.selectedId = id;
       updateEditor();
-      scheduleSave();
-      draw();
-      showToast("图片已清除，原提示词与当前描述已保留", "success");
-    };
-  clearImageButton.addEventListener("pointerdown", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
+    },
+    scheduleSave,
+    draw,
+    notify: (message) => showToast(message, "success"),
   });
-  clearImageButton.addEventListener("pointerup", requestClearImage);
-  clearImageButton.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (event.detail === 0) void requestClearImage(event);
-  });
-  element
-    .querySelector('[data-action="delete"]')!
-    .addEventListener("click", (event) => {
-      event.stopPropagation();
-      const current = liveNode();
-      if (!current) return;
-      selection.selectedId = current.id;
-      deleteSelectedNode();
-    });
   bindImageNodePanel({
     element,
     nodeId: node.id,

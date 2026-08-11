@@ -132,3 +132,65 @@ export function bindImageNodePanel(options: ImageNodePanelOptions) {
   
 }
 
+interface ClearImageActionOptions {
+  element: HTMLElement;
+  allNodes: FlowNode[];
+  confirm: () => Promise<boolean>;
+  removeCachedImage: (url: string) => void;
+  normalizePrompt: (value: string) => string;
+  selectNode: (id: number) => void;
+  scheduleSave: () => void;
+  draw: () => void;
+  notify: (message: string) => void;
+}
+
+export function bindClearImageAction(options: ClearImageActionOptions) {
+  const button = options.element.querySelector<HTMLButtonElement>(
+    '[data-action="clear-image"]',
+  )!;
+  const clear = async (event: Event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const current = options.allNodes.find(
+      (item) => item.id === Number(options.element.dataset.id),
+    );
+    if (
+      !current?.mediaUrl ||
+      current.status === "queued" ||
+      current.status === "running" ||
+      !(await options.confirm())
+    )
+      return;
+    const latest = options.allNodes.find((item) => item.id === current.id);
+    if (
+      !latest?.mediaUrl ||
+      latest.status === "queued" ||
+      latest.status === "running"
+    )
+      return;
+    options.removeCachedImage(latest.mediaUrl);
+    if (!latest.corePrompt)
+      latest.body = options.normalizePrompt(
+        latest.generationPrompt || latest.body,
+      );
+    delete latest.mediaUrl;
+    delete latest.jobId;
+    latest.status = "idle";
+    latest.progress = 0;
+    latest.agentAuto = false;
+    options.selectNode(latest.id);
+    options.scheduleSave();
+    options.draw();
+    options.notify("图片已清除，原提示词与当前描述已保留");
+  };
+  button.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  button.addEventListener("pointerup", clear);
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.detail === 0) void clear(event);
+  });
+}
