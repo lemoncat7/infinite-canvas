@@ -19,6 +19,7 @@ import { CanvasPointerLifecycle } from "../canvas/canvas-pointer-lifecycle";
 import { TouchPinchController } from "../canvas/touch-pinch-controller";
 import { CameraViewportController } from "../canvas/camera-viewport-controller";
 import { CanvasClearController } from "../canvas/clear-controller";
+import { CanvasClearResultApplier } from "../canvas/clear-result-applier";
 import { CanvasSaveCoordinator } from "../canvas/save-coordinator";
 import { CanvasLoadCoordinator } from "../canvas/load-coordinator";
 import { BatchSelectionController } from "../canvas/batch-selection-controller";
@@ -2539,29 +2540,32 @@ window.addEventListener("resize", () => {
     positionPromptAgentCapsule();
   }
 });
+const canvasClearResultApplier = new CanvasClearResultApplier({
+  nodes,
+  links,
+  camera,
+  normalizeLinks: normalizeCanvasLinks,
+  applySnapshot: (version, updatedAt) =>
+    canvasSaveCoordinator.applyAuthoritativeSnapshot(
+      captureCanvasSnapshot(
+        version,
+        updatedAt || canvasSaveCoordinator.serverUpdatedAt,
+      ),
+    ),
+  clearSelection: () => { selection.selectedId = 0; },
+  resetHistory: () => resetCanvasHistory(false),
+  updateEditor,
+  markSaved: () => setSaveState("saved", "已自动保存"),
+  draw,
+  notify: (count) => showToast(`已清除画布内容，保留 ${count} 个标签`, "success"),
+});
 new CanvasClearController({
   button: document.querySelector<HTMLElement>("#dock-clear")!,
   getNodeCount: () => nodes.length,
   getProjectId: () => currentProjectId,
   getServerVersion: () => canvasSaveCoordinator.serverVersion,
   prepareForClear: () => canvasSaveCoordinator.prepareExclusiveMutation(),
-  applyResult: (result) => {
-    nodes.splice(0, nodes.length, ...result.nodes);
-    links.splice(0, links.length, ...normalizeCanvasLinks(result.links));
-    if (result.camera) Object.assign(camera, result.camera);
-    canvasSaveCoordinator.applyAuthoritativeSnapshot(
-      captureCanvasSnapshot(
-        result.version,
-        result.updatedAt || canvasSaveCoordinator.serverUpdatedAt,
-      ),
-    );
-    selection.selectedId = 0;
-    resetCanvasHistory(false);
-    updateEditor();
-    setSaveState("saved", "已自动保存");
-    draw();
-    showToast(`已清除画布内容，保留 ${nodes.length} 个标签`, "success");
-  },
+  applyResult: (result) => canvasClearResultApplier.apply(result),
   recoverCanvas: () => loadCanvas(),
   toast: (message, tone, detail) => showToast(message, tone, detail),
 });
