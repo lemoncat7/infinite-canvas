@@ -46,6 +46,10 @@ import { downloadNodeImage as downloadNodeImageFile } from "../nodes/node-downlo
 import { PromptNodeController } from "../nodes/prompt-node";
 import { TtsCatalogController } from "../services/tts-catalog";
 import { TtsGenerationController } from "../nodes/tts-generation-controller";
+import {
+  canGenerateNode as evaluateCanGenerateNode,
+  generationBlockedReason as evaluateGenerationBlockedReason,
+} from "../nodes/generation-eligibility";
 import { GenerationSubmitController } from "../nodes/generation-submit-controller";
 import { apiFetch } from "../services/api";
 import { friendlyGenerationError } from "../services/generation-error-presenter";
@@ -2580,52 +2584,18 @@ function selectedNode() {
   return nodes.find((node) => node.id === selection.selectedId);
 }
 function canGenerateNode(node: FlowNode) {
-  const credits =
+  return evaluateCanGenerateNode(node, {
+    availableCredits:
       Number(authUser?.credits ?? 0) - Number(authUser?.reservedCredits ?? 0),
-    modelCost =
-      node.model === "grok-imagine-video-1.5-preview"
-        ? 2
-        : node.model === "grok-imagine-image"
-          ? 1
-          : 0;
-  if (node.kind === "tts")
-    return Boolean(node.body.trim() && connectedVoiceNode(node));
-  return (
-    node.model !== "gemini-3.1-flash-image" &&
-    (node.kind === "image" || node.kind === "video") &&
-    node.role !== "result" &&
-    credits >= modelCost &&
-    Boolean(node.body.trim())
-  );
+    hasConnectedVoice: Boolean(connectedVoiceNode(node)),
+  });
 }
 function generationBlockedReason(node: FlowNode) {
-  if (node.kind === "tts")
-    return !connectedVoiceNode(node)
-      ? "请先连接一张语音配置卡片"
-      : !node.body.trim()
-        ? "请先填写需要生成的文本"
-        : "";
-  if (node.kind !== "image" && node.kind !== "video")
-    return "当前卡片不支持生成";
-  if (node.role === "result")
-    return node.kind === "video"
-      ? "已生成的视频节点仅用于播放"
-      : "生成结果节点不能再次生成";
-  if ((node.status === "queued" || node.status === "running") && node.jobId)
-    return "当前任务正在生成，请稍候";
-  if (node.model === "gemini-3.1-flash-image")
-    return "Gemini 图片模型仍在适配中，请选择其他模型";
-  const credits =
+  return evaluateGenerationBlockedReason(node, {
+    availableCredits:
       Number(authUser?.credits ?? 0) - Number(authUser?.reservedCredits ?? 0),
-    cost =
-      node.model === "grok-imagine-video-1.5-preview"
-        ? 2
-        : node.model === "grok-imagine-image"
-          ? 1
-          : 0;
-  if (credits < cost) return `创作点数不足，当前模型需要 ${cost} 点`;
-  if (!node.body.trim()) return "请先填写图片描述，再开始生成";
-  return "";
+    hasConnectedVoice: Boolean(connectedVoiceNode(node)),
+  });
 }
 function updateEditor() {
   const node = selectedNode();
