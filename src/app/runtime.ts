@@ -83,11 +83,7 @@ import {
   briefFromComicPlan,
   stripCharactersFromScenePrompt,
 } from "../nodes/comic-format";
-import {
-  bindNodeConfigPanel,
-  renderComposerSubmit,
-  renderNodeToolbar,
-} from "../ui/node-editor";
+import { bindNodeConfigPanel } from "../ui/node-editor";
 import { AssetLibraryView } from "../ui/asset-library-view";
 import { AssetLibraryController } from "../ui/asset-library-controller";
 import { AssetTouchController } from "../ui/asset-touch-controller";
@@ -133,15 +129,7 @@ import {
   PromptAgentApplicationController,
 } from "../nodes/prompt-agent-application";
 import { BoundNodeViewFactory } from "../nodes/bound-node-view-factory";
-import { syncNodeMediaView } from "../nodes/node-media-view";
-import { syncImageNodePanel } from "../nodes/image-node-sync";
-import { syncVideoNodePanel } from "../nodes/video-node-sync";
-import { syncVoiceTtsAudioPanels } from "../nodes/voice-node-sync";
-import { syncVideoReferenceView } from "../nodes/video-reference-view";
-import {
-  syncBasicNodeContent,
-} from "../nodes/node-dom-state";
-import { synchronizeNodeDom } from "../nodes/node-dom-synchronizer";
+import { BoundNodeDomSynchronizer } from "../nodes/bound-node-dom-synchronizer";
 import { createDefaultGenerationCapabilities } from "./state";
 import {
   connectionControlPoint,
@@ -2805,81 +2793,46 @@ function addMediaNode(
   draw();
 }
 
+const boundNodeDomSynchronizer = new BoundNodeDomSynchronizer({
+  viewport: nodeViewport,
+  layer: nodeLayer,
+  nodes,
+  links,
+  camera,
+  getSelectedId: () => selection.selectedId,
+  getBatchIds: () => selection.batchIds,
+  getEditingId: () => promptNodeEditor.editingId,
+  getDraggingId: () => domPointer.drag?.id ?? 0,
+  isAgentSelecting: () => promptAgentSelecting,
+  getAgentIds: () => promptAgentContextSelection,
+  getColorTheme: () => colorTheme,
+  getSwap: () => videoReferenceSwapSelection,
+  setSwap: (value) => { videoReferenceSwapSelection = value; },
+  mountedIds: mountedDomNodeIds,
+  detached: pixiDetachedNodeCache,
+  states: nodeDomStates,
+  cacheDetached: cacheDetachedPixiNode,
+  createElement: createDomNode,
+  isGenerating: nodeIsActivelyGenerating,
+  defaultNodeCopy,
+  getProviders: () => ttsProviders,
+  getVoices: () => ttsVoicesByProvider,
+  ensureProviders: loadTtsProviders,
+  ensureVoices: loadTtsVoices,
+  escapeHtml,
+  scheduleSave,
+  commitHistory: queueCanvasHistory,
+  draw,
+  paintImage: paintNodeMedia,
+  paintVideo: paintNodeVideo,
+  normalizePrompt: normalizePromptText,
+  displayModelName: modelDisplayName,
+  decodePrompt: (value = "") => decodePromptClipboardText(value),
+  canGenerate: canGenerateNode,
+  notify: (message, type, detail) => showToast(message, type, detail),
+});
 function syncDomNodes() {
-  synchronizeNodeDom({
-    viewport: nodeViewport, layer: nodeLayer, nodes, links, camera,
-    selectedId: selection.selectedId, batchIds: selection.batchIds,
-    editingId: promptNodeEditor.editingId, draggingId: domPointer.drag?.id ?? 0,
-    agentSelecting: promptAgentSelecting, agentIds: promptAgentContextSelection,
-    colorTheme, swap: videoReferenceSwapSelection, mountedIds: mountedDomNodeIds,
-    detached: pixiDetachedNodeCache, states: nodeDomStates, cacheDetached: cacheDetachedPixiNode,
-    createElement: createDomNode, isGenerating: nodeIsActivelyGenerating,
-    syncNode: (element, node, flags) => {
-      const { locked, workflowWaiting, onscreen } = flags;
-    syncBasicNodeContent(element, node, flags.editing, defaultNodeCopy);
-    syncVoiceTtsAudioPanels({
-      element,
-      node,
-      nodes,
-      links,
-      providers: ttsProviders,
-      voicesByProvider: ttsVoicesByProvider,
-      ensureProviders: loadTtsProviders,
-      ensureVoices: loadTtsVoices,
-      escapeHtml,
-      renderSubmit: renderComposerSubmit,
-      locked,
-    });
-    syncVideoReferenceView({
-      element,
-      node,
-      nodes,
-      links,
-      onscreen,
-      getSwap: () => videoReferenceSwapSelection,
-      setSwap: (value) => {
-        videoReferenceSwapSelection = value;
-      },
-      escapeHtml,
-      notify: (message, type, detail) => showToast(message, type, detail),
-      scheduleSave,
-      commitHistory: queueCanvasHistory,
-      draw,
-      paintImage: paintNodeMedia,
-    });
-    renderNodeToolbar(element, node, locked);
-    syncImageNodePanel({
-      element,
-      node,
-      selected: node.id === selection.selectedId,
-      locked,
-      normalizePrompt: normalizePromptText,
-      displayModelName: modelDisplayName,
-      renderSubmit: renderComposerSubmit,
-    });
-    syncVideoNodePanel({
-      element,
-      node,
-      nodes,
-      links,
-      scheduleSave,
-      displayModelName: modelDisplayName,
-      decodePrompt: decodePromptClipboardText,
-      canGenerate: canGenerateNode,
-      renderSubmit: renderComposerSubmit,
-      locked,
-    });
-    syncNodeMediaView({
-      element,
-      node,
-      onscreen,
-      locked,
-      workflowWaiting,
-      paintImage: paintNodeMedia,
-      paintVideo: paintNodeVideo,
-    });
-    },
-  });
+  boundNodeDomSynchronizer.sync();
 }
 const boundNodeViewFactory = new BoundNodeViewFactory({
   nodes,
