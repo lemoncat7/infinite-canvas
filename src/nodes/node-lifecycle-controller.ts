@@ -122,3 +122,19 @@ export class NodeLifecycleController {
     });
   }
 }
+
+export function defaultNodeCopy(kind: NodeKind) {
+  return kind === "prompt"
+    ? "双击记录标签或说明"
+    : kind === "image"
+      ? "空图节点"
+      : kind === "video"
+        ? "连接图片并填写描述，生成视频"
+        : kind === "voice"
+          ? "为 Base 角色固定音色"
+          : kind === "tts"
+            ? "连接语音配置并填写台词"
+            : kind === "audio"
+              ? "生成后的音频结果"
+              : "双击添加说明文字";
+}

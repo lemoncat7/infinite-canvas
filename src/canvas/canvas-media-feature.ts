@@ -41,7 +41,7 @@ export class CanvasMediaFeature {
 
   get pendingLoads() { return this.lifecycle.pendingLoads; }
   get cache() { return this.lifecycle.cache; }
-  paint(target: HTMLCanvasElement, url: string) { this.renderer.paint(target, url); }
-  repaintUrl(url: string) { this.renderer.repaintUrl(url); }
-  repaintAll() { this.renderer.repaintAll(); }
+  paint = (target: HTMLCanvasElement, url: string) => this.renderer.paint(target, url);
+  repaintUrl = (url: string) => this.renderer.repaintUrl(url);
+  repaintAll = () => this.renderer.repaintAll();
 }

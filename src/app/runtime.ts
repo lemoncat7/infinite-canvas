@@ -21,7 +21,7 @@ import type {
   NodeKind,
   Point,
 } from "../nodes/node-types";
-import { NodeLifecycleController } from "../nodes/node-lifecycle-controller";
+import { NodeLifecycleController, defaultNodeCopy } from "../nodes/node-lifecycle-controller";
 import { GenerationGraph } from "../nodes/generation-graph";
 import { decodePromptClipboardText, normalizePromptText } from "../nodes/prompt-text";
 import { downloadNodeImage as downloadNodeImageFile } from "../nodes/node-download";
@@ -361,8 +361,8 @@ const nodeViews = new CanvasNodeViewFeature({
   previewVoice,
   generateTts,
   copyPrompt: copyOriginalPrompt,
-  paintImage: paintNodeMedia,
-  paintVideo: paintNodeVideo,
+  paintImage: (target, url) => canvasMedia.paint(target, url),
+  paintVideo: (target, url) => canvasMedia.paint(target, url),
   notify: (message, type, detail) => showToast(message, type, detail),
 });
 const canvasMedia = new CanvasMediaFeature({
@@ -703,32 +703,6 @@ function closeNodeInfo() {
   nodeEditorFeature.closeInfo();
 }
 
-function defaultNodeCopy(kind: NodeKind) {
-  return kind === "prompt"
-    ? "双击记录标签或说明"
-    : kind === "image"
-      ? "空图节点"
-      : kind === "video"
-        ? "连接图片并填写描述，生成视频"
-        : kind === "voice"
-          ? "为 Base 角色固定音色"
-          : kind === "tts"
-            ? "连接语音配置并填写台词"
-            : kind === "audio"
-              ? "生成后的音频结果"
-              : "双击添加说明文字";
-}
-
-function paintNodeMedia(target: HTMLCanvasElement, url: string) {
-  canvasMedia.paint(target, url);
-}
-function paintNodeVideo(target: HTMLCanvasElement, url: string) {
-  paintNodeMedia(target, url);
-}
-function repaintAllMedia() {
-  canvasMedia.repaintAll();
-}
-
 function finishDomConnection(event: PointerEvent) {
   connectionFeature.finish(event);
 }
@@ -989,7 +963,7 @@ const appearanceController = new AppearanceController({
     document.body.dataset.theme = colorTheme;
     localStorage.setItem("flow-theme", colorTheme);
   },
-  repaintMedia: repaintAllMedia,
+  repaintMedia: canvasMedia.repaintAll,
   paint,
 });
 function refreshAppearanceButton() {
