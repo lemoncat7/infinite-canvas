@@ -2,6 +2,13 @@ import "../style.css";
 import { CanvasPerformanceMonitor } from "../canvas/performance-monitor";
 import { CanvasSpatialIndex } from "../canvas/spatial-index";
 import { CanvasStore } from "../canvas/store";
+import {
+  applyCanvasOperations,
+  diffCanvasSnapshots,
+  normalizeCanvasLinks,
+  type CanvasSyncOperation,
+  type CanvasSyncSnapshot,
+} from "../canvas/sync";
 import { CanvasSelectionController } from "../canvas/selection-controller";
 import { CanvasConnectionController } from "../canvas/connection-controller";
 import { CanvasInteractionController } from "../canvas/interaction-controller";
@@ -18,7 +25,51 @@ import type {
 } from "../nodes/node-types";
 import { createNode, makeNodePublicId } from "../nodes/node-service";
 import { PromptNodeController } from "../nodes/prompt-node";
-import { fetchTtsProviders, fetchTtsVoices } from "../services/tts";
+import {
+  fetchTtsProviders,
+  fetchTtsVoices,
+  synthesizeTts,
+} from "../services/tts";
+import { apiFetch } from "../services/api";
+import {
+  fetchGenerationJob,
+  submitGenerationJob,
+} from "../services/generation";
+import {
+  fetchAssets,
+  type LibraryAsset,
+} from "../services/assets";
+import {
+  createProject,
+  fetchProjects,
+  type ProjectSummary,
+} from "../services/projects";
+import { streamComicDialogue } from "../services/comic";
+import {
+  composeImageGenerationPrompt as buildImageGenerationPrompt,
+} from "../nodes/image-node";
+import {
+  clipVideoPrompt,
+  composeStoryboardPrompt,
+  fitVideoDialogue,
+  inferAnonymousCrowd,
+  speechSegments,
+} from "../nodes/video-node";
+import { inferVoiceConfig } from "../nodes/voice-node";
+import type {
+  ComicBrief,
+  ComicPlan,
+  ComicShot,
+  PromptAgentMode,
+  PromptAgentResult,
+  PromptAgentStep,
+} from "../nodes/comic-types";
+import {
+  bindNodeConfigPanel,
+  renderComposerSubmit,
+  renderNodeToolbar,
+} from "../ui/node-editor";
+import { filterAssets, formatFileSize } from "../ui/asset-panel";
 import { createDefaultGenerationCapabilities } from "./state";
 import {
   connectionControlPoint,
@@ -203,19 +254,6 @@ let canvasServerVersion = 0,
   canvasSaveBlocked = true,
   canvasSaveAbort: AbortController | null = null,
   canvasLoadSequence = 0;
-type CanvasSyncSnapshot = {
-  nodes: FlowNode[];
-  links: FlowLink[];
-  camera: typeof camera;
-  version: number;
-  updatedAt: string;
-};
-type CanvasSyncOperation = {
-  type: "node" | "link" | "camera";
-  action: "upsert" | "delete";
-  key: string;
-  value?: unknown;
-};
 let canvasBaseline: CanvasSyncSnapshot | null = null;
 const canvasSyncClientId = (() => {
   const existing = sessionStorage.getItem("flow-canvas-client-id");
@@ -224,30 +262,6 @@ const canvasSyncClientId = (() => {
   sessionStorage.setItem("flow-canvas-client-id", id);
   return id;
 })();
-function canvasLinkKey(link: FlowLink) {
-  return `${link.from}:${link.to}:${link.fromSide || "right"}:${link.toSide || "left"}`;
-}
-function normalizeCanvasLinks(values: Array<FlowLink | [number, number]>) {
-  return values.map((value) => {
-    const link = Array.isArray(value)
-      ? {
-          from: value[0],
-          to: value[1],
-          fromSide: "right" as PortSide,
-          toSide: "left" as PortSide,
-        }
-      : value;
-    return link.fromSide === "left" && link.toSide === "right"
-      ? {
-          ...link,
-          from: link.to,
-          to: link.from,
-          fromSide: "right" as PortSide,
-          toSide: "left" as PortSide,
-        }
-      : { ...link };
-  });
-}
 function captureCanvasSnapshot(
   version = canvasServerVersion,
   updatedAt = canvasServerUpdatedAt,
@@ -258,103 +272,6 @@ function captureCanvasSnapshot(
     camera: { ...camera },
     version,
     updatedAt,
-  };
-}
-function sameCanvasRecord(left: unknown, right: unknown) {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-function sameCanvasNodeRecord(left: FlowNode | undefined, right: FlowNode) {
-  if (!left) return false;
-  // Job progress is transient task state and is already persisted in `jobs`.
-  // Treating every polling tick as a canvas edit creates a save feedback loop:
-  // a save overlaps the next poll, queues another save, and repeatedly exports
-  // the entire SQL.js database. Terminal status, jobId and result fields remain
-  // part of the durable canvas record and still trigger a normal save.
-  if (
-    left.jobId &&
-    left.jobId === right.jobId &&
-    ["queued", "running"].includes(String(left.status)) &&
-    ["queued", "running"].includes(String(right.status))
-  ) {
-    const leftStable = { ...left, progress: 0 },
-      rightStable = { ...right, progress: 0 };
-    return sameCanvasRecord(leftStable, rightStable);
-  }
-  return sameCanvasRecord(left, right);
-}
-function diffCanvasSnapshots(
-  base: CanvasSyncSnapshot,
-  current: CanvasSyncSnapshot,
-) {
-  const operations: CanvasSyncOperation[] = [],
-    baseNodes = new Map(base.nodes.map((node) => [String(node.id), node])),
-    currentNodes = new Map(
-      current.nodes.map((node) => [String(node.id), node]),
-    );
-  for (const [key, node] of currentNodes)
-    if (!sameCanvasNodeRecord(baseNodes.get(key), node))
-      operations.push({ type: "node", action: "upsert", key, value: node });
-  for (const key of baseNodes.keys())
-    if (!currentNodes.has(key))
-      operations.push({ type: "node", action: "delete", key });
-  const baseLinks = new Map(
-      base.links.map((link) => [canvasLinkKey(link), link]),
-    ),
-    currentLinks = new Map(
-      current.links.map((link) => [canvasLinkKey(link), link]),
-    );
-  for (const [key, link] of currentLinks)
-    if (!baseLinks.has(key) || !sameCanvasRecord(baseLinks.get(key), link))
-      operations.push({ type: "link", action: "upsert", key, value: link });
-  for (const key of baseLinks.keys())
-    if (!currentLinks.has(key))
-      operations.push({ type: "link", action: "delete", key });
-  if (!sameCanvasRecord(base.camera, current.camera))
-    operations.push({
-      type: "camera",
-      action: "upsert",
-      key: "camera",
-      value: current.camera,
-    });
-  return operations;
-}
-function applyCanvasOperations(
-  snapshot: CanvasSyncSnapshot,
-  operations: CanvasSyncOperation[],
-): CanvasSyncSnapshot {
-  const nodeMap = new Map(
-      snapshot.nodes.map((node) => [String(node.id), structuredClone(node)]),
-    ),
-    linkMap = new Map(
-      snapshot.links.map((link) => [
-        canvasLinkKey(link),
-        structuredClone(link),
-      ]),
-    );
-  let nextCamera = { ...snapshot.camera };
-  for (const operation of operations) {
-    if (operation.type === "node") {
-      if (operation.action === "delete") nodeMap.delete(operation.key);
-      else
-        nodeMap.set(
-          operation.key,
-          structuredClone(operation.value as FlowNode),
-        );
-    } else if (operation.type === "link") {
-      if (operation.action === "delete") linkMap.delete(operation.key);
-      else
-        linkMap.set(
-          operation.key,
-          structuredClone(operation.value as FlowLink),
-        );
-    } else if (operation.action === "upsert")
-      nextCamera = { ...(operation.value as typeof camera) };
-  }
-  return {
-    ...snapshot,
-    nodes: [...nodeMap.values()],
-    links: [...linkMap.values()],
-    camera: nextCamera,
   };
 }
 function applySynchronizedCanvas(
@@ -388,7 +305,7 @@ async function reserveCanvasNodeIds(projectId = currentProjectId) {
   if (canvasNodeIdLeasePromise) return canvasNodeIdLeasePromise;
   canvasNodeIdLeasePromise = (async () => {
     try {
-      const response = await fetch(
+      const response = await apiFetch(
           `/api/projects/${projectId}/canvas/id-block`,
           {
             method: "POST",
@@ -441,7 +358,7 @@ function clientLog(event: string, details: unknown = {}) {
     timestamp: new Date().toISOString(),
   };
   console.info("[client-diagnostic]", payload);
-  void fetch("/api/client-logs", {
+  void apiFetch("/api/client-logs", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
@@ -953,7 +870,7 @@ async function cancelPendingProjectTasks() {
   });
   if (!confirmed) return;
   try {
-    const response = await fetch(
+    const response = await apiFetch(
         `/api/projects/${currentProjectId}/jobs/cancel-pending`,
         { method: "POST" },
       ),
@@ -992,7 +909,7 @@ async function cancelPendingProjectTasks() {
       }
     }
     try {
-      const userResponse = await fetch("/api/users/me");
+      const userResponse = await apiFetch("/api/users/me");
       if (userResponse.ok) {
         const previousAvailable = Math.max(
           0,
@@ -1699,7 +1616,7 @@ async function checkForAppUpdate() {
   )
     return;
   try {
-    const response = await fetch(`/?app-version=${Date.now()}`, {
+    const response = await apiFetch(`/?app-version=${Date.now()}`, {
       cache: "no-store",
       headers: { "cache-control": "no-cache" },
     });
@@ -1903,7 +1820,7 @@ function renderAuthenticatedUser() {
   } else disconnectNotificationStream();
 }
 async function ensureCurrentUserProject() {
-  const response = await fetch("/api/projects");
+  const response = await apiFetch("/api/projects");
   if (!response.ok) return false;
   const projects = (await response.json()) as Array<{ id: string }>;
   if (!projects.length) return false;
@@ -1979,7 +1896,7 @@ async function enterWorkspace() {
 async function loadShowcase() {
   showcaseLoaded = true;
   try {
-    const response = await fetch("/api/showcase");
+    const response = await apiFetch("/api/showcase");
     if (!response.ok) throw new Error(String(response.status));
     const assets = (await response.json()) as Array<{
       id: string;
@@ -2195,7 +2112,7 @@ homeLoginModal
     submit.disabled = true;
     error.textContent = "";
     try {
-      const response = await fetch(`/api/auth/${completedMode}`, {
+      const response = await apiFetch(`/api/auth/${completedMode}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -2248,7 +2165,7 @@ async function loadUserApiTokenState() {
       "[data-token-refresh]",
     )!;
   try {
-    const response = await fetch("/api/users/me/api-token"),
+    const response = await apiFetch("/api/users/me/api-token"),
       result = (await response.json()) as { exists?: boolean; hint?: string };
     if (!response.ok) throw new Error();
     if (!visibleUserApiToken)
@@ -2292,7 +2209,7 @@ async function editUserNickname() {
       showToast("昵称至少需要 2 个字符", "error");
       return;
     }
-    const response = await fetch("/api/users/me", {
+    const response = await apiFetch("/api/users/me", {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name: nextName }),
@@ -2344,7 +2261,7 @@ async function logoutToHome(message?: string) {
   canvasBaseline = null;
   canvasServerVersion = 0;
   canvasServerUpdatedAt = "";
-  await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+  await apiFetch("/api/auth/logout", { method: "POST" }).catch(() => {});
   authUser = null;
   visibleUserApiToken = "";
   nodes.splice(0);
@@ -2385,7 +2302,7 @@ workspaceUserMenu
     button.disabled = true;
     button.textContent = "生成中…";
     try {
-      const response = await fetch("/api/users/me/api-token", {
+      const response = await apiFetch("/api/users/me/api-token", {
           method: "POST",
         }),
         result = (await response.json()) as { token?: string; error?: string };
@@ -2536,7 +2453,7 @@ function renderNotifications() {
         if (!target || target.isRead) return;
         target.isRead = true;
         renderNotifications();
-        const response = await fetch(
+        const response = await apiFetch(
           `/api/notifications/${encodeURIComponent(id)}/read`,
           { method: "POST" },
         );
@@ -2552,7 +2469,7 @@ async function claimDailyNotificationPopup() {
   if (!authUser || autoPopupCheckedUserId === authUser.id) return;
   autoPopupCheckedUserId = authUser.id;
   try {
-    const response = await fetch("/api/notifications/claim-popup", {
+    const response = await apiFetch("/api/notifications/claim-popup", {
         method: "POST",
       }),
       result = (await response.json()) as { show?: boolean };
@@ -2569,7 +2486,7 @@ async function loadNotifications() {
     return;
   }
   try {
-    const response = await fetch("/api/notifications");
+    const response = await apiFetch("/api/notifications");
     if (!response.ok) throw new Error(String(response.status));
     appNotifications = (await response.json()) as AppNotification[];
     renderNotifications();
@@ -2628,7 +2545,7 @@ function startNotificationFallback() {
 async function verifyServiceReachability(stream: EventSource) {
   if (notificationStream !== stream || !authUser) return;
   try {
-    const response = await fetch(`/api/health?guide-check=${Date.now()}`, {
+    const response = await apiFetch(`/api/health?guide-check=${Date.now()}`, {
       cache: "no-store",
       signal: AbortSignal.timeout(4000),
     });
@@ -2778,7 +2695,7 @@ notificationModal
     const previous = appNotifications.map((item) => item.isRead);
     appNotifications.forEach((item) => (item.isRead = true));
     renderNotifications();
-    const response = await fetch("/api/notifications/read-all", {
+    const response = await apiFetch("/api/notifications/read-all", {
       method: "POST",
     });
     if (!response.ok) {
@@ -2814,7 +2731,7 @@ feedbackForm.addEventListener("submit", async (event) => {
   submit.disabled = true;
   output.textContent = "正在提交…";
   try {
-    const response = await fetch("/api/feedback", {
+    const response = await apiFetch("/api/feedback", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -2879,7 +2796,7 @@ labModal
     submit.disabled = true;
     output.textContent = "正在兑换…";
     try {
-      const response = await fetch("/api/users/me/credits/redeem", {
+      const response = await apiFetch("/api/users/me/credits/redeem", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ code }),
@@ -2929,7 +2846,7 @@ creditAdminForm.addEventListener("submit", async (event) => {
   submit.disabled = true;
   output.textContent = "正在生成…";
   try {
-    const response = await fetch("/api/admin/recharge-codes", {
+    const response = await apiFetch("/api/admin/recharge-codes", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(data),
@@ -2965,7 +2882,7 @@ function refreshNodeModelMenus() {
   draw();
 }
 async function loadCustomApiModels() {
-  const response = await fetch("/api/user-api-models");
+  const response = await apiFetch("/api/user-api-models");
   if (response.ok) {
     customApiModels = (await response.json()) as CustomApiModel[];
     renderCustomApiModels();
@@ -2988,7 +2905,7 @@ function renderCustomApiModels() {
         const id =
           button.closest<HTMLElement>("[data-custom-id]")!.dataset.customId!;
         if (
-          (await fetch(`/api/user-api-models/${id}`, { method: "DELETE" })).ok
+          (await apiFetch(`/api/user-api-models/${id}`, { method: "DELETE" })).ok
         ) {
           customApiModels = customApiModels.filter((item) => item.id !== id);
           renderCustomApiModels();
@@ -3018,7 +2935,7 @@ document
     const data = new FormData(customApiForm),
       output = customApiForm.querySelector<HTMLOutputElement>("output")!;
     output.textContent = "正在测试连接…";
-    const response = await fetch("/api/user-api-models/test", {
+    const response = await apiFetch("/api/user-api-models/test", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -3037,7 +2954,7 @@ customApiForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(customApiForm)),
     output = customApiForm.querySelector<HTMLOutputElement>("output")!;
-  const response = await fetch("/api/user-api-models", {
+  const response = await apiFetch("/api/user-api-models", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(data),
@@ -4617,130 +4534,6 @@ function syncDomNodes() {
     progressTrack.classList.toggle("visible", locked);
     progressTrack.classList.toggle("indeterminate", waitingWithoutProgress);
   }
-}
-
-type NodeToolAction =
-  | "info"
-  | "edit"
-  | "zoom-in"
-  | "zoom-out"
-  | "generate"
-  | "preview"
-  | "download"
-  | "clear-image"
-  | "delete";
-const nodeToolContent: Record<NodeToolAction, { label: string; icon: string }> =
-  {
-    info: {
-      label: "信息",
-      icon: '<circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path>',
-    },
-    edit: {
-      label: "编辑",
-      icon: '<path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path>',
-    },
-    "zoom-in": {
-      label: "放大",
-      icon: '<circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path><path d="M11 8v6"></path><path d="M8 11h6"></path>',
-    },
-    "zoom-out": {
-      label: "缩小",
-      icon: '<circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path><path d="M8 11h6"></path>',
-    },
-    generate: {
-      label: "生成",
-      icon: '<path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8Z"></path>',
-    },
-    preview: {
-      label: "预览",
-      icon: '<circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path>',
-    },
-    download: {
-      label: "下载",
-      icon: '<path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path>',
-    },
-    "clear-image": {
-      label: "清除图片",
-      icon: '<path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="m7 6 1 14h8l1-14"></path><path d="M10 10v6M14 10v6"></path>',
-    },
-    delete: {
-      label: "删除",
-      icon: '<path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path><path d="M3 6h18"></path><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>',
-    },
-  };
-function nodeToolActions(node: FlowNode) {
-  if (node.kind === "image")
-    return new Set<NodeToolAction>([
-      "info",
-      ...(node.mediaUrl
-        ? (["download", "clear-image"] as NodeToolAction[])
-        : []),
-      "delete",
-    ]);
-  if (node.kind === "audio")
-    return new Set<NodeToolAction>([
-      "info",
-      ...(node.mediaUrl ? (["download"] as NodeToolAction[]) : []),
-      "delete",
-    ]);
-  if (node.kind === "video" || node.kind === "voice" || node.kind === "tts")
-    return new Set<NodeToolAction>(["info", "delete"]);
-  if (node.kind === "prompt")
-    return new Set<NodeToolAction>([
-      "info",
-      "edit",
-      "zoom-in",
-      "zoom-out",
-      "delete",
-    ]);
-  return new Set<NodeToolAction>(["info", "edit", "delete"]);
-}
-function renderNodeToolbar(
-  element: HTMLElement,
-  node: FlowNode,
-  locked: boolean,
-) {
-  const visible = nodeToolActions(node);
-  element
-    .querySelectorAll<HTMLButtonElement>(".node-floating-tools [data-action]")
-    .forEach((button) => {
-      const action = button.dataset.action as NodeToolAction;
-      button.hidden = !visible.has(action);
-      button.disabled = action === "clear-image" && locked;
-      const content = nodeToolContent[action];
-      if (content && button.dataset.toolRendered !== "true") {
-        button.dataset.toolRendered = "true";
-        button.innerHTML = `<span class="node-tool-content"><svg viewBox="0 0 24 24" aria-hidden="true">${content.icon}</svg><span>${content.label}</span></span>`;
-        button.title = content.label;
-      }
-    });
-}
-function renderComposerSubmit(
-  button: HTMLButtonElement,
-  running: boolean,
-  disabled = false,
-) {
-  button.classList.add("node-composer-submit");
-  button.disabled = running || disabled;
-  button.classList.toggle("is-running", running);
-  button.title = running ? "任务正在生成" : "开始生成";
-  button.innerHTML = running
-    ? '<i aria-hidden="true"></i><b>生成中</b>'
-    : "<span>▶</span><b>生成</b>";
-}
-function bindNodeConfigPanel(panel: HTMLElement) {
-  panel.classList.add("node-config-panel");
-  panel.addEventListener("pointerdown", (event) => {
-    const target = event.target as Node;
-    panel
-      .querySelectorAll<HTMLDetailsElement>("details[open]")
-      .forEach((details) => {
-        if (!details.contains(target)) details.open = false;
-      });
-    event.stopPropagation();
-  });
-  for (const eventName of ["mousedown", "click", "wheel"] as const)
-    panel.addEventListener(eventName, (event) => event.stopPropagation());
 }
 
 function createDomNode(node: FlowNode) {
@@ -6490,7 +6283,7 @@ async function saveCanvas() {
   canvasSavePromise = (async () => {
     try {
       setSaveState("saving", "正在自动保存…");
-      const response = await fetch(
+      const response = await apiFetch(
           `/api/projects/${savingProjectId}/canvas/sync`,
           {
             method: "POST",
@@ -6601,7 +6394,7 @@ async function loadCanvas(keepLoadingStatus = false) {
     setWorkspaceBootStatus("正在读取画布与生成任务");
     activeJobPolls.forEach((timer) => window.clearInterval(timer));
     activeJobPolls.clear();
-    const response = await fetch(`/api/projects/${loadingProjectId}/canvas`);
+    const response = await apiFetch(`/api/projects/${loadingProjectId}/canvas`);
     if (
       loadingProjectId !== currentProjectId ||
       loadSequence !== canvasLoadSequence
@@ -6736,9 +6529,7 @@ async function loadCanvas(keepLoadingStatus = false) {
         )
         .map(async (node) => {
           try {
-            const jobResponse = await fetch(`/api/jobs/${node.jobId}`);
-            if (!jobResponse.ok) return;
-            const job = (await jobResponse.json()) as { prompt?: string };
+            const job = await fetchGenerationJob(node.jobId!);
             if (job.prompt) {
               node.generationPrompt = job.prompt;
               if (
@@ -6990,7 +6781,7 @@ async function generate(sourceOverride?: FlowNode) {
         .trim(),
       imagePrompt =
         source.kind === "image"
-          ? composeImageGenerationPrompt(
+          ? buildImageGenerationPrompt(
               source,
               legacyPrompt,
               effectiveInputMedia,
@@ -7025,28 +6816,16 @@ async function generate(sourceOverride?: FlowNode) {
               ([, value]) => value && value !== "auto",
             ),
           );
-    const response = await fetch("/api/jobs", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        projectId: currentProjectId,
-        nodeId: node.id,
-        kind: node.kind === "video" ? "video" : "image",
-        prompt: requestPrompt,
-        promptProfile: source.promptProfile || "manual",
-        model: node.model,
-        inputUrls,
-        parameters,
-      }),
+    const job = await submitGenerationJob({
+      projectId: currentProjectId,
+      nodeId: node.id,
+      kind: node.kind === "video" ? "video" : "image",
+      prompt: requestPrompt,
+      promptProfile: source.promptProfile || "manual",
+      model: node.model,
+      inputUrls,
+      parameters,
     });
-    const job = (await response.json().catch(() => ({}))) as {
-      id: string;
-      status: string;
-      progress: number;
-      creditsAvailable?: number;
-      error?: string;
-    };
-    if (!response.ok) throw new Error(job.error || "任务提交失败");
     if (authUser && typeof job.creditsAvailable === "number") {
       authUser = {
         ...authUser,
@@ -7093,38 +6872,6 @@ function connectedVoiceNode(ttsNode: FlowNode) {
     .filter((link) => link.to === ttsNode.id)
     .map((link) => nodes.find((node) => node.id === link.from))
     .find((node): node is FlowNode => node?.kind === "voice");
-}
-async function requestTts(
-  node: FlowNode,
-  voice: FlowNode,
-  text: string,
-  preview = false,
-) {
-  const response = await fetch("/api/tts/synthesize", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    signal: AbortSignal.timeout(185000),
-    body: JSON.stringify({
-      projectId: currentProjectId,
-      providerId: voice.voiceSettings?.providerId || "easyvoice-local",
-      text,
-      voiceId: voice.voiceSettings?.voiceId || "zh-CN-XiaoxiaoNeural",
-      speed: voice.voiceSettings?.defaultSpeed ?? 1,
-      pitch: voice.voiceSettings?.pitch ?? 0,
-      volume: voice.voiceSettings?.volume ?? 1,
-      format: preview ? "mp3" : node.ttsSettings?.format || "mp3",
-      language: voice.voiceSettings?.language || "zh-CN",
-      emotion: node.ttsSettings?.emotion || "中性",
-      preview,
-    }),
-  });
-  if (!response.ok) {
-    const result = (await response.json().catch(() => ({}))) as {
-      error?: string;
-    };
-    throw new Error(result.error || "语音生成失败");
-  }
-  return response;
 }
 async function previewVoice(voice: FlowNode) {
   const existing = activeVoicePreviews.get(voice.id);
@@ -7183,7 +6930,7 @@ async function generateTts(source: FlowNode) {
   updateEditor();
   draw();
   try {
-    const response = await requestTts(source, voice, source.body.trim()),
+    const response = await synthesizeTts(currentProjectId, source, voice, source.body.trim()),
       result = (await response.json()) as {
         assetUrl: string;
         duration?: number;
@@ -7278,122 +7025,6 @@ function compactPromptPart(value: string, limit: number) {
   }
   return (result || normalized.slice(0, limit)).replace(/[，、：:\s]+$/, "");
 }
-function composeImageGenerationPrompt(
-  node: FlowNode,
-  userDescription: string,
-  inputs: FlowNode[],
-) {
-  const profile = node.promptProfile || "manual",
-    description = normalizePromptText(userDescription),
-    profileGuide = (
-      {
-        character:
-          "生成目标：单一角色设定板，完整展示固定外观、服饰与身份特征；禁止剧情场景、表演动作、多人互动、海报构图和重复角色。",
-        prop: "生成目标：单一道具设定素材，清楚展示结构、材质、颜色与细节；禁止人物、人体、手持动作、剧情表演和复杂场景。",
-        scene:
-          "生成目标：无人场景基准素材，只展示环境、空间结构、UI界面与光影；禁止任何人物、人体、手部、角色剪影、人形主体、动物或车辆特写；除剧情明确要求的既有标识外，禁止文字、字幕、标牌和水印。",
-        storyboard:
-          "生成目标：完整剧情分镜画面，按连接素材合成人物、场景与必要道具，并准确表现本帧动作、构图和剧情状态；禁止设定板、三视图、素材拼贴、重复人物和无关元素。",
-        composite:
-          "生成目标：技术素材合成图，只合并当前连接的图1与图2；禁止执行最终分镜动作、禁止补充未连接人物或道具、禁止扩写剧情。",
-        manual: "",
-      } as const
-    )[profile],
-    referenceList = inputs
-      .slice(0, 4)
-      .map(
-        (item, index) =>
-          `图${index + 1}「${compactPromptPart(item.title, 18)}」`,
-      ),
-    references = referenceList.length
-      ? `参考素材：${referenceList.join("、")}。只执行描述中明确要求的新增、替换、动作、机位、景别或缩放变化；其余人物身份与数量、服装发型、道具外观和位置、场景结构、光照、画风均锁定，不得自行重设计或添加元素。`
-      : "",
-    characterCount = inputs.filter((item) =>
-      /^角色\s*\d*\s*·/.test(item.title),
-    ).length,
-    roleGuide = characterCount
-      ? "每张角色参考只对应一个人物实例，禁止复制参考角色充当路人。"
-      : "",
-    crowdGuide =
-      node.crowdConstraint === "required"
-        ? "本镜头明确需要匿名群众：必须把连接的群演背景参考合入最终画面，保留其人数范围、空间分布和行为；不得删除群众、不得替换成具名角色、不得复制角色脸或服装。"
-        : node.crowdConstraint === "forbidden"
-          ? "本镜头不含匿名群众，禁止添加路人、围观者或背景人群。"
-          : "",
-    sceneHardLock =
-      profile === "storyboard"
-        ? "场景硬锁：除本帧明确要求的环境变化外，墙体、房屋、门窗、道路及固定陈设的数量、位置、比例、朝向、材质和破损状态必须与连接场景一致；只改变指定人物动作和随身物品，禁止移动、增删、重建或替换建筑。镜头硬锁：未明确要求换机位、景别、焦段或构图时必须使用固定镜头，相机位置、取景范围、透视、轴线和画面边界不得改变。"
-        : "",
-    exclusionGuide =
-      profile === "storyboard"
-        ? `画面只出现描述和连接素材明确要求的主体；${node.crowdConstraint ? "" : "未要求匿名群众时禁止添加路人、围观者或背景人群；"}未要求时禁止人物或动物特写、车辆、可读文字、字幕、标识、水印及无关装饰。`
-        : profile === "composite"
-          ? "除连接素材已有内容外，禁止新增人物、动物、车辆、文字、字幕、标识或水印。"
-          : "",
-    sizeGuide = normalizePromptText(
-      imageSizeConstraint(node.imageSettings?.size),
-    ),
-    optionalDynamic = [
-      profileGuide,
-      exclusionGuide,
-      references,
-      node.formConstraint,
-      node.continuityConstraint,
-      roleGuide,
-      node.styleConstraint ? `风格：${node.styleConstraint}` : "",
-    ]
-      .map((value) => normalizePromptText(value))
-      .filter(Boolean),
-    // Structural continuity must never be the optional tail trimmed by the
-    // final prompt budget. Character action changes are otherwise prone to
-    // making image models casually rebuild walls, rooms and architecture.
-    mandatoryDynamic = [crowdGuide, sceneHardLock, sizeGuide].filter(Boolean),
-    dynamic = [...mandatoryDynamic, ...optionalDynamic].filter(Boolean),
-    limit =
-      profile === "character"
-        ? 520
-        : profile === "storyboard" || profile === "composite"
-          ? 320
-          : 260,
-    full = [description, ...dynamic].filter(Boolean).join("\n");
-  if (full.length <= limit)
-    return { prompt: full, corePrompt: dynamic.join("\n") };
-  const mandatoryCore = mandatoryDynamic.join("\n"),
-    separators =
-      (description ? 1 : 0) +
-      (mandatoryCore ? 1 : 0) +
-      (mandatoryCore && optionalDynamic.length ? 1 : 0),
-    remaining = Math.max(
-      0,
-      limit - description.length - mandatoryCore.length - separators,
-    ),
-    optionalCore = remaining
-      ? compactPromptPart(optionalDynamic.join("\n"), remaining)
-      : "",
-    corePrompt = [mandatoryCore, optionalCore].filter(Boolean).join("\n");
-  return {
-    prompt: [description, corePrompt].filter(Boolean).join("\n"),
-    corePrompt,
-  };
-}
-
-function imageSizeConstraint(size?: string) {
-  if (!size || size === "auto") return "";
-  const ratio = (
-    {
-      "1024x1024": "1:1",
-      "1344x1008": "4:3",
-      "1008x1344": "3:4",
-      "1536x1024": "3:2",
-      "1024x1536": "2:3",
-      "1536x864": "16:9",
-      "864x1536": "9:16",
-    } as Record<string, string>
-  )[size];
-  const dimensions = size.replace("x", "×");
-  return `输出要求：画面宽高比为 ${ratio ?? dimensions}，尺寸为 ${dimensions}，请直接按此比例构图，不要裁切。`;
-}
-
 function createRevisionNode(source: FlowNode) {
   const id = allocateCanvasNodeId();
   if (id === null) return null;
@@ -7519,15 +7150,7 @@ function pollJob(node: FlowNode) {
       return;
     }
     try {
-      const response = await fetch(`/api/jobs/${jobId}`);
-      if (!response.ok) throw new Error(`job status ${response.status}`);
-      const job = (await response.json()) as {
-        status: string;
-        progress: number;
-        result_url?: string;
-        result_metadata?: string;
-        error?: string;
-      };
+      const job = await fetchGenerationJob(jobId);
       currentNode = nodes.find((item) => item.id === nodeId);
       if (!currentNode?.jobId || currentNode.jobId !== jobId) {
         window.clearInterval(timer);
@@ -7610,7 +7233,7 @@ function pollJob(node: FlowNode) {
           );
         }
         try {
-          const userResponse = await fetch("/api/users/me");
+          const userResponse = await apiFetch("/api/users/me");
           if (userResponse.ok) {
             const previousAvailable = Math.max(
               0,
@@ -8535,147 +8158,6 @@ appearanceButton.addEventListener("click", () => {
     refreshAppearanceButton();
   }, 260);
 });
-type PromptAgentStep = {
-  title?: string;
-  kind: "image" | "video" | "voice" | "tts";
-  prompt: string;
-  referenceIndexes?: number[];
-  dependsOn?: number[];
-  duration?: number;
-  aspectRatio?: string;
-  stage?:
-    "character" | "voice" | "prop" | "scene" | "storyboard" | "tts" | "video";
-  promptProfile?:
-    "character" | "prop" | "scene" | "storyboard" | "composite" | "manual";
-  styleConstraint?: string;
-  formConstraint?: string;
-  continuityConstraint?: string;
-  crowdConstraint?: "required" | "forbidden";
-  autoGenerate?: boolean;
-  roleName?: string;
-  voiceProfile?: string;
-  voiceId?: string;
-  voiceSpeed?: number;
-  voicePitch?: number;
-  voiceVolume?: number;
-};
-type PromptAgentResult = {
-  model: string;
-  kind: "image" | "video";
-  subject: string;
-  scene: string;
-  composition: string;
-  lighting: string;
-  style: string;
-  motion: string;
-  negativePrompt: string;
-  finalPrompt: string;
-  action?: "update_current" | "create_child" | "create_new";
-  targetType?: "image" | "video";
-  summary?: string;
-  shouldGenerate?: boolean;
-  layout?: "workflow" | "storyboard" | "comic-workflow";
-  steps?: PromptAgentStep[];
-  voiceConfig?: {
-    roleName?: string;
-    voiceId?: string;
-    tone?: string;
-    speed?: number;
-    pitch?: number;
-    volume?: number;
-  };
-};
-type ComicCharacterForm = {
-  name: string;
-  description: string;
-  imagePrompt?: string;
-};
-type ComicFrame = {
-  title: string;
-  imagePrompt: string;
-  keyframe?: "start" | "middle" | "end";
-  inherit?: string;
-  change?: string;
-  lock?: string;
-  characterIndexes?: number[];
-  characterForms?: Array<{ characterIndex: number; form: string }>;
-  propIndexes?: number[];
-};
-type ComicShot = {
-  number: number;
-  title: string;
-  duration: number;
-  storyBeat?: string;
-  action?: string;
-  scene: string;
-  sceneId?: string;
-  sceneView?: "main" | "reverse" | "left" | "right" | "top";
-  scenePrompt?: string;
-  characterIndexes?: number[];
-  characterForms?: Array<{ characterIndex: number; form: string }>;
-  propIndexes?: number[];
-  hasAnonymousCrowd?: boolean;
-  crowdPrompt?: string;
-  dialogue: string;
-  frames?: ComicFrame[];
-  imagePrompt: string;
-  videoPrompt: string;
-  referenceIndexes: number[];
-  transition?: string;
-  continuity?: string;
-};
-type ComicScene = {
-  sceneId: string;
-  baseSceneId?: string;
-  variantType?: "base" | "area" | "state" | "time";
-  name: string;
-  description: string;
-  imagePrompt?: string;
-  propIndexes?: number[];
-  environmentAnchors?: string[];
-  views?: Array<{
-    id: "main" | "reverse" | "left" | "right" | "top";
-    name: string;
-    imagePrompt?: string;
-  }>;
-};
-type ComicPlan = {
-  title: string;
-  logline: string;
-  tone: string;
-  duration: string;
-  aspectRatio: string;
-  characters: Array<{
-    name: string;
-    description: string;
-    voiceProfile?: string;
-    visualAsset?: boolean;
-    imagePrompt?: string;
-    forms?: ComicCharacterForm[];
-  }>;
-  props?: Array<{ name: string; description: string; imagePrompt?: string }>;
-  scenes?: ComicScene[];
-  outline: Array<{ act: string; content: string }>;
-  shots: ComicShot[];
-  changeSummary?: string;
-  model?: string;
-};
-type ComicBrief = {
-  title?: string;
-  premise?: string;
-  genre?: string;
-  audience?: string;
-  duration?: string;
-  aspectRatio?: string;
-  visualStyle?: string;
-  characters?: string;
-  conflict?: string;
-  ending?: string;
-  dialogue?: string;
-  constraints?: string[];
-  confirmed?: string[];
-  openQuestions?: string[];
-};
 const promptAgentTrigger = document.querySelector<HTMLButtonElement>(
     "#prompt-agent-trigger",
   )!,
@@ -8687,7 +8169,6 @@ const promptAgentComicBusyProxy = document.createElement("button");
 promptAgentComicBusyProxy.className = "agent-comic-entry";
 promptAgentComicBusyProxy.hidden = true;
 promptAgentPanel.append(promptAgentComicBusyProxy);
-type PromptAgentMode = "create" | "general" | "agnes" | "voice";
 let promptAgentMode =
   (localStorage.getItem("flow-prompt-agent-mode") as PromptAgentMode) ||
   "create";
@@ -9826,7 +9307,7 @@ async function restoreComicSession(force = false) {
   comicRestoreKey = key;
   try {
     const trackedSessionId = comicSubmitting ? comicSessionId : "",
-      response = await fetch(
+      response = await apiFetch(
         `/api/agents/comic/session?projectId=${encodeURIComponent(currentProjectId)}${trackedSessionId ? `&sessionId=${encodeURIComponent(trackedSessionId)}` : ""}`,
       );
     if (response.status === 204) {
@@ -10059,58 +9540,16 @@ async function requestComicDialogue(message: string) {
     });
     const replyText = assistant.querySelector<HTMLElement>("p")!,
       replyTitle = assistant.querySelector<HTMLElement>("b")!,
-      response = await fetch("/api/agents/comic/chat", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
+      result = await streamComicDialogue(
+        {
           projectId: currentProjectId,
           sessionId: comicSessionId || undefined,
           message: message.trim(),
           context,
           plan: comicSessionId ? undefined : comicPlan,
           model: "gpt-5.5",
-        }),
-      });
-    if (!response.ok) {
-      const failure = (await response.json().catch(() => ({}))) as {
-        error?: string;
-      };
-      throw new Error(failure.error || "漫剧对话失败");
-    }
-    if (!response.body) throw new Error("浏览器没有收到漫剧对话流");
-    const reader = response.body.getReader(),
-      decoder = new TextDecoder();
-    let buffer = "",
-      result: {
-        sessionId?: string;
-        reply?: string;
-        ready?: boolean;
-        brief?: ComicBrief;
-        pendingRevision?: string;
-        hasPlan?: boolean;
-        error?: string;
-      } | null = null;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        const event = JSON.parse(line) as {
-          type: string;
-          text?: string;
-          message?: string;
-          sessionId?: string;
-          phase?: string;
-          reply?: string;
-          ready?: boolean;
-          brief?: ComicBrief;
-          pendingRevision?: string;
-          hasPlan?: boolean;
-          error?: string;
-        };
+        },
+        (event) => {
         if (event.type === "start") {
           comicSessionId = String(event.sessionId || comicSessionId);
           status.textContent = "正在理解并回应…";
@@ -10121,12 +9560,8 @@ async function requestComicDialogue(message: string) {
           replyText.textContent = "";
           status.textContent = event.message || "正在切换备用线路…";
         } else if (event.type === "reset") replyText.textContent = "";
-        else if (event.type === "error")
-          throw new Error(event.error || "漫剧对话失败");
-        else if (event.type === "result") result = event;
-      }
-    }
-    if (!result) throw new Error("漫剧对话没有完整结束");
+        },
+      );
     comicSessionId = String(result.sessionId || comicSessionId);
     comicBrief = result.brief || comicBrief;
     comicReady = Boolean(result.ready);
@@ -10240,7 +9675,7 @@ async function requestComicPlan() {
     );
     for (let attempt = 1; attempt <= 1 && !payload; attempt++) {
       try {
-        const response = await fetch("/api/agents/comic", {
+        const response = await apiFetch("/api/agents/comic", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -10361,12 +9796,6 @@ async function requestComicPlan() {
     }
   }
 }
-function clipComicPrompt(value: string, maxLength: number) {
-  const text = value.replace(/\s+/g, " ").trim();
-  return text.length <= maxLength
-    ? text
-    : `${text.slice(0, Math.max(1, maxLength - 1)).replace(/[，、；：,.\s]+$/, "")}…`;
-}
 function scenePromptWithoutCharacters(value: string) {
   let result = value;
   for (const character of comicPlan?.characters || []) {
@@ -10384,102 +9813,6 @@ function scenePromptWithoutCharacters(value: string) {
     )
     .replace(/[，、；：]{2,}/g, "，")
     .replace(/^[，、；：\s]+|[，、；：\s]+$/g, "");
-}
-function inferAnonymousCrowd(value: string) {
-  const text = value.replace(
-    /(?:无人知道|无人知晓|鲜为人知|人尽皆知|不为人知|杳无人烟|空无一人|没有人|无人物|禁止[^。；]{0,12}(?:人群|群众|路人|行人))/g,
-    "",
-  );
-  return /(?:匿名|背景|远处|周围|成群|一群|多名|数名|若干|拥挤|熙攘)[^。；]{0,10}(?:路人|群众|人群|行人|围观者|学生|玩家|观众|乘客|村民|市民)|(?:路人|群众|人群|行人|围观者|学生们|玩家们|观众|乘客|村民|市民)[^。；]{0,10}(?:聚集|围观|经过|站立|散布|交谈|欢呼|奔跑)/.test(
-    text,
-  );
-}
-function composeComicStoryboardPrompt(prompt: string, inputs: FlowNode[]) {
-  const references = inputs
-    .slice(0, 4)
-    .map(
-      (source, index) =>
-        `图${index + 1}「${clipComicPrompt(source.title, 14)}」`,
-    )
-    .join("、");
-  const guide = references
-    ? `参考${references}；保持人物身份、服装、道具和场景一致。`
-    : "";
-  const separator = guide ? "\n" : "",
-    available = Math.max(80, 220 - guide.length - separator.length);
-  return `${clipComicPrompt(prompt, available)}${separator}${guide}`;
-}
-function fitVideoDialogue(value: string, durationValue: number) {
-  const duration = Math.max(3, Math.min(8, Number(durationValue) || 5)),
-    limit = Math.round(duration * 10),
-    lines = value
-      .split(/\n+/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-  let result = "";
-  for (const line of lines) {
-    const next = result ? `${result}；${line}` : line;
-    if (next.length > limit) break;
-    result = next;
-  }
-  return result || compactPromptPart(value, limit);
-}
-function comicSpeechSegments(value: string, plan: ComicPlan) {
-  const roles = [
-      "旁白",
-      "系统播报",
-      "系统声音",
-      "系统",
-      ...plan.characters.map((character) => character.name),
-    ].filter((role, index, list) => role && list.indexOf(role) === index),
-    escaped = roles
-      .map((role) => role.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-      .join("|"),
-    matcher = new RegExp(
-      `(?:^|[。；;\\n])\\s*(${escaped})\\s*[：:]\\s*([\\s\\S]*?)(?=(?:[。；;\\n]\\s*(?:${escaped})\\s*[：:])|$)`,
-      "g",
-    ),
-    segments: Array<{ roleName: string; text: string }> = [];
-  let match: RegExpExecArray | null;
-  while ((match = matcher.exec(value))) {
-    const roleName = /^系统/.test(match[1]) ? "系统播报" : match[1],
-      text = match[2].trim().replace(/[；;]+$/, "");
-    if (text) segments.push({ roleName, text });
-  }
-  return segments;
-}
-function comicVoiceConfig(roleName: string, profile: string, description = "") {
-  const evidence = `${roleName} ${profile} ${description}`,
-    female = /(?:女|少女|女性|姐姐|母亲|奶奶|清脆女声|温柔女声)/.test(evidence),
-    young = /(?:少年|少女|儿童|孩子|年轻|学生|十[二三四五六七八九]岁)/.test(
-      evidence,
-    ),
-    intense = /(?:激昂|强势|愤怒|暴躁|反派|威严|战斗|洪亮)/.test(evidence),
-    calm = /(?:低沉|稳重|沉稳|冷静|克制|旁白|老者|老人)/.test(evidence),
-    fast = /(?:语速快|急促|活泼|轻快)/.test(evidence),
-    slow = /(?:语速慢|缓慢|从容|低沉|沉稳)/.test(evidence);
-  const voiceId = female
-      ? "zh-CN-XiaoxiaoNeural"
-      : young
-        ? "zh-CN-YunxiaNeural"
-        : intense
-          ? "zh-CN-YunjianNeural"
-          : "zh-CN-YunyangNeural",
-    defaultSpeed = fast
-      ? 1.08
-      : slow
-        ? 0.92
-        : roleName === "系统播报"
-          ? 0.95
-          : 1,
-    pitch = female ? (young ? 4 : 2) : young ? 3 : calm ? -3 : intense ? -1 : 0,
-    volume = intense ? 1.08 : roleName === "旁白" ? 1.03 : 1;
-  return {
-    voiceId,
-    voiceSpeed: defaultSpeed,
-    voicePitch: pitch,
-    voiceVolume: volume,
-  };
 }
 function applyComicToCanvas() {
   if (!comicPlan) return;
@@ -10553,7 +9886,7 @@ function applyComicToCanvas() {
       if (!characterSteps[index]) return;
       const voiceProfile =
           character.voiceProfile || "自然中文普通话，声线符合年龄与性格",
-        voiceConfig = comicVoiceConfig(
+        voiceConfig = inferVoiceConfig(
           character.name,
           voiceProfile,
           character.description,
@@ -10579,7 +9912,7 @@ function applyComicToCanvas() {
       )
     ) {
       const voiceProfile = "稳定、沉浸、低沉、吐字清楚、语速偏慢",
-        voiceConfig = comicVoiceConfig("旁白", voiceProfile);
+        voiceConfig = inferVoiceConfig("旁白", voiceProfile);
       steps.push({
         title: "语音配置 · 旁白",
         kind: "voice",
@@ -10601,7 +9934,7 @@ function applyComicToCanvas() {
       )
     ) {
       const voiceProfile = "清晰、克制、中性、机械感轻微",
-        voiceConfig = comicVoiceConfig("系统播报", voiceProfile);
+        voiceConfig = inferVoiceConfig("系统播报", voiceProfile);
       steps.push({
         title: "语音配置 · 系统播报",
         kind: "voice",
@@ -10650,7 +9983,7 @@ function applyComicToCanvas() {
           ? [composite, unique[cursor - 1]]
           : unique.slice(0, 2);
         const sourceTitles = dependencies.map((stepIndex) =>
-            clipComicPrompt(
+            clipVideoPrompt(
               steps[stepIndex - 1]?.title || `素材 ${stepIndex}`,
               24,
             ),
@@ -10703,7 +10036,7 @@ function applyComicToCanvas() {
           : parentStep
           ? `严格基于连接的父场景生成${sceneAsset?.variantType === "area" ? "同一地点的局部区域" : sceneAsset?.variantType === "time" ? "同一空间的时段变体" : "同一空间的状态变体"}；继承建筑语言、标志物、材质、色彩、空间方向和主光，禁止重新设计。`
           : "",
-        scenePrompt = `无人物场景基准图，禁止出现任何人物、人体、手部、角色剪影或人形主体；仅生成可供后续分镜合成的环境。${variantGuide}${clipComicPrompt(rawScenePrompt.replace(/^(?:无人物|空镜头?|纯场景)[，,：:\s]*/, "").trim(), parentStep ? 80 : 105)}${anchors ? `；固定空间锚点：${clipComicPrompt(anchors, 55)}` : ""}`,
+        scenePrompt = `无人物场景基准图，禁止出现任何人物、人体、手部、角色剪影或人形主体；仅生成可供后续分镜合成的环境。${variantGuide}${clipVideoPrompt(rawScenePrompt.replace(/^(?:无人物|空镜头?|纯场景)[，,：:\s]*/, "").trim(), parentStep ? 80 : 105)}${anchors ? `；固定空间锚点：${clipVideoPrompt(anchors, 55)}` : ""}`,
         dependencies = prepareTwoReferenceInputs(
           [mainViewStep || parentStep, ...(requestedView === "main" ? scenePropIndexes.map((value) => propSteps[value - 1]) : [])].filter(Boolean),
           `场景 ${sceneAsset?.name || fallbackShot?.title || sceneKey}`,
@@ -10804,7 +10137,7 @@ function applyComicToCanvas() {
           steps.push({
             title: `群演基图 · ${sceneAsset?.name || shot.title}`,
             kind: "image",
-            prompt: `当前场景的可复用匿名群演基图，只生成不具名人物：${clipComicPrompt(shot.crowdPrompt || shot.scene, 100)}。保持连接场景的建筑、布局、机位轴线和光线；所有个体脸型、发型、年龄、体型、服装颜色与动作明显不同，自然错落分布；禁止出现或复制任何具名角色，禁止多人共用同一张脸。`,
+            prompt: `当前场景的可复用匿名群演基图，只生成不具名人物：${clipVideoPrompt(shot.crowdPrompt || shot.scene, 100)}。保持连接场景的建筑、布局、机位轴线和光线；所有个体脸型、发型、年龄、体型、服装颜色与动作明显不同，自然错落分布；禁止出现或复制任何具名角色，禁止多人共用同一张脸。`,
             referenceIndexes: [],
             dependsOn: [sceneStep],
             aspectRatio: comicPlan!.aspectRatio,
@@ -10912,7 +10245,7 @@ function applyComicToCanvas() {
             ? "匿名人群只能沿用“群演背景”参考，每个具名角色仅出现一次；禁止用角色 Base 填充路人、复制脸或复制服装。"
             : "本镜头不含匿名群众，禁止自行添加路人、围观者或背景人群。",
           stateLock = frame.lock ? `锁定不变：${frame.lock}` : "",
-          framePrompt = clipComicPrompt(
+          framePrompt = clipVideoPrompt(
             frame.imagePrompt || shot.imagePrompt,
             100,
           ),
@@ -10954,7 +10287,7 @@ function applyComicToCanvas() {
           dependsOn: frameDependencies,
           aspectRatio: comicPlan!.aspectRatio,
           stage: "storyboard",
-          styleConstraint: `${styleType}，${clipComicPrompt(visualStyle.replace(/^风格类型：[^。]+。?/, "").trim(), 55)}`,
+          styleConstraint: `${styleType}，${clipVideoPrompt(visualStyle.replace(/^风格类型：[^。]+。?/, "").trim(), 55)}`,
           formConstraint: [formLock, crowdLock, stateLock]
             .filter(Boolean)
             .join("；"),
@@ -11016,7 +10349,7 @@ function applyComicToCanvas() {
         autoGenerate: false,
       });
       if (hasSpeech) {
-        for (const segment of comicSpeechSegments(fittedDialogue, comicPlan!)) {
+        for (const segment of speechSegments(fittedDialogue, comicPlan!.characters.map((character) => character.name))) {
           const characterIndex = comicPlan!.characters.findIndex(
               (character) => character.name === segment.roleName,
             ),
@@ -11679,7 +11012,7 @@ promptAgentPanel
     status.textContent = "正在理解角色并匹配中文音色…";
     void (async () => {
       try {
-        const response = await fetch("/api/agents/prompt", {
+        const response = await apiFetch("/api/agents/prompt", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
@@ -11788,7 +11121,7 @@ promptAgentPanel
     article.hidden = true;
     promptAgentPanel.classList.remove("prompt-result-open");
     try {
-      const response = await fetch("/api/agents/prompt", {
+      const response = await apiFetch("/api/agents/prompt", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -11970,7 +11303,7 @@ document.querySelector("#dock-clear")!.addEventListener("click", async () => {
   );
   if (cancelJobs) {
     try {
-      const response = await fetch(
+      const response = await apiFetch(
           `/api/projects/${currentProjectId}/jobs/cancel-active`,
           { method: "POST" },
         ),
@@ -11999,7 +11332,7 @@ document.querySelector("#dock-clear")!.addEventListener("click", async () => {
   canvasSaveAbort?.abort();
   await canvasSavePromise?.catch(() => {});
   const requestedVersion = canvasServerVersion + 1,
-    response = await fetch(`/api/projects/${currentProjectId}/canvas/clear`, {
+    response = await apiFetch(`/api/projects/${currentProjectId}/canvas/clear`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ version: requestedVersion, preserveLabels: true }),
@@ -12126,18 +11459,6 @@ let selectedAsset: {
   kind: "image" | "video";
   isPublic: boolean;
 } | null = null;
-type LibraryAsset = {
-  id: string;
-  projectId: string;
-  projectName: string;
-  name: string;
-  mimeType: string;
-  size: number;
-  createdAt: string;
-  url: string;
-  thumbnailUrl?: string;
-  isPublic: boolean;
-};
 let libraryAssets: LibraryAsset[] = [],
   assetView: "grid" | "list" = "grid",
   assetPage = 0;
@@ -12188,24 +11509,13 @@ function clearAssetTouchHold() {
   assetTouchHold = null;
 }
 function visibleLibraryAssets() {
-  const query = assetSearch.value.trim().toLocaleLowerCase(),
-    scope = assetProjectFilter.value,
-    type = imageNodeAssetTargetId ? "image" : assetTypeFilter.value,
-    sort = assetSort.value;
-  return libraryAssets
-    .filter(
-      (asset) =>
-        (scope === "all" || asset.projectId === currentProjectId) &&
-        (type === "all" || asset.mimeType.startsWith(`${type}/`)) &&
-        asset.name.toLocaleLowerCase().includes(query),
-    )
-    .sort((a, b) =>
-      sort === "name"
-        ? a.name.localeCompare(b.name, "zh-CN")
-        : sort === "oldest"
-          ? Date.parse(a.createdAt) - Date.parse(b.createdAt)
-          : Date.parse(b.createdAt) - Date.parse(a.createdAt),
-    );
+  return filterAssets(libraryAssets, {
+    query: assetSearch.value,
+    scope: assetProjectFilter.value,
+    type: imageNodeAssetTargetId ? "image" : assetTypeFilter.value,
+    sort: assetSort.value,
+    currentProjectId,
+  });
 }
 function playLibraryAudio(asset: LibraryAsset) {
   if (libraryAudio && libraryAudioAssetId === asset.id) {
@@ -12393,7 +11703,7 @@ document
     if (!confirmed) return;
     const results = await Promise.all(
       [...selectedAssetIds].map((id) =>
-        fetch(`/api/assets/${id}`, { method: "DELETE" }),
+        apiFetch(`/api/assets/${id}`, { method: "DELETE" }),
       ),
     );
     if (results.some((response) => !response.ok))
@@ -12408,7 +11718,7 @@ document
     for (const asset of libraryAssets.filter((item) =>
       selectedAssetIds.has(item.id),
     )) {
-      const response = await fetch(asset.url);
+      const response = await apiFetch(asset.url);
       if (!response.ok) continue;
       const link = document.createElement("a");
       link.href = URL.createObjectURL(await response.blob());
@@ -12417,16 +11727,6 @@ document
       window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
     }
   });
-type ProjectSummary = {
-  id: string;
-  name: string;
-  createdAt: string;
-  updatedAt: string;
-  lastOpenedAt: string;
-  assetCount: number;
-  nodeCount: number;
-  previewUrl?: string | null;
-};
 let projectSummaries: ProjectSummary[] = [];
 const projectSearch =
     document.querySelector<HTMLInputElement>("#project-search")!,
@@ -12441,17 +11741,12 @@ document.querySelector("#new-project")!.addEventListener("click", async () => {
     confirm: "创建项目",
   });
   if (!name) return;
-  const response = await fetch("/api/projects", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
-  if (!response.ok) {
+  try {
+    const project = await createProject(String(name));
+    await switchProject(project.id);
+  } catch {
     showToast("项目创建失败", "error");
-    return;
   }
-  const project = (await response.json()) as { id: string };
-  await switchProject(project.id);
 });
 projectSearch.addEventListener("input", renderProjects);
 projectSort.addEventListener("change", renderProjects);
@@ -12477,7 +11772,7 @@ async function uploadImageFiles(
         data: await fileBase64(file),
       })),
     );
-    const response = await fetch(`/api/projects/${currentProjectId}/assets`, {
+    const response = await apiFetch(`/api/projects/${currentProjectId}/assets`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ files: payload }),
@@ -12539,18 +11834,15 @@ window.addEventListener("paste", (event) => {
   );
 });
 async function loadProjects() {
-  const response = await fetch("/api/projects");
-  if (!response.ok) {
-    showToast("项目列表加载失败", "error");
-    return;
-  }
-  projectSummaries = ((await response.json()) as ProjectSummary[]).map(
-    (project) => ({
+  try {
+    projectSummaries = (await fetchProjects()).map((project) => ({
       ...project,
       updatedAt: project.lastOpenedAt || project.updatedAt,
-    }),
-  );
-  renderProjects();
+    }));
+    renderProjects();
+  } catch {
+    showToast("项目列表加载失败", "error");
+  }
 }
 function renderProjects() {
   const list = document.querySelector<HTMLElement>("#project-list")!,
@@ -12603,7 +11895,7 @@ async function handleProjectAction(action: string, project: ProjectSummary) {
       confirm: "保存名称",
     });
     if (!name || name === project.name) return;
-    const response = await fetch(`/api/projects/${project.id}`, {
+    const response = await apiFetch(`/api/projects/${project.id}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ name }),
@@ -12620,7 +11912,7 @@ async function handleProjectAction(action: string, project: ProjectSummary) {
       confirm: "创建副本",
     });
     if (!confirmed) return;
-    const response = await fetch(`/api/projects/${project.id}/duplicate`, {
+    const response = await apiFetch(`/api/projects/${project.id}/duplicate`, {
       method: "POST",
     });
     if (!response.ok) {
@@ -12636,7 +11928,7 @@ async function handleProjectAction(action: string, project: ProjectSummary) {
       danger: true,
     });
     if (!confirmed) return;
-    const response = await fetch(`/api/projects/${project.id}`, {
+    const response = await apiFetch(`/api/projects/${project.id}`, {
       method: "DELETE",
     });
     if (!response.ok) {
@@ -12736,10 +12028,12 @@ async function switchProject(projectId: string) {
   closeWorkspacePanels();
 }
 async function loadAssets(render = true) {
-  const response = await fetch("/api/assets");
-  if (!response.ok) return;
-  libraryAssets = (await response.json()) as LibraryAsset[];
-  if (render) renderAssets();
+  try {
+    libraryAssets = await fetchAssets();
+    if (render) renderAssets();
+  } catch {
+    /* 面板保留现有资产，等待下次同步 */
+  }
 }
 function renderAssets() {
   const assets = visibleLibraryAssets();
@@ -12826,11 +12120,6 @@ function renderAssets() {
   document.querySelector<HTMLButtonElement>("#asset-bulk-download")!.disabled =
     disabled;
 }
-function formatFileSize(size: number) {
-  return size >= 1024 * 1024
-    ? `${(size / 1024 / 1024).toFixed(1)} MB`
-    : `${Math.max(1, Math.round(size / 1024))} KB`;
-}
 type SquareAsset = {
   id: string;
   name: string;
@@ -12847,7 +12136,7 @@ const squareGrid = document.querySelector<HTMLElement>("#square-grid")!,
 async function loadSquare() {
   squareGrid.classList.add("loading");
   try {
-    const response = await fetch("/api/showcase");
+    const response = await apiFetch("/api/showcase");
     if (!response.ok) throw new Error("load failed");
     squareAssets = (await response.json()) as SquareAsset[];
     squarePage = 0;
@@ -12928,7 +12217,7 @@ function openAssetPreview(
 async function downloadNodeImage(node: FlowNode) {
   if (!node.mediaUrl) return;
   try {
-    const response = await fetch(node.mediaUrl);
+    const response = await apiFetch(node.mediaUrl);
     if (!response.ok) throw new Error(`原图读取失败（${response.status}）`);
     const blob = await response.blob();
     const mime = blob.type.split(";")[0].toLowerCase();
@@ -13006,7 +12295,7 @@ document
   .addEventListener("click", async () => {
     if (!selectedAsset) return;
     const next = !selectedAsset.isPublic;
-    const response = await fetch(`/api/assets/${selectedAsset.id}/visibility`, {
+    const response = await apiFetch(`/api/assets/${selectedAsset.id}/visibility`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ isPublic: next }),
@@ -13029,7 +12318,7 @@ document
       !window.confirm(`确定删除“${selectedAsset.name}”吗？`)
     )
       return;
-    const response = await fetch(`/api/assets/${selectedAsset.id}`, {
+    const response = await apiFetch(`/api/assets/${selectedAsset.id}`, {
       method: "DELETE",
     });
     if (!response.ok) {
@@ -13138,7 +12427,7 @@ function refreshLocalImageAvailabilityUI() {
 }
 async function loadGenerationCapabilities(redraw = false) {
   try {
-    const response = await fetch("/api/generation/capabilities", {
+    const response = await apiFetch("/api/generation/capabilities", {
       cache: "no-store",
     });
     if (response.ok) {
@@ -13160,7 +12449,7 @@ async function loadGenerationCapabilities(redraw = false) {
 async function bootstrapApplication() {
   setWorkspaceBootStatus("正在检测登录状态");
   try {
-    const response = await fetch("/api/users/me");
+    const response = await apiFetch("/api/users/me");
     if (response.ok) authUser = (await response.json()) as AuthUser;
   } catch {
     authUser = null;
@@ -13234,7 +12523,7 @@ document.addEventListener("visibilitychange", () => {
 window.setInterval(async () => {
   if (!authUser || !activityHeartbeatDue) return;
   activityHeartbeatDue = false;
-  const response = await fetch("/api/auth/activity", { method: "POST" }).catch(
+  const response = await apiFetch("/api/auth/activity", { method: "POST" }).catch(
     () => null,
   );
   if (response?.status === 401) void logoutToHome("登录状态已过期，请重新登录");

@@ -1,5 +1,27 @@
 import type { FlowNode } from "./node-types";
 
+export function normalizePromptText(prompt?: string) {
+  let value = prompt?.trim() || "";
+  if (!value) return "";
+  const blocks = value
+    .split(/\n{2,}/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (
+    blocks.length % 2 === 0 &&
+    blocks.slice(0, blocks.length / 2).join("\n\n") ===
+      blocks.slice(blocks.length / 2).join("\n\n")
+  )
+    value = blocks.slice(0, blocks.length / 2).join("\n\n");
+  const lines = value.split("\n"),
+    cleaned: string[] = [];
+  for (const line of lines) {
+    if (line.trim() && line.trim() === cleaned.at(-1)?.trim()) continue;
+    cleaned.push(line);
+  }
+  return cleaned.join("\n").trim();
+}
+
 type PromptEditCallbacks = {
   onInput(): void;
   onFinish(): void;
