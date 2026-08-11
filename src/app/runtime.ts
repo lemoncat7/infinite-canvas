@@ -123,6 +123,7 @@ import {
   CustomApiController,
   type CustomApiModel,
 } from "../ui/custom-api-controller";
+import { PromptAgentControls } from "../ui/prompt-agent-controls";
 import { ComicSidePanelController } from "../ui/comic-side-panel";
 import { ComicStudioView } from "../ui/comic-studio";
 import { ComicLabelController } from "../ui/comic-labels";
@@ -2940,7 +2941,7 @@ function createDomNode(node: FlowNode) {
       domPointer.drag = drag;
     },
     isAgentSelecting: () => promptAgentSelecting,
-    isAgentCreateMode: () => promptAgentMode === "create",
+    isAgentCreateMode: () => promptAgentControls.mode === "create",
     isReleaseSuppressed: domPointer.isReleaseSuppressed,
     selectNode: (id) => {
       selection.selectedId = id;
@@ -4263,126 +4264,22 @@ const promptAgentComicBusyProxy = document.createElement("button");
 promptAgentComicBusyProxy.className = "agent-comic-entry";
 promptAgentComicBusyProxy.hidden = true;
 promptAgentPanel.append(promptAgentComicBusyProxy);
-let promptAgentMode =
-  (localStorage.getItem("flow-prompt-agent-mode") as PromptAgentMode) ||
-  "create";
-if (!["create", "general", "agnes", "voice"].includes(promptAgentMode))
-  promptAgentMode = "create";
-function setPromptAgentMode(mode: PromptAgentMode) {
-  promptAgentMode = mode;
-  localStorage.setItem("flow-prompt-agent-mode", mode);
-  promptAgentPanel.querySelector<HTMLElement>(
-    "[data-agent-mode-trigger] b",
-  )!.textContent = "模式";
-  promptAgentPanel
-    .querySelectorAll<HTMLButtonElement>("[data-agent-mode]")
-    .forEach((button) =>
-      button.classList.toggle("active", button.dataset.agentMode === mode),
-    );
-  promptAgentPanel
-    .querySelector<HTMLElement>(".agent-mode")!
-    .classList.remove("open");
-  promptAgentPanel
-    .querySelector<HTMLElement>(".agent-prompt-submenu")!
-    .classList.remove("open");
-  promptAgentPanel
-    .querySelector<HTMLButtonElement>("[data-agent-mode-trigger]")!
-    .setAttribute("aria-expanded", "false");
-  promptAgentPanel.classList.remove("prompt-result-open");
-  promptAgentPanel.querySelector<HTMLElement>("article")!.hidden = true;
-  const promptOnly = mode === "general" || mode === "agnes",
-    field = promptAgentPanel.querySelector<HTMLTextAreaElement>("textarea")!,
-    submit =
-      promptAgentPanel.querySelector<HTMLButtonElement>(".agent-submit")!;
-  field.placeholder =
-    mode === "create"
-      ? "告诉我你想创造什么…"
-      : mode === "voice"
-        ? "输入想要音色的描述"
-        : mode === "agnes"
-          ? "描述需要转换为 Agnes 视频提示词的镜头…"
-          : "描述需要生成提示词的画面或需求…";
-  submit.setAttribute(
-    "aria-label",
-    mode === "voice" ? "生成音色配置" : promptOnly ? "生成提示词" : "开始创作",
-  );
-  promptAgentSelecting =
-    mode === "create" && promptAgentPanel.classList.contains("open");
-  promptAgentPanel.classList.toggle("prompt-only", mode !== "create");
-  if (mode !== "create") {
-    promptAgentContextSelection.clear();
-    promptAgentContextNodes = [];
-    renderPromptAgentContext(false);
-  }
-  draw();
-}
-promptAgentPanel
-  .querySelector("[data-agent-mode-trigger]")!
-  .addEventListener("click", (event) => {
-    event.stopPropagation();
-    const control = promptAgentPanel.querySelector<HTMLElement>(".agent-mode")!,
-      open = control.classList.toggle("open");
-    promptAgentPanel
-      .querySelector<HTMLButtonElement>("[data-agent-mode-trigger]")!
-      .setAttribute("aria-expanded", String(open));
-  });
-promptAgentPanel
-  .querySelectorAll<HTMLButtonElement>("[data-agent-mode]")
-  .forEach((button) =>
-    button.addEventListener("click", (event) => {
-      event.stopPropagation();
-      setPromptAgentMode(button.dataset.agentMode as PromptAgentMode);
-    }),
-  );
-promptAgentPanel
-  .querySelector<HTMLButtonElement>("[data-agent-prompt-menu]")!
-  .addEventListener("click", (event) => {
-    event.stopPropagation();
-    const submenu = promptAgentPanel.querySelector<HTMLElement>(
-        ".agent-prompt-submenu",
-      )!,
-      open = submenu.classList.toggle("open");
-    promptAgentPanel
-      .querySelector<HTMLButtonElement>("[data-agent-prompt-menu]")!
-      .setAttribute("aria-expanded", String(open));
-  });
-promptAgentPanel
-  .querySelector<HTMLButtonElement>("[data-agent-comic]")!
-  .addEventListener("click", (event) => {
-    event.stopPropagation();
-    openComicStudio();
-  });
-document.addEventListener("click", (event) => {
-  if (!(event.target as HTMLElement | null)?.closest(".agent-mode")) {
-    promptAgentPanel
-      .querySelector<HTMLElement>(".agent-mode")
-      ?.classList.remove("open");
-    promptAgentPanel
-      .querySelector<HTMLButtonElement>("[data-agent-mode-trigger]")
-      ?.setAttribute("aria-expanded", "false");
-  }
+const promptAgentControls = new PromptAgentControls({
+  panel: promptAgentPanel,
+  onComic: openComicStudio,
+  onModeChanged: (mode) => {
+    promptAgentSelecting =
+      mode === "create" && promptAgentPanel.classList.contains("open");
+    if (mode !== "create") {
+      promptAgentContextSelection.clear();
+      promptAgentContextNodes = [];
+      renderPromptAgentContext(false);
+    }
+    draw();
+  },
+  isBusy: () => Boolean(promptAgentRequestController),
 });
-queueMicrotask(() => setPromptAgentMode(promptAgentMode));
-const promptAgentGoalInput = promptAgentPanel.querySelector<HTMLTextAreaElement>(
-  ".agent-goal textarea",
-)!;
-function resizePromptAgentGoal() {
-  promptAgentGoalInput.style.height = "42px";
-  const height = Math.min(62, Math.max(42, promptAgentGoalInput.scrollHeight));
-  promptAgentGoalInput.style.height = `${height}px`;
-  promptAgentPanel.classList.toggle("has-wrapped-goal", height > 44);
-}
-promptAgentGoalInput.addEventListener("input", resizePromptAgentGoal);
-promptAgentGoalInput.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
-    event.preventDefault();
-    if (
-      promptAgentRequestController ||
-      (event.currentTarget as HTMLTextAreaElement).disabled
-    )
-      return;
-    promptAgentPanel.querySelector<HTMLButtonElement>(".agent-submit")!.click();
-  });
+const promptAgentGoalInput = promptAgentControls.goalInput;
 const comicStudio = document.createElement("section");
 comicStudio.className = "comic-studio comic-chat-studio";
 comicStudio.innerHTML = `<header><div><small>VIORA STORY</small><h2>和灵感一起写漫剧</h2></div><nav><div class="comic-label-control"><button type="button" data-comic-label-picker aria-label="关联标签"><span>◇</span><b>关联标签</b></button><div class="comic-label-menu" data-comic-label-menu></div></div><button type="button" data-comic-new aria-label="新会话"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>新会话</span></button><button type="button" data-comic-close aria-label="关闭"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.75 6.75 17.25 17.25M17.25 6.75 6.75 17.25"/></svg></button></nav></header><aside class="comic-linked-label" data-comic-linked-label hidden></aside><div class="comic-conversation" data-comic-conversation><div class="comic-message assistant comic-welcome"><i>✦</i><div><b>先聊聊你想做的故事</b><p>我会边聊边整理创作方案，不会因为一句话就直接生成。等方向明确后，由你确认生成完整剧本。</p></div></div><aside class="comic-brief" data-comic-brief hidden><header><span><small>当前方案</small><b data-comic-brief-title>正在整理</b></span><em data-comic-brief-state>讨论中</em></header><div data-comic-brief-content></div><button type="button" data-comic-confirm hidden><span>生成完整剧本</span><small>确认后开始正式构思</small></button></aside><section class="comic-plan" hidden><div class="comic-plan-head"><div><small data-comic-meta></small><h3 data-comic-title></h3><p data-comic-logline></p></div></div><div class="comic-plan-scroll"><article><h4>人物与世界</h4><div data-comic-characters></div></article><article><h4>剧情大纲</h4><ol data-comic-outline></ol></article><article><h4>制作分镜</h4><div data-comic-shots></div></article></div><div class="comic-plan-actions"><button type="button" data-comic-label><span>保存为标签</span></button><button type="button" data-comic-label-copy hidden><span>另存为标签</span></button><button type="button" data-comic-canvas><span>铺到画布</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></button></div></section></div><footer class="comic-composer"><textarea data-comic-message rows="1" placeholder="继续补充人物、剧情、风格或你不想要的内容…"></textarea><button type="button" data-comic-send aria-label="发送"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button></footer><output data-comic-status></output>`;
@@ -4469,11 +4366,7 @@ comicHeaderNav
       ),
     ),
   );
-const promptAgentModelSelect = document.createElement("select");
-promptAgentModelSelect.hidden = true;
-promptAgentModelSelect.innerHTML =
-  '<option value="gpt-5.5" selected>gpt-5.5</option>';
-promptAgentPanel.append(promptAgentModelSelect);
+const promptAgentModelSelect = promptAgentControls.modelSelect;
 const promptAgentEffects = document.createElement("canvas"),
   promptAgentEffectsFront = document.createElement("canvas");
 promptAgentEffects.className = "agent-capsule-effects";
@@ -4519,9 +4412,7 @@ promptAgentBurst
     particle.style.setProperty("--delay", `${-(index % 14) * 61}ms`);
     particle.style.setProperty("--duration", `${720 + (index % 7) * 34}ms`);
   });
-let promptAgentKind: "image" | "video" = "image",
-  promptAgentComplexity: "simple" | "detailed" = "simple",
-  promptAgentResult: PromptAgentResult | null = null,
+let promptAgentResult: PromptAgentResult | null = null,
   promptAgentContextNodes: FlowNode[] = [],
   promptAgentAppliedNodeId = 0,
   promptAgentUndo: (() => void) | null = null;
@@ -5024,33 +4915,6 @@ promptAgentTrigger.addEventListener("click", (event) => {
   }
   if (!promptAgentPanel.classList.contains("open")) formPromptAgent();
 });
-promptAgentPanel
-  .querySelectorAll<HTMLButtonElement>("[data-agent-kind]")
-  .forEach((button) =>
-    button.addEventListener("click", () => {
-      promptAgentKind = button.dataset.agentKind as "image" | "video";
-      promptAgentPanel
-        .querySelectorAll("[data-agent-kind]")
-        .forEach((item) => item.classList.toggle("active", item === button));
-    }),
-  );
-promptAgentPanel
-  .querySelectorAll<HTMLButtonElement>("[data-agent-complexity]")
-  .forEach((button) =>
-    button.addEventListener("click", () => {
-      promptAgentComplexity = button.dataset.agentComplexity as
-        "simple" | "detailed";
-      promptAgentPanel
-        .querySelectorAll("[data-agent-complexity]")
-        .forEach((item) => item.classList.toggle("active", item === button));
-      promptAgentPanel.querySelector<HTMLElement>(
-        ".agent-submit b",
-      )!.textContent =
-        promptAgentComplexity === "simple"
-          ? "生成简洁提示词"
-          : "生成详细提示词";
-    }),
-  );
 let comicPlan: ComicPlan | null = null,
   comicSubmitting = false,
   comicOriginalIdea = "",
@@ -5926,7 +5790,7 @@ function applyPromptAgentVoice(result: PromptAgentResult) {
 promptAgentPanel
   .querySelector<HTMLButtonElement>(".agent-submit")!
   .addEventListener("click", (event) => {
-    if (promptAgentMode !== "voice") return;
+    if (promptAgentControls.mode !== "voice") return;
     event.stopImmediatePropagation();
     const textarea =
         promptAgentPanel.querySelector<HTMLTextAreaElement>("textarea")!,
@@ -6008,7 +5872,7 @@ promptAgentPanel
         promptAgentPanel.querySelector<HTMLOutputElement>(".agent-status")!,
       article = promptAgentPanel.querySelector<HTMLElement>("article")!,
       selected = nodes.find((node) => node.id === selection.selectedId),
-      promptOnly = promptAgentMode !== "create",
+      promptOnly = promptAgentControls.mode !== "create",
       modeTrigger = promptAgentPanel.querySelector<HTMLButtonElement>(
         "[data-agent-mode-trigger]",
       )!,
@@ -6030,8 +5894,9 @@ promptAgentPanel
     const controller = new AbortController(),
       version = ++promptAgentRequestVersion;
     promptAgentRequestController = controller;
-    promptAgentKind =
-      promptAgentMode === "agnes" || /视频|动态|动起来|镜头运动|运镜/.test(idea)
+    const promptAgentKind =
+      promptAgentControls.mode === "agnes" ||
+      /视频|动态|动起来|镜头运动|运镜/.test(idea)
         ? "video"
         : "image";
     const selectedContexts = selectedPromptAgentNodes(),
@@ -6059,8 +5924,8 @@ promptAgentPanel
         {
             idea,
             kind: promptAgentKind,
-            promptMode: promptAgentMode,
-            complexity: promptAgentComplexity,
+            promptMode: promptAgentControls.mode,
+            complexity: promptAgentControls.complexity,
             context,
             visuals,
             model: promptAgentModelSelect.value,
@@ -6091,12 +5956,12 @@ promptAgentPanel
         result.finalPrompt;
       article.querySelector<HTMLElement>("[data-agent-summary]")!.textContent =
         promptOnly
-          ? promptAgentMode === "agnes"
+          ? promptAgentControls.mode === "agnes"
             ? "Agnes Video v2.0 提示词已生成"
             : "通用提示词已生成"
           : result.summary || "已根据你的素材准备好画布节点";
       article.querySelector("small")!.textContent =
-        `${result.model} · ${promptOnly ? (promptAgentMode === "agnes" ? "Agnes" : "通用") : (result.targetType || result.kind) === "video" ? "视频" : "图像"} · ${selectedContexts.length} 个参考`;
+        `${result.model} · ${promptOnly ? (promptAgentControls.mode === "agnes" ? "Agnes" : "通用") : (result.targetType || result.kind) === "video" ? "视频" : "图像"} · ${selectedContexts.length} 个参考`;
       article.querySelector<HTMLButtonElement>("[data-agent-undo]")!.hidden =
         promptOnly || !promptAgentUndo;
       article.querySelector<HTMLButtonElement>("[data-agent-apply]")!.hidden =
