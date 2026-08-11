@@ -144,6 +144,7 @@ import { ComicSessionRecoveryView } from "../ui/comic-session-recovery";
 import { ComicDialogueController } from "../ui/comic-dialogue-controller";
 import { ComicNewSessionController } from "../ui/comic-new-session-controller";
 import { ComicStudioInteractionController } from "../ui/comic-studio-interaction-controller";
+import { ComicStudioLifecycleController } from "../ui/comic-studio-lifecycle-controller";
 import { ComicPlanController } from "../ui/comic-plan-controller";
 import { ComicOutputController } from "../ui/comic-output-controller";
 import { ComicLabelController } from "../ui/comic-labels";
@@ -1948,13 +1949,7 @@ function resetComicConversationState(clearPlan = true) {
   renderComicBrief();
 }
 async function ensureComicProjectContext() {
-  const previousOwner = comicState.ownerKey;
-  if (!(await ensureCurrentUserProject())) return false;
-  const owner = currentComicOwnerKey();
-  if (previousOwner && previousOwner !== owner)
-    resetComicConversationState(true);
-  comicState.ownerKey = owner;
-  return Boolean(currentProjectId);
+  return comicStudioLifecycle.ensureProjectContext();
 }
 function renderComicBrief() {
   const linkedTitle = nodes
@@ -2043,45 +2038,38 @@ const comicSessionController = new ComicSessionController({
   onEmpty: () => comicSessionRecovery.clear(),
   onSnapshot: (snapshot) => comicSessionRecovery.apply(snapshot),
 });
+const comicStudioLifecycle = new ComicStudioLifecycleController({
+  studio: comicStudio,
+  briefPanel: comicBriefPanel,
+  planPanel: comicPlanSidePanel,
+  promptPanel: promptAgentPanel,
+  getOwnerKey: currentComicOwnerKey,
+  getStoredOwnerKey: () => comicState.ownerKey,
+  setStoredOwnerKey: (owner) => { comicState.ownerKey = owner; },
+  hasProject: () => Boolean(currentProjectId),
+  hasAuthenticatedContext: () => Boolean(authUser && currentProjectId),
+  ensureProject: ensureCurrentUserProject,
+  resetConversation: resetComicConversationState,
+  invalidateSession: () => comicSessionController.invalidate(),
+  restoreSession: (force) => restoreComicSession(force),
+  resetMarqueeGesture: resetMarqueeRightGesture,
+  isMultiSelect: () => selection.multiSelectMode,
+  exitMultiSelect: exitMultiSelectMode,
+  closePromptAgent,
+  renderLabelState: renderComicLabelState,
+  renderBrief: renderComicBrief,
+});
 function restoreComicSession(force = false) {
   return comicSessionController.restore(force);
 }
 async function restoreComicAfterReconnect() {
-  if (!comicStudio.classList.contains("open") || !authUser || !currentProjectId)
-    return;
-  comicSessionController.invalidate();
-  await restoreComicSession(true);
+  await comicStudioLifecycle.restoreAfterReconnect();
 }
 function openComicStudio() {
-  const seed = promptAgentPanel
-    .querySelector<HTMLTextAreaElement>("textarea")!
-    .value.trim();
-  resetMarqueeRightGesture();
-  if (selection.multiSelectMode) exitMultiSelectMode();
-  closePromptAgent();
-  if (comicState.ownerKey && comicState.ownerKey !== currentComicOwnerKey()) {
-    resetComicConversationState(true);
-    comicSessionController.invalidate();
-  }
-  comicState.ownerKey = currentComicOwnerKey();
-  comicStudio.classList.add("open");
-  comicPlanSidePanel.classList.add("studio-open");
-  promptAgentPanel.classList.add("comic-hidden");
-  renderComicLabelState();
-  renderComicBrief();
-  void restoreComicSession();
-  const field = comicStudio.querySelector<HTMLTextAreaElement>(
-    "[data-comic-message]",
-  )!;
-  if (seed && !field.value) field.value = seed;
-  field.focus();
+  comicStudioLifecycle.open();
 }
 function closeComicStudio() {
-  comicStudio.classList.remove("open");
-  comicBriefPanel.hidden = true;
-  comicPlanSidePanel.classList.remove("studio-open", "mobile-open");
-  promptAgentPanel.classList.remove("comic-hidden");
-  closePromptAgent();
+  comicStudioLifecycle.close();
 }
 function renderComicPlan(plan: ComicPlan) {
   comicStudioView.renderPlan(plan);
