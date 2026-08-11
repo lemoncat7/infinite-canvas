@@ -68,12 +68,6 @@ let generationCapabilities: GenerationCapabilities =
 let generationRuntime: CanvasGenerationRuntimeFeature;
 let nodeEditorFeature: CanvasNodeEditorFeature;
 let nodeLifecycleFeature: CanvasNodeLifecycleFeature;
-function loadTtsProviders() {
-  return ttsFeature.loadProviders();
-}
-function loadTtsVoices(providerId = "easyvoice-local") {
-  return ttsFeature.loadVoices(providerId);
-}
 const canvas = document.querySelector<HTMLElement>("#canvas")!;
 const nodeViewport = document.querySelector<HTMLElement>("#node-viewport")!;
 const nodeLayer = document.querySelector<HTMLElement>("#node-layer")!;
@@ -219,6 +213,29 @@ const canvasBatch = new CanvasBatchFeature({
   confirm: (message) => window.confirm(message),
 });
 let creationSuite: CanvasCreationSuiteFeature;
+const ttsFeature = new TtsFeature({
+  nodes,
+  links,
+  getProjectId: () => currentProjectId,
+  allocateNodeId: allocateCanvasNodeId,
+  invalidateProviders: () => {
+    nodes
+      .filter((node) => node.kind === "voice")
+      .forEach((node) => nodeViews.invalidateState(node.id));
+    draw();
+  },
+  invalidateVoices: (providerId) => {
+    nodes
+      .filter((node) => node.kind === "voice" && node.voiceSettings?.providerId === providerId)
+      .forEach((node) => nodeViews.invalidateState(node.id));
+    draw();
+  },
+  updateEditor,
+  draw,
+  save: scheduleSave,
+  reloadAssets: () => loadAssets(false),
+  toast: (message, tone) => showToast(message, tone),
+});
 const canvasInput = new CanvasInputFeature({
   canvas,
   nodeLayer,
@@ -293,8 +310,8 @@ const nodeViews = new CanvasNodeViewFeature({
   defaultCopy: defaultNodeCopy,
   getProviders: () => ttsFeature.catalog.providers,
   getVoices: () => ttsFeature.catalog.voicesByProvider,
-  ensureProviders: loadTtsProviders,
-  ensureVoices: loadTtsVoices,
+  ensureProviders: () => ttsFeature.loadProviders(),
+  ensureVoices: (providerId) => ttsFeature.loadVoices(providerId),
   escapeHtml,
   normalizePrompt: normalizePromptText,
   displayModelName: modelDisplayName,
@@ -323,8 +340,8 @@ const nodeViews = new CanvasNodeViewFeature({
   notifyImageCleared: (message) => showToast(message, "success"),
   beginImageUpload: beginImageNodeUpload,
   beginImageLibrary: beginImageNodeLibrary,
-  previewVoice,
-  generateTts,
+  previewVoice: (node) => ttsFeature.preview(node),
+  generateTts: (node) => ttsFeature.generate(node),
   copyPrompt: copyOriginalPrompt,
   paintImage: (target, url) => canvasMedia.paint(target, url),
   paintVideo: (target, url) => canvasMedia.paint(target, url),
@@ -620,7 +637,7 @@ nodeEditorFeature = new CanvasNodeEditorFeature({
   getSelectedId: () => selection.selectedId,
   getAvailableCredits: () =>
     Number(authWorkspace.user?.credits ?? 0) - Number(authWorkspace.user?.reservedCredits ?? 0),
-  hasConnectedVoice: (node) => Boolean(connectedVoiceNode(node)),
+  hasConnectedVoice: (node) => Boolean(ttsFeature.connectedVoice(node)),
   activelyGenerating: nodeIsActivelyGenerating,
   pixiActive: canvasRender.active,
   setEditingState: () => setSaveState("editing", "编辑中…"),
@@ -696,38 +713,6 @@ function loadCanvas(keepLoadingStatus = false) {
   return canvasPersistence.load(keepLoadingStatus);
 }
 
-const ttsFeature = new TtsFeature({
-  nodes,
-  links,
-  getProjectId: () => currentProjectId,
-  allocateNodeId: allocateCanvasNodeId,
-  invalidateProviders: () => {
-    nodes
-      .filter((node) => node.kind === "voice")
-      .forEach((node) => nodeViews.invalidateState(node.id));
-    draw();
-  },
-  invalidateVoices: (providerId) => {
-    nodes
-      .filter((node) => node.kind === "voice" && node.voiceSettings?.providerId === providerId)
-      .forEach((node) => nodeViews.invalidateState(node.id));
-    draw();
-  },
-  updateEditor,
-  draw,
-  save: scheduleSave,
-  reloadAssets: () => loadAssets(false),
-  toast: (message, tone) => showToast(message, tone),
-});
-function connectedVoiceNode(source: FlowNode) {
-  return ttsFeature.connectedVoice(source);
-}
-function previewVoice(voice: FlowNode) {
-  return ttsFeature.preview(voice);
-}
-function generateTts(source: FlowNode) {
-  return ttsFeature.generate(source);
-}
 generationRuntime = new CanvasGenerationRuntimeFeature({
   generation: {
     nodes,
@@ -750,7 +735,7 @@ generationRuntime = new CanvasGenerationRuntimeFeature({
     draw,
     save: scheduleSave,
     focusPrompt: () => promptInput.focus(),
-    generateTts,
+    generateTts: (node) => ttsFeature.generate(node),
     getUser: () => authWorkspace.user,
     setUser: (user) => authWorkspace.setUser(user),
     renderUser: () => authWorkspace.renderUser(),
@@ -869,7 +854,7 @@ creationSuite = new CanvasCreationSuiteFeature({
     persist: scheduleSave,
     draw,
     runWorkflow: runAgentWorkflow,
-    loadVoices: (providerId) => { void loadTtsVoices(providerId); },
+    loadVoices: (providerId) => { void ttsFeature.loadVoices(providerId); },
     decodePrompt: decodePromptClipboardText,
     toast: (message, tone) => showToast(message, tone),
   },
