@@ -18,6 +18,7 @@ import { CanvasPointerLifecycle } from "../canvas/canvas-pointer-lifecycle";
 import { TouchPinchController } from "../canvas/touch-pinch-controller";
 import { CameraViewportController } from "../canvas/camera-viewport-controller";
 import { normalizeCanvasDocument } from "../canvas/document-normalizer";
+import { submitCanvasChanges } from "../canvas/sync-client";
 import { LinkInteractionView } from "../canvas/link-interaction-view";
 import { GenerationPoller } from "../services/generation-poller";
 import { GenerationWorkflow } from "../services/generation-workflow";
@@ -4284,128 +4285,56 @@ function scheduleSave(recordHistory = true) {
 }
 
 async function saveCanvas() {
-  if (
-    !authUser ||
-    canvasSaveBlocked ||
-    canvasLoadedProjectId !== currentProjectId ||
-    !canvasBaseline ||
-    canvasBaseline.version !== canvasServerVersion
-  )
-    return;
-  if (canvasSavePromise) {
-    canvasSaveQueued = true;
-    return canvasSavePromise;
-  }
-  const savingProjectId = currentProjectId,
-    controller = new AbortController(),
-    sentSnapshot = captureCanvasSnapshot(),
-    operations = diffCanvasSnapshots(canvasBaseline, sentSnapshot);
-  if (!operations.length) {
-    setSaveState("saved", "已自动保存");
-    return;
-  }
-  const batchId = `batch_${crypto.randomUUID().replaceAll("-", "")}`,
-    payload = {
-      clientId: canvasSyncClientId,
-      batchId,
-      baseVersion: canvasServerVersion,
-      operations,
-    };
+  if (!authUser || canvasSaveBlocked || canvasLoadedProjectId !== currentProjectId || !canvasBaseline || canvasBaseline.version !== canvasServerVersion) return;
+  if (canvasSavePromise) { canvasSaveQueued = true; return canvasSavePromise; }
+  const savingProjectId = currentProjectId, controller = new AbortController();
+  const sentSnapshot = captureCanvasSnapshot();
   canvasSaveAbort = controller;
   canvasSavePromise = (async () => {
     try {
       setSaveState("saving", "正在自动保存…");
-      const response = await apiFetch(
-          `/api/projects/${savingProjectId}/canvas/sync`,
-          {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(payload),
-            signal: controller.signal,
-          },
-        ),
-        result = (await response.json().catch(() => ({}))) as {
-          nodes?: FlowNode[];
-          links?: FlowLink[];
-          camera?: typeof camera;
-          updatedAt?: string;
-          version?: number;
-          error?: string;
-          message?: string;
-        };
-      if (response.status === 409 || response.status === 428) {
-        canvasSaveQueued = false;
-        canvasSaveBlocked = true;
-        setSaveState(
-          "error",
-          result.error === "canvas_empty_guard"
-            ? "已阻止空画布覆盖"
-            : "版本需要同步",
-        );
+      const result = await submitCanvasChanges({
+        projectId: savingProjectId,
+        clientId: canvasSyncClientId,
+        baseline: canvasBaseline!,
+        sentSnapshot,
+        captureLive: captureCanvasSnapshot,
+        signal: controller.signal,
+      });
+      if (result.kind === "unchanged") { setSaveState("saved", "已自动保存"); return; }
+      if (result.kind === "conflict") {
+        canvasSaveQueued = false; canvasSaveBlocked = true;
+        const emptyGuard = result.error === "canvas_empty_guard";
+        setSaveState("error", emptyGuard ? "已阻止空画布覆盖" : "版本需要同步");
         showCanvasGuide({
           key: "canvas-save-conflict",
-          title:
-            result.error === "canvas_empty_guard"
-              ? "已保护服务器画布"
-              : "服务器画布已有新版本",
+          title: emptyGuard ? "已保护服务器画布" : "服务器画布已有新版本",
           detail: "正在停止本地保存并强制载入服务器上的完整版本。",
-          tone: "offline",
-          priority: 110,
+          tone: "offline", priority: 110,
         });
         await loadCanvas();
         return;
       }
-      if (!response.ok) throw new Error(result.message || "save failed");
-      if (
-        savingProjectId === currentProjectId &&
-        result.updatedAt &&
-        Number.isSafeInteger(result.version) &&
-        Array.isArray(result.nodes) &&
-        Array.isArray(result.links) &&
-        result.camera
-      ) {
-        const liveSnapshot = captureCanvasSnapshot(),
-          postSubmitOperations = diffCanvasSnapshots(
-            sentSnapshot,
-            liveSnapshot,
-          ),
-          serverSnapshot: CanvasSyncSnapshot = {
-            nodes: structuredClone(result.nodes),
-            links: normalizeCanvasLinks(result.links),
-            camera: { ...result.camera },
-            version: Number(result.version),
-            updatedAt: result.updatedAt,
-          };
-        canvasBaseline = structuredClone(serverSnapshot);
-        canvasServerUpdatedAt = result.updatedAt;
-        canvasServerVersion = Number(result.version);
-        const mergedSnapshot = applyCanvasOperations(
-          serverSnapshot,
-          postSubmitOperations,
-        );
-        applySynchronizedCanvas(mergedSnapshot);
-        if (postSubmitOperations.length) canvasSaveQueued = true;
+      if (savingProjectId === currentProjectId) {
+        canvasBaseline = structuredClone(result.serverSnapshot);
+        canvasServerUpdatedAt = result.serverSnapshot.updatedAt;
+        canvasServerVersion = result.serverSnapshot.version;
+        applySynchronizedCanvas(result.mergedSnapshot);
+        if (result.hasPostSubmitOperations) canvasSaveQueued = true;
       }
       setSaveState("saved", "已自动保存");
     } catch (error) {
-      if (!(error instanceof DOMException && error.name === "AbortError"))
-        setSaveState("error", "自动保存失败");
+      if (!(error instanceof DOMException && error.name === "AbortError")) setSaveState("error", "自动保存失败");
     } finally {
       if (canvasSaveAbort === controller) canvasSaveAbort = null;
       canvasSavePromise = null;
-      if (
-        canvasSaveQueued &&
-        !canvasSaveBlocked &&
-        canvasLoadedProjectId === currentProjectId
-      ) {
-        canvasSaveQueued = false;
-        void saveCanvas();
+      if (canvasSaveQueued && !canvasSaveBlocked && canvasLoadedProjectId === currentProjectId) {
+        canvasSaveQueued = false; void saveCanvas();
       }
     }
   })();
   return canvasSavePromise;
 }
-
 function setSaveState(
   state: "editing" | "saving" | "saved" | "error",
   label: string,
