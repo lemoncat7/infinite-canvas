@@ -166,6 +166,8 @@ export class PixiCanvasRenderer implements CanvasRenderer {
     {
       container: Container;
       shell: Graphics;
+      detail: Graphics;
+      mediaMask: Graphics;
       title: Text;
       icon: Text;
       subtitle: Text;
@@ -390,6 +392,8 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       if (!view) {
         const container = new Container(),
           shell = new Graphics(),
+          detail = new Graphics(),
+          mediaMask = new Graphics(),
           title = new Text({
             style: {
               fill: snapshot.dark ? 0xe8efee : 0x25302d,
@@ -438,11 +442,24 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         meta.position.set(14, Math.max(58, node.height - 25));
         media.position.set(12, 66);
         media.visible = false;
-        container.addChild(shell, media, icon, title, subtitle, body, meta);
+        media.mask = mediaMask;
+        container.addChild(
+          shell,
+          media,
+          detail,
+          icon,
+          title,
+          subtitle,
+          body,
+          meta,
+          mediaMask,
+        );
         this.cards.addChild(container);
         view = {
           container,
           shell,
+          detail,
+          mediaMask,
           title,
           icon,
           subtitle,
@@ -475,8 +492,6 @@ export class PixiCanvasRenderer implements CanvasRenderer {
               ) return;
               view.media.texture = texture;
               view.media.visible = true;
-              view.media.width = Math.max(1, node.width - 24);
-              view.media.height = Math.max(1, node.height - 82);
               if (this.lastSnapshot) this.render(this.lastSnapshot);
             })
             .catch(() => {
@@ -522,6 +537,13 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       const mediaOnly = Boolean(
         mediaUrl && view.media.visible && view.media.texture !== Texture.EMPTY,
       );
+      view.mediaMask
+        .clear()
+        .roundRect(6, 6, Math.max(1, node.width - 12), Math.max(1, node.height - 12), 12)
+        .fill({ color: 0xffffff });
+      view.media.position.set(mediaOnly ? 6 : 12, mediaOnly ? 6 : 66);
+      view.media.width = Math.max(1, node.width - (mediaOnly ? 12 : 24));
+      view.media.height = Math.max(1, node.height - (mediaOnly ? 12 : 82));
       view.title.visible = !mediaOnly;
       view.icon.visible = !mediaOnly && Boolean(presentation.icon);
       view.subtitle.visible = !mediaOnly && Boolean(presentation.subtitle);
@@ -541,6 +563,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       );
       view.meta.position.set(14, Math.max(58, node.height - 25));
       view.body.style.wordWrapWidth = Math.max(80, node.width - 28);
+      view.detail.clear();
       view.shell
         .clear()
         .roundRect(0, 0, node.width, node.height, 14)
@@ -565,6 +588,90 @@ export class PixiCanvasRenderer implements CanvasRenderer {
               ? node.accent
               : 0x7b8985,
         });
+      if (!mediaOnly && node.kind === "video" && node.role !== "result") {
+        const frameTop = 65,
+          frameGap = 8,
+          frameWidth = (node.width - 44 - frameGap * 2) / 3;
+        for (let index = 0; index < 3; index++)
+          view.detail
+            .roundRect(14 + index * (frameWidth + frameGap), frameTop, frameWidth, 58, 10)
+            .fill({
+              color: snapshot.dark ? 0xffffff : 0x74827d,
+              alpha: snapshot.dark ? 0.045 : 0.075,
+            })
+            .stroke({
+              color: snapshot.dark ? 0x58666a : 0xb9c4c0,
+              alpha: 0.7,
+              width: 1,
+            });
+        view.detail
+          .moveTo(14, node.height - 48)
+          .lineTo(node.width - 14, node.height - 48)
+          .stroke({
+            color: snapshot.dark ? 0x344247 : 0xd8dfdb,
+            alpha: 0.72,
+            width: 1,
+          });
+        view.icon.text = "1      2      3";
+        view.icon.visible = true;
+        view.icon.position.set(node.width / 2, frameTop + 29);
+        view.icon.style.fontSize = 15;
+        view.title.anchor.set(0.5);
+        view.title.position.set(node.width / 2, 14);
+        view.subtitle.anchor.set(0.5);
+        view.subtitle.position.set(node.width / 2, 36);
+        view.body.anchor.set(0.5);
+        view.body.position.set(node.width / 2, 137);
+        view.body.style.align = "center";
+        view.meta.anchor.set(0.5);
+        view.meta.position.set(node.width / 2, node.height - 31);
+      } else if (!mediaOnly && node.kind === "voice") {
+        view.detail
+          .moveTo(18, node.height - 48)
+          .lineTo(node.width - 18, node.height - 48)
+          .stroke({ color: snapshot.dark ? 0x344247 : 0xd8dfdb, width: 1 });
+        view.title.anchor.set(0.5);
+        view.title.position.set(node.width / 2, 29);
+        view.subtitle.anchor.set(0.5);
+        view.subtitle.position.set(node.width / 2, 51);
+        view.body.anchor.set(0.5);
+        view.body.position.set(node.width / 2, 91);
+        view.body.style.align = "center";
+        view.meta.anchor.set(0.5);
+        view.meta.position.set(node.width / 2, 124);
+      } else if (!mediaOnly && node.kind === "tts") {
+        view.detail
+          .roundRect(18, 78, node.width - 36, 74, 10)
+          .fill({
+            color: snapshot.dark ? 0xffffff : 0x71827c,
+            alpha: snapshot.dark ? 0.035 : 0.055,
+          })
+          .moveTo(18, node.height - 48)
+          .lineTo(node.width - 18, node.height - 48)
+          .stroke({ color: snapshot.dark ? 0x344247 : 0xd8dfdb, width: 1 });
+        view.title.anchor.set(0.5);
+        view.title.position.set(node.width / 2, 24);
+        view.subtitle.anchor.set(0.5);
+        view.subtitle.position.set(node.width / 2, 48);
+        view.body.anchor.set(0.5);
+        view.body.position.set(node.width / 2, 96);
+        view.body.style.align = "center";
+        view.meta.anchor.set(0.5);
+        view.meta.position.set(node.width / 2, node.height - 31);
+      } else if (!mediaOnly && node.kind === "audio") {
+        const centerY = node.height / 2 + 4,
+          bars = [12, 26, 18, 38, 30, 16, 34, 22, 42, 20, 31, 14, 27, 18];
+        bars.forEach((height, index) =>
+          view.detail
+            .roundRect(28 + index * 17, centerY - height / 2, 3, height, 2)
+            .fill({ color: snapshot.dark ? 0xa8bdc5 : 0x718b95, alpha: 0.82 }),
+        );
+        view.title.position.set(16, 15);
+        view.subtitle.position.set(16, 37);
+        view.body.visible = false;
+        view.meta.anchor.set(1);
+        view.meta.position.set(node.width - 15, node.height - 19);
+      }
       if (presentation.meta && !mediaOnly)
         view.shell
           .moveTo(14, node.height - 38)

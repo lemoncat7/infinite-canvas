@@ -3610,7 +3610,9 @@ function paint() {
     domNodeIds: [...mountedDomNodeIds],
     camera,
     selectedId,
-    selectedIds: [...batchSelectedIds],
+    selectedIds: [
+      ...new Set([...batchSelectedIds, ...promptAgentContextSelection]),
+    ],
     dark: colorTheme === "dark",
     backgroundMode,
     hoveredLinkIndex,
@@ -3966,44 +3968,8 @@ function addMediaNode(
 
 function syncDomNodes() {
   nodeViewport.style.transform = `translate3d(${innerWidth / 2 + camera.x}px, ${innerHeight / 2 + camera.y}px,0) scale(${camera.zoom})`;
-  const viewportMargin = 220 / camera.zoom,
-    viewportLeft = (-innerWidth / 2 - camera.x) / camera.zoom,
-    viewportTop = (-innerHeight / 2 - camera.y) / camera.zoom,
-    viewportRight = (innerWidth / 2 - camera.x) / camera.zoom,
-    viewportBottom = (innerHeight / 2 - camera.y) / camera.zoom,
-    viewportCenterX = (viewportLeft + viewportRight) / 2,
-    viewportCenterY = (viewportTop + viewportBottom) / 2,
-    visibleLimit = camera.zoom < 0.55 ? 60 : 120,
-    visibleDomIds = canvasSpatialIndex
-      .search({
-        minX: viewportLeft - viewportMargin,
-        minY: viewportTop - viewportMargin,
-        maxX: viewportRight + viewportMargin,
-        maxY: viewportBottom + viewportMargin,
-      })
-      .map((id) => paintNodeIndex.get(id))
-      .filter((node): node is FlowNode => Boolean(node))
-      .sort(
-        (left, right) =>
-          Math.hypot(
-            left.x + left.width / 2 - viewportCenterX,
-            left.y + left.height / 2 - viewportCenterY,
-          ) -
-          Math.hypot(
-            right.x + right.width / 2 - viewportCenterX,
-            right.y + right.height / 2 - viewportCenterY,
-          ),
-      )
-      .slice(0, visibleLimit)
-      .map((node) => node.id),
-    stableVisibleDomIds =
-      canvasHasActiveGeneration() && mountedDomNodeIds.size
-        ? [...mountedDomNodeIds]
-        : visibleDomIds,
-    requiredPixiDomIds = new Set<number>([
-          ...stableVisibleDomIds,
+  const requiredPixiDomIds = new Set<number>([
           ...(selectedId ? [selectedId] : []),
-          ...promptAgentContextSelection,
           ...(editingTextNodeId ? [editingTextNodeId] : []),
           ...(domDrag ? [domDrag.id] : []),
         ]),
@@ -8780,8 +8746,27 @@ function positionQuickNodeMenu(clientX: number, clientY: number) {
   quickNodeMenu.classList.toggle("opens-up", openUp);
 }
 canvas.addEventListener("dblclick", (event) => {
-  if (event.button !== 0 || connecting || hitNode(event.clientX, event.clientY))
+  if (event.button !== 0 || connecting) return;
+  const hit = hitNode(event.clientX, event.clientY);
+  if (hit) {
+    event.preventDefault();
+    selectedId = hit.id;
+    updateEditor();
+    draw();
+    if (
+      hit.mediaUrl &&
+      (hit.kind === "image" || hit.kind === "video")
+    )
+      openAssetPreview(hit.mediaUrl, hit.title, hit.kind);
+    else if (hit.kind === "prompt")
+      requestAnimationFrame(() => {
+        const element = nodeLayer.querySelector<HTMLElement>(
+          `.flow-node[data-id="${hit.id}"]`,
+        );
+        if (element) enterTextEdit(hit, element);
+      });
     return;
+  }
   event.preventDefault();
   if (multiSelectMode) {
     exitMultiSelectMode();

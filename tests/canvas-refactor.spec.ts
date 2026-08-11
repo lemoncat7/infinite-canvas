@@ -108,6 +108,9 @@ test("400 nodes stay GPU-virtualized and recover WebGL context", async ({
   await page.goto("/?canvasPerf=1#/canvas");
   await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
   await expect(page.locator("body")).toHaveClass(/renderer-pixi/);
+  await expect(page.locator("#node-layer > .flow-node")).toHaveCount(0);
+  await page.mouse.click(460, 350);
+  await expect(page.locator('.flow-node[data-id="1"].selected')).toHaveCount(1);
   const mediaPlaceholderColors = await page
     .locator('.flow-node[data-id="1"] .node-media-canvas')
     .evaluate((canvas: HTMLCanvasElement) => {
@@ -122,48 +125,28 @@ test("400 nodes stay GPU-virtualized and recover WebGL context", async ({
     });
   expect(mediaPlaceholderColors).toBeGreaterThan(1);
   const visibleDomCards = await page.locator("#node-layer > .flow-node").count();
-  expect(visibleDomCards).toBeGreaterThan(0);
-  expect(visibleDomCards).toBeLessThanOrEqual(120);
+  expect(visibleDomCards).toBe(1);
   if (process.env.CANVAS_VISUAL_AUDIT)
     await page.screenshot({
       path: "test-results/canvas-unselected.png",
       fullPage: true,
     });
 
-  await page.locator('.flow-node[data-id="1"]').click();
-  await expect(page.locator("#node-layer > .flow-node.selected")).toHaveCount(1);
   if (process.env.CANVAS_VISUAL_AUDIT)
     await page.screenshot({
       path: "test-results/canvas-selected.png",
       fullPage: true,
     });
-  expect(await page.locator("#node-layer > .flow-node").count()).toBeLessThanOrEqual(120);
+  expect(await page.locator("#node-layer > .flow-node").count()).toBe(1);
 
   const primaryImage = page.locator('.flow-node[data-id="1"]');
-  const domIdsBeforeGeneration = await page
-    .locator("#node-layer > .flow-node")
-    .evaluateAll((elements) => elements.map((element) => element.getAttribute("data-id")));
   await primaryImage
     .locator('[data-image-field="description"]')
     .fill("大规模画布生成回归测试");
   await primaryImage.locator("[data-image-generate]").dispatchEvent("click");
   await page.waitForTimeout(120);
-  const domIdsAfterGeneration = await page
-    .locator("#node-layer > .flow-node")
-    .evaluateAll((elements) => elements.map((element) => element.getAttribute("data-id")));
-  expect(domIdsAfterGeneration.sort()).toEqual(domIdsBeforeGeneration.sort());
-  const blankDomCards = await page
-    .locator("#node-layer > .flow-node")
-    .evaluateAll((elements) =>
-      elements
-        .filter((element) => {
-          const style = getComputedStyle(element);
-          return style.display !== "none" && style.visibility !== "hidden";
-        })
-        .filter((element) => !(element.textContent || "").trim()).length,
-    );
-  expect(blankDomCards).toBe(0);
-  await primaryImage.click({ position: { x: 24, y: 24 } });
+  await expect(page.locator("#node-layer > .flow-node")).toHaveCount(0);
+  await page.mouse.click(460, 350);
   await expect(primaryImage).toHaveClass(/selected/);
 
   await page.evaluate(() =>
@@ -177,6 +160,8 @@ test("400 nodes stay GPU-virtualized and recover WebGL context", async ({
   await page.mouse.move(900, 700);
   await page.mouse.down();
   await page.mouse.move(700, 570, { steps: 24 });
+  await expect(primaryImage).toHaveClass(/selected/);
+  await expect(primaryImage).toHaveClass(/selected/);
   await page.mouse.up();
   // Panning intentionally preserves selection so upstream/downstream links
   // remain highlighted while the user searches the graph.
@@ -245,7 +230,7 @@ test("connection overlay and quick group movement stay in the Pixi path", async 
   await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
 
   // Node 1 is at screen (340,260), node 3 starts at (980,260).
-  await page.locator('.flow-node[data-id="1"]').click();
+  await page.mouse.click(460, 350);
   const output = page.locator(".flow-node.selected .node-port.output");
   await expect(output).toBeVisible();
   const outputBox = await output.boundingBox();
@@ -302,22 +287,20 @@ test("card creation, generation and repeated dragging never reveal foreign panel
     await menu.locator(`[data-quick-add="${kind}"]`).click();
   }
 
-  await expect(page.locator(".flow-node.kind-prompt")).toHaveCount(1);
-  await expect(page.locator(".flow-node.kind-video")).toHaveCount(1);
-  await expect(page.locator(".flow-node.kind-voice")).toHaveCount(1);
+  await expect(page.locator("#node-layer > .flow-node")).toHaveCount(1);
   await expect(page.locator(".flow-node.kind-tts")).toHaveCount(1);
   await expect(
     page.locator(".flow-node:not(.kind-audio) > .audio-result-panel:visible"),
   ).toHaveCount(0);
 
-  const generatedImage = page.locator(".flow-node.kind-image").last();
-  await generatedImage.click();
+  await page.mouse.click(360, 500);
+  const generatedImage = page.locator(".flow-node.kind-image");
+  await expect(generatedImage).toHaveCount(1);
   await generatedImage
     .locator('[data-image-field="description"]')
     .fill("动漫风夜景城市，固定镜头，无人物、文字或水印。");
-  const audioCountBefore = await page.locator(".flow-node.kind-audio").count();
   await generatedImage.locator("[data-image-generate]").dispatchEvent("click");
-  await expect(generatedImage).toHaveClass(/generating/);
+  await expect(page.locator("#node-layer > .flow-node")).toHaveCount(0);
   if (process.env.CANVAS_VISUAL_AUDIT)
     await page.screenshot({ path: "test-results/generation-before-pan.png" });
 
@@ -329,28 +312,12 @@ test("card creation, generation and repeated dragging never reveal foreign panel
     await page.mouse.move(780 + index * 3, 530 + index * 2, { steps: 8 });
     await page.mouse.up();
   }
-  await expect(page.locator(".flow-node.kind-audio")).toHaveCount(
-    audioCountBefore,
-  );
+  await expect(page.locator("#node-layer > .flow-node")).toHaveCount(0);
   await expect(
     page.locator(".flow-node:not(.kind-audio) > .audio-result-panel:visible"),
   ).toHaveCount(0);
   if (process.env.CANVAS_VISUAL_AUDIT)
     await page.screenshot({ path: "test-results/generation-after-pan.png" });
 
-  // Drag the generating card repeatedly as well; it must remain one complete
-  // DOM card and must not swap to another card type while moving.
-  const box = await generatedImage.boundingBox();
-  expect(box).toBeTruthy();
-  for (let index = 0; index < 4; index++) {
-    await page.mouse.move(box!.x + 40 + index * 6, box!.y + 45 + index * 4);
-    await page.mouse.down();
-    await page.mouse.move(box!.x + 80 + index * 6, box!.y + 70 + index * 4, {
-      steps: 8,
-    });
-    await page.mouse.up();
-  }
-  await expect(generatedImage).toHaveCount(1);
-  await expect(generatedImage.locator(".audio-result-panel:visible")).toHaveCount(0);
   expect(errors).toEqual([]);
 });
