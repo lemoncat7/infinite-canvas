@@ -46,11 +46,10 @@ import { downloadNodeImage as downloadNodeImageFile } from "../nodes/node-downlo
 import { PromptNodeController } from "../nodes/prompt-node";
 import { TtsCatalogController } from "../services/tts-catalog";
 import { TtsGenerationController } from "../nodes/tts-generation-controller";
+import { GenerationSubmitController } from "../nodes/generation-submit-controller";
 import { apiFetch } from "../services/api";
 import {
   hydrateGenerationPrompts,
-  missingGenerationInputs,
-  runGenerationJob,
   type GenerationJob,
 } from "../services/generation";
 import {
@@ -3453,105 +3452,6 @@ async function loadCanvas(keepLoadingStatus = false) {
   }
 }
 
-async function generate(sourceOverride?: FlowNode) {
-  const source = sourceOverride ?? selectedNode();
-  if (!source) {
-    showToast("请先选择需要生成的卡片", "warning");
-    return;
-  }
-  const blockedReason = generationBlockedReason(source);
-  if (blockedReason) {
-    showToast(blockedReason, "warning");
-    if (
-      (source.kind === "image" || source.kind === "video") &&
-      !source.body.trim()
-    )
-      promptInput.focus();
-    return;
-  }
-  if (source.kind === "tts") {
-    selection.selectedId = 0;
-    updateEditor();
-    draw();
-    await generateTts(source);
-    return;
-  }
-  const wasAgentAuto = Boolean(source.agentAuto),
-    missingImageUpstreams = missingGenerationInputs(source, nodes, links);
-  if (missingImageUpstreams.length) {
-    if (wasAgentAuto) {
-      source.status = "waiting";
-      source.progress = 0;
-    } else
-      showToast(
-        `仍有 ${missingImageUpstreams.length} 张上游参考图未生成`,
-        "warning",
-        "请等待所有已连接的参考图生成完成后再启动此任务。",
-      );
-    updateEditor();
-    scheduleSave();
-    draw();
-    return;
-  }
-  selection.selectedId = 0;
-  updateEditor();
-  draw();
-  jobLabel.textContent = "正在提交…";
-  source.agentAuto = false;
-  if (source.kind === "video" && source.role !== "result") {
-    source.status = "idle";
-    source.progress = 0;
-    delete source.jobId;
-  }
-  const createsOutput =
-    source.kind === "video" ||
-    (source.kind === "image" && Boolean(source.mediaUrl));
-  const node = createsOutput ? createRevisionNode(source) : source;
-  if (!node) return;
-  node.status = "queued";
-  node.progress = 0;
-  updateEditor();
-  draw();
-  const result = await runGenerationJob({
-    projectId: currentProjectId,
-    source,
-    output: node,
-    nodes,
-    links,
-    normalizePrompt: normalizePromptText,
-  });
-  if (result.ok) {
-    const { job, node: liveNode } = result;
-    if (authUser && typeof job.creditsAvailable === "number") {
-      authUser = {
-        ...authUser,
-        reservedCredits: Math.max(
-          0,
-          Number(authUser.credits ?? 0) - job.creditsAvailable,
-        ),
-      };
-      renderAuthenticatedUser();
-      refreshNodeModelMenus();
-    }
-    updateEditor();
-    scheduleSave();
-    draw();
-    pollJob(liveNode);
-  } else {
-    const { error, node: liveNode } = result;
-    jobLabel.textContent = "提交失败，请检查 API";
-    showToast(
-      "任务提交失败，请检查接口配置",
-      "error",
-      error instanceof Error ? error.message : "未知错误",
-    );
-    if (liveNode?.role === "result") removeFailedResult(liveNode, source.id);
-    updateEditor();
-    scheduleSave();
-    draw();
-  }
-}
-
 const ttsGenerationController = new TtsGenerationController({
   nodes,
   links,
@@ -3571,6 +3471,45 @@ function previewVoice(voice: FlowNode) {
 }
 function generateTts(source: FlowNode) {
   return ttsGenerationController.generate(source);
+}
+const generationSubmitController = new GenerationSubmitController({
+  nodes,
+  links,
+  selectedNode,
+  blockedReason: generationBlockedReason,
+  normalizePrompt: normalizePromptText,
+  projectId: () => currentProjectId,
+  clearSelection: () => {
+    selection.selectedId = 0;
+    updateEditor();
+    draw();
+  },
+  update: updateEditor,
+  draw,
+  save: scheduleSave,
+  focusPrompt: () => promptInput.focus(),
+  setJobLabel: (value) => { jobLabel.textContent = value; },
+  createRevision: createRevisionNode,
+  removeFailedResult,
+  generateTts,
+  pollJob,
+  hasAuthenticatedUser: () => Boolean(authUser),
+  applyCredits: (creditsAvailable) => {
+    if (!authUser) return;
+    authUser = {
+      ...authUser,
+      reservedCredits: Math.max(
+        0,
+        Number(authUser.credits ?? 0) - creditsAvailable,
+      ),
+    };
+    renderAuthenticatedUser();
+    refreshNodeModelMenus();
+  },
+  toast: (message, tone, detail) => showToast(message, tone, detail),
+});
+function generate(sourceOverride?: FlowNode) {
+  return generationSubmitController.generate(sourceOverride);
 }
 function createRevisionNode(source: FlowNode) {
   const id = allocateCanvasNodeId();
