@@ -3,10 +3,6 @@ import { CanvasRenderFeature } from "../canvas/canvas-render-feature";
 import { CanvasRenderState } from "../canvas/canvas-render-state";
 import { CanvasPersistenceFeature } from "../canvas/canvas-persistence-feature";
 import { CanvasConnectionFeature } from "../canvas/canvas-connection-feature";
-import { CanvasStore } from "../canvas/store";
-import { CanvasSelectionController } from "../canvas/selection-controller";
-import { CanvasConnectionController } from "../canvas/connection-controller";
-import { CanvasInteractionController } from "../canvas/interaction-controller";
 import { CanvasInputFeature } from "../canvas/canvas-input-feature";
 import { CanvasBatchFeature } from "../canvas/canvas-batch-feature";
 import { CanvasHistoryFeature } from "../canvas/canvas-history-feature";
@@ -22,7 +18,6 @@ import type {
 import { defaultNodeCopy } from "../nodes/node-lifecycle-controller";
 import { CanvasNodeLifecycleFeature } from "../nodes/canvas-node-lifecycle-feature";
 import { decodePromptClipboardText, normalizePromptText } from "../nodes/prompt-text";
-import { PromptNodeController } from "../nodes/prompt-node";
 import { CanvasNodeEditorFeature } from "../nodes/canvas-node-editor-feature";
 import { TtsFeature } from "../services/tts-feature";
 import { apiFetch } from "../services/api";
@@ -51,6 +46,7 @@ import { CanvasNodeViewFeature } from "../nodes/canvas-node-view-feature";
 import { createDefaultGenerationCapabilities } from "./state";
 import { WorkspaceRuntimeFeature } from "./workspace-runtime-feature";
 import { AccountSessionFeature } from "./account-session-feature";
+import { escapeRuntimeHtml, RuntimeFoundation } from "./runtime-foundation";
 import {
   connectionControlPoint,
   nodePortPosition,
@@ -66,39 +62,19 @@ let generationRuntime: CanvasGenerationRuntimeFeature;
 let nodeEditorFeature: CanvasNodeEditorFeature;
 let nodeLifecycleFeature: CanvasNodeLifecycleFeature;
 let assetRuntime: WorkspaceAssetsRuntimeFeature;
-const canvas = document.querySelector<HTMLElement>("#canvas")!;
-const nodeViewport = document.querySelector<HTMLElement>("#node-viewport")!;
-const nodeLayer = document.querySelector<HTMLElement>("#node-layer")!;
-const zoomSlider = document.querySelector<HTMLInputElement>("#zoom-slider")!;
-const zoomPercent = document.querySelector<HTMLOutputElement>("#zoom-percent")!;
-const nodeCount = document.querySelector<HTMLSpanElement>("#node-count")!;
-const titleInput = document.querySelector<HTMLInputElement>("#node-title")!;
-const promptInput =
-  document.querySelector<HTMLTextAreaElement>("#node-prompt")!;
-const modelInput = document.querySelector<HTMLSelectElement>("#node-model")!;
-const saveState = document.querySelector<HTMLSpanElement>("#save-state")!;
-document.querySelector<HTMLElement>(".brand")!.append(saveState);
-const resetButton = document.querySelector<HTMLElement>("#reset")!;
-const jobLabel = document.querySelector<HTMLSpanElement>("#job-label")!;
-const jobProgress = document.querySelector<HTMLElement>("#job-progress")!;
-const generateButton = document.querySelector<HTMLButtonElement>("#generate")!;
-const canvasStore = new CanvasStore<FlowNode, FlowLink>({
-    x: 80,
-    y: 10,
-    zoom: 0.9,
-  }),
-  camera = canvasStore.camera;
-const interaction = new CanvasInteractionController(),
-  pointer = interaction.pointer;
-const selection = new CanvasSelectionController();
-let videoReferenceSwapSelection: { videoId: number; sourceId: number } | null =
-  null;
-const promptNodeEditor = new PromptNodeController();
-let contextPosition: Point = { x: 0, y: 0 };
-const connection = new CanvasConnectionController();
+const foundation = new RuntimeFoundation();
+const {
+  canvas, nodeViewport, nodeLayer, zoomSlider, zoomPercent, nodeCount,
+  titleInput, promptInput, modelInput, saveState, resetButton, jobLabel,
+  jobProgress, generateButton,
+} = foundation.dom;
+const {
+  store: canvasStore, camera, nodes, links, interaction, pointer, selection,
+  promptEditor: promptNodeEditor, connection,
+} = foundation;
 let connectionFeature: CanvasConnectionFeature;
 let canvasPersistence: CanvasPersistenceFeature;
-let currentProjectId = localStorage.getItem("flow-project-id") ?? "default";
+let currentProjectId = foundation.projectId;
 const canvasNodeIds = new CanvasNodeIdAllocator({
   projectId: () => currentProjectId,
   notifyExhausted: () => showToast("正在扩展节点编号空间，请稍后重试", "warning"),
@@ -116,13 +92,9 @@ async function reserveCanvasNodeIds(projectId = currentProjectId) {
 function allocateCanvasNodeId() {
   return canvasNodeIds.allocate();
 }
-let backgroundMode: "dots" | "lines" | "blank" = "lines";
-let colorTheme: "light" | "dark" =
-  localStorage.getItem("flow-theme") === "light" ? "light" : "dark";
-document.body.dataset.theme = colorTheme;
+let backgroundMode = foundation.backgroundMode;
+let colorTheme = foundation.colorTheme;
 const clientLog = new RuntimeDiagnosticsFeature().log;
-const nodes = canvasStore.nodes;
-const links = canvasStore.links;
 const canvasTasks = new CanvasTaskFeature<AuthUser>({
   nodes,
   links,
@@ -288,8 +260,8 @@ const nodeViews = new CanvasNodeViewFeature({
   isAgentCreateMode: () => creationSuite.prompt.controls.mode === "create",
   getAgentIds: () => creationSuite.prompt.selectedIds,
   getColorTheme: () => colorTheme,
-  getSwap: () => videoReferenceSwapSelection,
-  setSwap: (value) => { videoReferenceSwapSelection = value; },
+  getSwap: () => foundation.videoReferenceSwapSelection,
+  setSwap: (value) => { foundation.videoReferenceSwapSelection = value; },
   getAuthUser: () => authWorkspace.user,
   getCustomModels: () => accountTools.models,
   getCapabilities: () => generationCapabilities,
@@ -299,7 +271,7 @@ const nodeViews = new CanvasNodeViewFeature({
   getVoices: () => ttsFeature.catalog.voicesByProvider,
   ensureProviders: () => ttsFeature.loadProviders(),
   ensureVoices: (providerId) => ttsFeature.loadVoices(providerId),
-  escapeHtml,
+  escapeHtml: escapeRuntimeHtml,
   normalizePrompt: normalizePromptText,
   displayModelName: modelDisplayName,
   decodePrompt: (value = "") => decodePromptClipboardText(value),
@@ -357,7 +329,7 @@ function modelDisplayName(value?: string) {
   );
 }
 const canvasFeedback = new CanvasFeedbackFeature({
-  escapeHtml,
+  escapeHtml: escapeRuntimeHtml,
   normalizePrompt: normalizePromptText,
   decodePrompt: decodePromptClipboardText,
 });
@@ -577,7 +549,7 @@ function addNode(
 function addMediaNode(
   url: string,
   title: string,
-  position = contextPosition,
+  position = foundation.contextPosition,
   kind: "image" | "video" = "image",
 ) {
   nodeLifecycleFeature.addMedia(url, title, position, kind);
@@ -857,11 +829,6 @@ assetRuntime = new WorkspaceAssetsRuntimeFeature({
   registerWorkspaceMenu: (close) => topbarMenus.register("workspace", close),
   toast: (message, tone, detail) => showToast(message, tone, detail),
 });
-function escapeHtml(value: string) {
-  const element = document.createElement("span");
-  element.textContent = value;
-  return element.innerHTML;
-}
 function refreshLocalImageAvailabilityUI() {
   /* 本地 Provider 暂不在模型列表展示 */
 }
