@@ -54,7 +54,6 @@ import {
 import { GenerationSubmitController } from "../nodes/generation-submit-controller";
 import { PendingTaskCancellationController } from "../nodes/pending-task-cancellation-controller";
 import { apiFetch } from "../services/api";
-import { friendlyGenerationError } from "../services/generation-error-presenter";
 import { AppUpdateController } from "../services/app-update-controller";
 import {
   type GenerationJob,
@@ -101,6 +100,8 @@ import { QuickNodeMenuController } from "../ui/quick-node-menu-controller";
 import { HomeSceneController } from "../ui/home-scene-controller";
 import { AppearanceController } from "../ui/appearance-controller";
 import { NodeEditorStateController } from "../ui/node-editor-state-controller";
+import { CanvasGuideController, type CanvasGuideMessage } from "../ui/canvas-guide-controller";
+import { ToastController, type ToastType } from "../ui/toast-controller";
 import {
   createProjectDialog,
 } from "../ui/dialogs/project-dialog";
@@ -725,60 +726,18 @@ const generationWorkflow = new GenerationWorkflow({
   canGenerate: canGenerateNode,
 });
 const toastStack = document.querySelector<HTMLElement>("#toast-stack")!;
+const canvasGuideController = new CanvasGuideController(escapeHtml);
+const toastController = new ToastController(
+  toastStack,
+  escapeHtml,
+  (message) => canvasGuideController.show(message),
+);
 function showToast(
   message: string,
-  type: "error" | "success" | "warning" | "info" = "error",
+  type: ToastType = "error",
   detail = "",
 ) {
-  if (type === "info") {
-    showCanvasGuide({
-      key: "video-reference-order-guide",
-      title: "调整素材顺序",
-      detail: detail || message,
-      tone: "online",
-      priority: 44,
-      duration: 4200,
-    });
-    return;
-  }
-  const toast = document.createElement("div"),
-    raw = detail || message,
-    friendly = type === "error" ? friendlyGenerationError(raw, message) : null;
-  const successTitle = /登录/.test(message)
-    ? "登录成功"
-    : /生成|创建|加入资产库/.test(message)
-      ? "生成完成"
-      : /保存|更新|重命名|复制/.test(message)
-        ? "保存完成"
-        : "操作完成";
-  const toastTitle =
-    friendly?.title ||
-    (type === "success"
-      ? successTitle
-      : type === "warning"
-        ? "提示"
-        : "操作失败");
-  toast.className = `app-toast ${type}`;
-  toast.innerHTML = `<i>${type === "error" ? "!" : type === "success" ? "✓" : "i"}</i><span><b>${escapeHtml(toastTitle)}</b><small>${escapeHtml(friendly?.message || message)}</small>${friendly ? `<p>${escapeHtml(friendly.advice)}</p><details><summary>技术详情</summary><em>${escapeHtml(raw)}${friendly.requestId ? `\nRequest ID: ${escapeHtml(friendly.requestId)}` : ""}</em></details>` : detail ? `<em>${escapeHtml(detail)}</em>` : ""}</span><button type="button" aria-label="关闭">×</button>`;
-  let timer =
-    type === "error"
-      ? 0
-      : window.setTimeout(
-          () => toast.remove(),
-          type === "warning" ? 9000 : 6000,
-        );
-  toast.querySelector("button")!.addEventListener("click", () => {
-    window.clearTimeout(timer);
-    toast.remove();
-  });
-  toast.querySelector("details")?.addEventListener("toggle", (event) => {
-    if (type === "error") return;
-    if ((event.currentTarget as HTMLDetailsElement).open)
-      window.clearTimeout(timer);
-    else timer = window.setTimeout(() => toast.remove(), 12000);
-  });
-  toastStack.append(toast);
-  while (toastStack.children.length > 3) toastStack.firstElementChild?.remove();
+  toastController.show(message, type, detail);
 }
 
 function normalizePromptText(prompt?: string) {
@@ -825,146 +784,12 @@ async function copyOriginalPrompt(prompt?: string) {
   }
 }
 
-type CanvasGuideTone = "neutral" | "online" | "offline";
-type CanvasGuideAction = { label: string; primary?: boolean; run: () => void };
-type CanvasGuideMessage = {
-  key: string;
-  title: string;
-  detail: string;
-  tone?: CanvasGuideTone;
-  priority?: number;
-  duration?: number;
-  actions?: CanvasGuideAction[];
-};
-let canvasGuideBubble: HTMLElement | null = null;
-let canvasGuideKey = "",
-  canvasGuidePriority = -1,
-  canvasGuideTimer = 0,
-  canvasGuideHideTimer = 0,
-  canvasGuideFrame = 0;
 let serviceKnownOffline = false;
-function positionInspirationBubble(notice: HTMLElement) {
-  const trigger = document.querySelector<HTMLElement>("#prompt-agent-trigger");
-  if (!trigger || !notice.isConnected) return;
-  const icon = trigger.querySelector<HTMLElement>("b") || trigger;
-  const rect = icon.getBoundingClientRect();
-  const anchorX = rect.left + rect.width / 2;
-  const gap = 34;
-  // Starting at the icon: small -> middle -> body travels up and to the right.
-  const preferredTailX = 18;
-  const width = notice.offsetWidth;
-  const left = Math.max(
-    12,
-    Math.min(innerWidth - width - 12, anchorX - preferredTailX),
-  );
-  const tailX = Math.max(10, Math.min(width - 10, anchorX - left));
-  notice.style.left = `${left}px`;
-  notice.style.bottom = `${Math.max(12, innerHeight - rect.top + gap)}px`;
-  notice.style.setProperty("--bubble-tail-x", `${tailX}px`);
-}
-function followInspirationBubble(notice: HTMLElement) {
-  if (canvasGuideFrame) cancelAnimationFrame(canvasGuideFrame);
-  let previous = "";
-  const follow = () => {
-    if (!notice.isConnected || notice.hidden) {
-      canvasGuideFrame = 0;
-      return;
-    }
-    const trigger = document.querySelector<HTMLElement>(
-      "#prompt-agent-trigger",
-    );
-    const icon = trigger?.querySelector<HTMLElement>("b") || trigger;
-    if (icon) {
-      const rect = icon.getBoundingClientRect();
-      const signature = `${rect.left.toFixed(2)}:${rect.top.toFixed(2)}:${rect.width.toFixed(2)}:${notice.offsetWidth}`;
-      if (signature !== previous) {
-        previous = signature;
-        positionInspirationBubble(notice);
-      }
-    }
-    canvasGuideFrame = requestAnimationFrame(follow);
-  };
-  canvasGuideFrame = requestAnimationFrame(follow);
-}
-function ensureCanvasGuideBubble() {
-  if (canvasGuideBubble) return canvasGuideBubble;
-  canvasGuideBubble = document.createElement("aside");
-  canvasGuideBubble.className = "app-update-popover service-status-popover";
-  canvasGuideBubble.hidden = true;
-  document.body.append(canvasGuideBubble);
-  return canvasGuideBubble;
-}
-function burstCanvasGuide(notice: HTMLElement) {
-  const rect = notice.getBoundingClientRect(),
-    field = document.createElement("div");
-  field.className = "canvas-guide-particle-field";
-  field.style.left = `${rect.left + rect.width / 2}px`;
-  field.style.top = `${rect.top + rect.height / 2}px`;
-  field.innerHTML = Array.from({ length: 24 }, () => {
-    const angle = Math.random() * Math.PI * 2,
-      distance = 38 + Math.random() * 104,
-      startX = (Math.random() - 0.5) * Math.min(84, rect.width * 0.34),
-      startY = (Math.random() - 0.5) * Math.min(34, rect.height * 0.5),
-      size = 3 + Math.random() * 5;
-    return `<i style="left:${startX}px;top:${startY}px;width:${size}px;height:${size}px;--guide-px:${Math.cos(angle) * distance}px;--guide-py:${Math.sin(angle) * distance * (0.58 + Math.random() * 0.55)}px;--guide-delay:${Math.random() * 70}ms"></i>`;
-  }).join("");
-  document.body.append(field);
-  window.setTimeout(() => field.remove(), 860);
-}
 function hideCanvasGuide(key?: string) {
-  if (key && key !== canvasGuideKey) return;
-  window.clearTimeout(canvasGuideTimer);
-  canvasGuideTimer = 0;
-  if (canvasGuideFrame) cancelAnimationFrame(canvasGuideFrame);
-  canvasGuideFrame = 0;
-  canvasGuideKey = "";
-  canvasGuidePriority = -1;
-  if (canvasGuideBubble && !canvasGuideBubble.hidden) {
-    window.clearTimeout(canvasGuideHideTimer);
-    const leaving = canvasGuideBubble;
-    burstCanvasGuide(leaving);
-    leaving.hidden = true;
-    leaving.classList.remove("is-entering", "is-leaving");
-  }
+  canvasGuideController.hide(key);
 }
 function showCanvasGuide(message: CanvasGuideMessage) {
-  const priority = message.priority ?? 20;
-  const duration = message.duration ?? (priority <= 40 ? 2800 : 0);
-  if (
-    canvasGuideKey &&
-    canvasGuideKey !== message.key &&
-    priority < canvasGuidePriority
-  )
-    return false;
-  const notice = ensureCanvasGuideBubble();
-  window.clearTimeout(canvasGuideTimer);
-  canvasGuideTimer = 0;
-  window.clearTimeout(canvasGuideHideTimer);
-  canvasGuideHideTimer = 0;
-  canvasGuideKey = message.key;
-  canvasGuidePriority = priority;
-  notice.className = `app-update-popover service-status-popover ${message.tone ?? "neutral"}${message.actions?.length ? " interactive" : ""}`;
-  notice.innerHTML = `<span><b>${escapeHtml(message.title)}</b><small>${escapeHtml(message.detail)}</small>${message.actions?.length ? "<em></em>" : ""}</span>`;
-  const actions = notice.querySelector<HTMLElement>("em");
-  message.actions?.forEach((action) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = action.label;
-    if (action.primary) button.dataset.updateReload = "";
-    button.addEventListener("click", action.run);
-    actions?.append(button);
-  });
-  notice.hidden = false;
-  notice.classList.remove("is-leaving", "is-entering");
-  void notice.offsetWidth;
-  notice.classList.add("is-entering");
-  followInspirationBubble(notice);
-  if (duration > 0)
-    canvasGuideTimer = window.setTimeout(
-      () => hideCanvasGuide(message.key),
-      duration,
-    );
-  return true;
+  return canvasGuideController.show(message);
 }
 const appUpdateController = new AppUpdateController({
   authenticated: () => Boolean(authUser),
@@ -1326,7 +1151,7 @@ function showCanvasModeNotice(title: string, detail: string) {
 const notificationStreamController = new NotificationStreamController({
   isAuthenticated: () => Boolean(authUser),
   isServiceKnownOffline: () => serviceKnownOffline,
-  isServiceGuideVisible: () => canvasGuideKey === "service-status",
+  isServiceGuideVisible: () => canvasGuideController.isVisible("service-status"),
   renderPresence: renderOnlineStatus,
   currentPresence: () => onlinePresenceView.current(),
   clearPresence: () => onlinePresenceView.clear(),
