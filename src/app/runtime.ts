@@ -14,6 +14,7 @@ import { CanvasConnectionController } from "../canvas/connection-controller";
 import { CanvasInteractionController } from "../canvas/interaction-controller";
 import { DomPointerLifecycle } from "../canvas/dom-pointer-lifecycle";
 import { MarqueeController } from "../canvas/marquee-controller";
+import { CanvasPointerLifecycle } from "../canvas/canvas-pointer-lifecycle";
 import { MediaLruCache } from "../canvas/media-cache";
 import type {
   FlowLink,
@@ -264,7 +265,6 @@ const canvasStore = new CanvasStore<FlowNode, FlowLink>({
   camera = canvasStore.camera;
 const interaction = new CanvasInteractionController(),
   pointer = interaction.pointer;
-let canvasPanSelectedElement: HTMLElement | null = null;
 const selection = new CanvasSelectionController();
 let videoReferenceSwapSelection: { videoId: number; sourceId: number } | null =
   null;
@@ -1136,6 +1136,37 @@ const marqueeController = new MarqueeController({
   refreshHint: refreshCanvasModeHint,
   draw,
   notice: showCanvasModeNotice,
+});
+new CanvasPointerLifecycle({
+  canvas,
+  nodeLayer,
+  interaction,
+  selection,
+  zoom: () => camera.zoom,
+  hitNode,
+  cancelCameraAnimation: () => {
+    if (cameraFrame === null) return;
+    cancelAnimationFrame(cameraFrame);
+    cameraFrame = null;
+    zoomTarget = camera.zoom;
+  },
+  toggleBatchNode,
+  updateEditor,
+  setEditing: () => setSaveState("editing", "编辑中…"),
+  moveNode: (id, dx, dy) => canvasStore.moveNodeById(id, dx, dy),
+  panCamera: (dx, dy) => canvasStore.panCamera(dx, dy),
+  connectionActive: () => Boolean(connection.active),
+  moveConnection: (event) => {
+    updateConnectionPointer(event.clientX, event.clientY);
+    startConnectionAutoPan(event.clientX, event.clientY);
+    draw(false);
+  },
+  finishConnection: finishDomConnection,
+  cancelConnection: () => { connection.cancel(); stopConnectionAutoPan(); },
+  save: scheduleSave,
+  draw,
+  closeQuickMenu: closeQuickNodeMenu,
+  smoothZoom: (factor, anchor) => smoothZoom(zoomTarget * factor, anchor),
 });
 let saveTimer: number | undefined;
 let drawFrame: number | null = null;
@@ -5569,186 +5600,6 @@ batchToolbar
   .querySelector("[data-batch-clear]")!
   .addEventListener("click", exitMultiSelectMode);
 
-canvas.addEventListener("pointerdown", (e) => {
-  if (e.button !== 0) return;
-  if (cameraFrame !== null) {
-    cancelAnimationFrame(cameraFrame);
-    cameraFrame = null;
-    zoomTarget = camera.zoom;
-  }
-  interaction.beginPointer({ x: e.clientX, y: e.clientY });
-  {
-    const hit = hitNode(e.clientX, e.clientY);
-    if (hit) {
-      if (selection.multiSelectMode) {
-        if (!selection.batchIds.has(hit.id)) {
-          pointer.down = false;
-          pointer.blankCanvas = false;
-          toggleBatchNode(hit.id);
-          return;
-        }
-        pointer.draggingNode = hit.id;
-        pointer.draggingGroup = new Set(selection.batchIds);
-        pointer.toggleBatchOnRelease = hit.id;
-        pointer.blankCanvas = false;
-      } else {
-        selection.selectedId = hit.id;
-        pointer.draggingNode = hit.id;
-        pointer.blankCanvas = false;
-        updateEditor();
-      }
-    }
-  }
-  canvas.setPointerCapture(e.pointerId);
-  canvas.classList.add("dragging");
-  draw(false);
-});
-canvas.addEventListener("pointermove", (e) => {
-  if (!pointer.down) return;
-  if (
-    !pointer.moved &&
-    Math.hypot(e.clientX - pointer.startX, e.clientY - pointer.startY) > 4
-  ) {
-    pointer.moved = true;
-    if (pointer.draggingNode === selection.selectedId) {
-      nodeLayer
-        .querySelector<HTMLElement>(
-          `.flow-node[data-id="${pointer.draggingNode}"]`,
-        )
-        ?.classList.remove("selected");
-      selection.selectedId = 0;
-      updateEditor();
-    }
-    if (!pointer.blankCanvas) setSaveState("editing", "编辑中…");
-    if (pointer.blankCanvas && selection.selectedId) {
-      canvasPanSelectedElement = nodeLayer.querySelector<HTMLElement>(
-        `.flow-node[data-id="${selection.selectedId}"]`,
-      );
-      canvasPanSelectedElement?.classList.add("canvas-pan-selected");
-    }
-  }
-  if (connection.active) {
-    updateConnectionPointer(e.clientX, e.clientY);
-    startConnectionAutoPan(e.clientX, e.clientY);
-    draw(false);
-    return;
-  }
-  const dx = e.clientX - pointer.x,
-    dy = e.clientY - pointer.y;
-  if (pointer.draggingNode) {
-    const draggingIds = pointer.draggingGroup ?? [pointer.draggingNode];
-    for (const id of draggingIds)
-      canvasStore.moveNodeById(id, dx / camera.zoom, dy / camera.zoom);
-  } else {
-    canvasStore.panCamera(dx, dy);
-  }
-  pointer.x = e.clientX;
-  pointer.y = e.clientY;
-  draw(Boolean(pointer.draggingNode));
-});
-canvas.addEventListener("pointerup", (e) => {
-  if (connection.active) {
-    const snappedNode = connection.snap
-        ? nodes.find((node) => node.id === connection.snap!.nodeId)
-        : undefined,
-      target = snappedNode
-        ? { node: snappedNode, side: connection.snap!.side }
-        : hitPort(
-            e.clientX,
-            e.clientY,
-            connection.snapRadius,
-            connection.active.nodeId,
-          );
-    if (target) {
-      const next = directedLink(
-        connection.active.nodeId,
-        connection.active.side,
-        target.node.id,
-        target.side,
-      );
-      if (
-        next &&
-        !links.some((link) => link.from === next.from && link.to === next.to)
-      )
-        links.push(next);
-    }
-    connection.cancel();
-    stopConnectionAutoPan();
-  } else if (pointer.blankCanvas && !pointer.moved) {
-    selection.selectedId = 0;
-    updateEditor();
-  }
-  if (pointer.toggleBatchOnRelease && !pointer.moved)
-    toggleBatchNode(pointer.toggleBatchOnRelease);
-  scheduleSave();
-  interaction.resetPointer();
-  canvasPanSelectedElement?.classList.remove("canvas-pan-selected");
-  canvasPanSelectedElement = null;
-  canvas.classList.remove("dragging");
-  draw();
-});
-canvas.addEventListener("pointercancel", () => {
-  canvasPanSelectedElement?.classList.remove("canvas-pan-selected");
-  canvasPanSelectedElement = null;
-  interaction.resetPointer();
-  if (connection.active) {
-    connection.cancel();
-    stopConnectionAutoPan();
-  }
-  draw();
-});
-function cancelCanvasPanOnPageInterruption() {
-  if (!pointer.down) return;
-  interaction.resetPointer();
-  canvasPanSelectedElement?.classList.remove("canvas-pan-selected");
-  canvasPanSelectedElement = null;
-  canvas.classList.remove("dragging");
-  draw(true);
-}
-window.addEventListener("blur", cancelCanvasPanOnPageInterruption);
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden) cancelCanvasPanOnPageInterruption();
-});
-canvas.addEventListener(
-  "wheel",
-  (e) => {
-    e.preventDefault();
-    closeQuickNodeMenu();
-    smoothZoom(zoomTarget * Math.exp(-e.deltaY * 0.001), {
-      x: e.clientX,
-      y: e.clientY,
-    });
-  },
-  { passive: false },
-);
-nodeLayer.addEventListener(
-  "wheel",
-  (e) => {
-    const target = e.target as HTMLElement | null;
-    if (
-      target?.closest(
-        ".video-model-popover,.video-settings-popover,.voice-model-menu",
-      )
-    ) {
-      e.stopPropagation();
-      return;
-    }
-    if (
-      target?.closest(
-        'textarea,input,select,[contenteditable="true"],.node-copy,.image-original-prompt p,.video-result-prompt',
-      )
-    )
-      return;
-    e.preventDefault();
-    e.stopPropagation();
-    closeQuickNodeMenu();
-    smoothZoom(zoomTarget * Math.exp(-e.deltaY * 0.001), {
-      x: e.clientX,
-      y: e.clientY,
-    });
-  },
-  { passive: false },
-);
 const linkHoverHint = document.querySelector<HTMLElement>("#link-hover-hint")!;
 const touchLinkAction =
   document.querySelector<HTMLButtonElement>("#touch-link-action")!;
