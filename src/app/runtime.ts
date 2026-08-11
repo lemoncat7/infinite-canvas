@@ -15,6 +15,7 @@ import { CanvasInteractionController } from "../canvas/interaction-controller";
 import { DomPointerLifecycle } from "../canvas/dom-pointer-lifecycle";
 import { MarqueeController } from "../canvas/marquee-controller";
 import { CanvasPointerLifecycle } from "../canvas/canvas-pointer-lifecycle";
+import { TouchPinchController } from "../canvas/touch-pinch-controller";
 import { MediaLruCache } from "../canvas/media-cache";
 import type {
   FlowLink,
@@ -1120,6 +1121,22 @@ const domPointer = new DomPointerLifecycle({
   },
   finishConnection: finishDomConnection,
 });
+const touchPinch = new TouchPinchController({
+  selector: "#canvas,.flow-node",
+  zoom: () => camera.zoom,
+  setZoom,
+  pan: (dx, dy) => { camera.x += dx; camera.y += dy; },
+  cancelSingleTouch: () => {
+    pointer.down = false;
+    pointer.draggingNode = null;
+    canvas.classList.remove("dragging");
+    connection.cancel();
+    stopConnectionAutoPan();
+    domPointer.cancel();
+  },
+  syncZoomTarget: () => { zoomTarget = camera.zoom; },
+  draw,
+});
 const marqueeController = new MarqueeController({
   canvas,
   nodeLayer,
@@ -1225,8 +1242,6 @@ function schedulePixiEditorWarmup() {
 let cameraFrame: number | null = null;
 let zoomTarget = camera.zoom;
 let zoomAnchor: Point = { x: innerWidth / 2, y: innerHeight / 2 };
-const canvasTouches = new Map<number, Point>();
-let pinchGesture: { distance: number; center: Point } | null = null;
 const pendingMediaLoads = new Set<string>();
 const thumbnailLoadRetries = new Map<string, number>();
 function releaseCachedImage(url: string, image: HTMLImageElement) {
@@ -3257,7 +3272,7 @@ function linkPathGeometry(link: FlowLink) {
   };
 }
 function canvasInteractionActive() {
-  return Boolean(pointer.down || domPointer.drag || interaction.marquee?.active || pinchGesture);
+  return Boolean(pointer.down || domPointer.drag || interaction.marquee?.active || touchPinch.active);
 }
 function hitNode(sx: number, sy: number) {
   const p = world({ x: sx, y: sy }),
@@ -3525,81 +3540,6 @@ function setZoom(
   camera.zoom = next;
   draw(false);
 }
-function currentPinch() {
-  const points = [...canvasTouches.values()].slice(0, 2);
-  if (points.length < 2) return null;
-  const [a, b] = points;
-  return {
-    distance: Math.max(1, Math.hypot(b.x - a.x, b.y - a.y)),
-    center: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 },
-  };
-}
-function cancelSingleTouchActions() {
-  pointer.down = false;
-  pointer.draggingNode = null;
-  canvas.classList.remove("dragging");
-  connection.cancel();
-  stopConnectionAutoPan();
-  domPointer.cancel();
-}
-document.addEventListener(
-  "pointerdown",
-  (event) => {
-    if (
-      event.pointerType !== "touch" ||
-      !(event.target as HTMLElement | null)?.closest("#canvas,.flow-node")
-    )
-      return;
-    canvasTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    if (canvasTouches.size < 2) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    cancelSingleTouchActions();
-    pinchGesture = currentPinch();
-    zoomTarget = camera.zoom;
-  },
-  { capture: true, passive: false },
-);
-document.addEventListener(
-  "pointermove",
-  (event) => {
-    if (!canvasTouches.has(event.pointerId)) return;
-    canvasTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    if (!pinchGesture || canvasTouches.size < 2) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    const next = currentPinch();
-    if (!next) return;
-    const previous = pinchGesture,
-      scale = next.distance / previous.distance;
-    setZoom(camera.zoom * scale, next.center);
-    camera.x += next.center.x - previous.center.x;
-    camera.y += next.center.y - previous.center.y;
-    zoomTarget = camera.zoom;
-    pinchGesture = next;
-    draw(false);
-  },
-  { capture: true, passive: false },
-);
-function endCanvasTouch(event: PointerEvent) {
-  if (!canvasTouches.has(event.pointerId)) return;
-  const wasPinching = Boolean(pinchGesture);
-  canvasTouches.delete(event.pointerId);
-  if (!wasPinching) return;
-  event.preventDefault();
-  event.stopImmediatePropagation();
-  pinchGesture = canvasTouches.size >= 2 ? currentPinch() : null;
-  cancelSingleTouchActions();
-  draw();
-}
-document.addEventListener("pointerup", endCanvasTouch, {
-  capture: true,
-  passive: false,
-});
-document.addEventListener("pointercancel", endCanvasTouch, {
-  capture: true,
-  passive: false,
-});
 function smoothZoom(next: number, anchor: Point) {
   zoomTarget = Math.min(2.5, Math.max(0.3, next));
   zoomAnchor = anchor;
