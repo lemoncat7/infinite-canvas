@@ -32,6 +32,7 @@ import {
   removeResultNode,
 } from "../nodes/generation-node-lifecycle";
 import { MediaLifecycleController } from "../canvas/media-lifecycle-controller";
+import { NodeMediaRenderer, mediaThumbnailUrl } from "../canvas/node-media-renderer";
 import type {
   FlowLink,
   FlowNode,
@@ -1032,14 +1033,7 @@ const mediaLifecycle = new MediaLifecycleController({
   draw,
 });
 const pendingMediaLoads = mediaLifecycle.pendingLoads;
-const thumbnailLoadRetries = mediaLifecycle.retries;
 const imageCache = mediaLifecycle.cache;
-function trimThumbnailCache() {
-  mediaLifecycle.trim();
-}
-function rememberCachedImage(url: string, image: HTMLImageElement) {
-  mediaLifecycle.remember(url, image);
-}
 document.addEventListener("selectstart", (event) => {
   if (document.body.classList.contains("home-mode")) return;
   const target = event.target instanceof Element ? event.target : null;
@@ -2476,127 +2470,27 @@ function defaultNodeCopy(kind: NodeKind) {
 }
 
 function paintNodeMedia(target: HTMLCanvasElement, url: string) {
-  const displayUrl = mediaThumbnailUrl(url);
-  let image = imageCache.get(displayUrl);
-  if (!image) {
-    image = new Image();
-    pendingMediaLoads.add(displayUrl);
-    rememberCachedImage(displayUrl, image);
-    refreshAppearanceButton();
-    image.onload = () => {
-      pendingMediaLoads.delete(displayUrl);
-      thumbnailLoadRetries.delete(displayUrl);
-      repaintMediaUrl(url);
-      trimThumbnailCache();
-      refreshAppearanceButton();
-    };
-    image.onerror = () => {
-      pendingMediaLoads.delete(displayUrl);
-      imageCache.delete(displayUrl);
-      refreshAppearanceButton();
-      const retries = thumbnailLoadRetries.get(displayUrl) ?? 0;
-      if (retries >= 2) {
-        thumbnailLoadRetries.delete(displayUrl);
-        drawMediaImage(target, image!);
-        return;
-      }
-      thumbnailLoadRetries.set(displayUrl, retries + 1);
-      window.setTimeout(
-        () => {
-          if (document.hidden) return;
-          nodes
-            .filter((node) => node.mediaUrl === url)
-            .forEach((node) => nodeDomStates.delete(node.id));
-          nodeLayer
-            .querySelectorAll<HTMLElement>(
-              `.flow-node .node-media[data-source-key="${CSS.escape(url)}"]`,
-            )
-            .forEach((media) => delete media.dataset.sourceKey);
-          nodeLayer
-            .querySelectorAll<HTMLCanvasElement>(
-              `[data-reference-url="${CSS.escape(url)}"]`,
-            )
-            .forEach((canvas) => delete canvas.dataset.paintedUrl);
-          draw(true);
-        },
-        700 * (retries + 1),
-      );
-    };
-    image.src = displayUrl;
-  } else rememberCachedImage(displayUrl, image);
-  drawMediaImage(target, image);
-}
-function mediaThumbnailUrl(url: string) {
-  return url.replace(
-    /^(\/api\/(?:public\/)?assets\/[^/]+)\/content(?:\/.*)?$/,
-    "$1/thumbnail",
-  );
-}
-function drawMediaImage(target: HTMLCanvasElement, image: HTMLImageElement) {
-  const context = target.getContext("2d")!;
-  const dark = colorTheme === "dark",
-    fill = dark ? "#111a1c" : "#e7efeb";
-  context.fillStyle = fill;
-  context.fillRect(0, 0, target.width, target.height);
-  if (image.complete && image.naturalWidth) {
-    const scale = Math.min(
-        target.width / image.naturalWidth,
-        target.height / image.naturalHeight,
-      ),
-      width = image.naturalWidth * scale,
-      height = image.naturalHeight * scale;
-    context.drawImage(
-      image,
-      (target.width - width) / 2,
-      (target.height - height) / 2,
-      width,
-      height,
-    );
-  } else {
-    // Resizing a canvas clears its pixels. Always paint a visible fallback
-    // while the thumbnail decodes (or fails), otherwise light mode flashes a
-    // featureless white card whenever DOM cards are remounted.
-    const centerX = target.width / 2,
-      centerY = target.height / 2,
-      size = Math.max(24, Math.min(42, target.width * 0.11));
-    context.strokeStyle = dark ? "#607579" : "#8ba19a";
-    context.lineWidth = Math.max(2, target.width / 180);
-    context.strokeRect(centerX - size / 2, centerY - size, size, size);
-    context.beginPath();
-    context.moveTo(centerX - size * 0.34, centerY - size * 0.18);
-    context.lineTo(centerX - size * 0.08, centerY - size * 0.48);
-    context.lineTo(centerX + size * 0.34, centerY - size * 0.08);
-    context.stroke();
-    context.fillStyle = dark ? "#8fa4a7" : "#60736d";
-    context.font = `${Math.max(12, Math.min(18, target.width / 22))}px system-ui`;
-    context.textAlign = "center";
-    context.fillText(
-      image.complete ? "缩略图加载失败" : "缩略图加载中",
-      centerX,
-      centerY + Math.max(18, size * 0.45),
-    );
-  }
+  nodeMediaRenderer.paint(target, url);
 }
 function paintNodeVideo(target: HTMLCanvasElement, url: string) {
   paintNodeMedia(target, url);
 }
 function repaintMediaUrl(url: string) {
-  const image = imageCache.get(mediaThumbnailUrl(url));
-  if (!image) return;
-  nodes
-    .filter((node) => node.mediaUrl === url)
-    .forEach((node) => {
-      const target = nodeLayer.querySelector<HTMLCanvasElement>(
-        `.flow-node[data-id="${node.id}"] .node-media-canvas`,
-      );
-      if (target) drawMediaImage(target, image!);
-    });
+  nodeMediaRenderer.repaintUrl(url);
 }
 function repaintAllMedia() {
-  nodes
-    .filter((node) => node.mediaUrl)
-    .forEach((node) => repaintMediaUrl(node.mediaUrl!));
+  nodeMediaRenderer.repaintAll();
 }
+
+const nodeMediaRenderer = new NodeMediaRenderer({
+  lifecycle: mediaLifecycle,
+  nodes,
+  nodeLayer,
+  theme: () => colorTheme,
+  invalidateNode: (id) => nodeDomStates.delete(id),
+  draw,
+  refreshAppearance: refreshAppearanceButton,
+});
 
 function finishDomConnection(event: PointerEvent) {
   if (!connection.active) return;
