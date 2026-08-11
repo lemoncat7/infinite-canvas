@@ -97,6 +97,7 @@ import { TopbarMenuCoordinator } from "../ui/topbar-menu-coordinator";
 import { QuickNodeMenuController } from "../ui/quick-node-menu-controller";
 import { HomeSceneController } from "../ui/home-scene-controller";
 import { AppearanceController } from "../ui/appearance-controller";
+import { NodeEditorStateController } from "../ui/node-editor-state-controller";
 import {
   createProjectDialog,
 } from "../ui/dialogs/project-dialog";
@@ -2597,89 +2598,29 @@ function generationBlockedReason(node: FlowNode) {
     hasConnectedVoice: Boolean(connectedVoiceNode(node)),
   });
 }
+const nodeEditorState = new NodeEditorStateController({
+  titleInput,
+  promptInput,
+  modelInput,
+  generateButton,
+  jobLabel,
+  jobProgress,
+  nodeLayer,
+  selectedNode,
+  selectedId: () => selection.selectedId,
+  activelyGenerating: nodeIsActivelyGenerating,
+  canGenerate: canGenerateNode,
+  pixiActive: () => Boolean(pixiRenderer),
+  draw,
+  save: scheduleSave,
+  updateTasks: updateTaskMonitor,
+});
 function updateEditor() {
-  const node = selectedNode();
-  if (!node) {
-    titleInput.value = "";
-    promptInput.value = "";
-    jobLabel.textContent = "画布中没有节点";
-    jobProgress.style.width = "0%";
-    titleInput.disabled = true;
-    promptInput.disabled = true;
-    modelInput.disabled = true;
-    return;
-  }
-  const locked =
-    nodeIsActivelyGenerating(node) &&
-    !(node.kind === "video" && node.role !== "result");
-  titleInput.disabled = locked;
-  promptInput.disabled = locked;
-  modelInput.disabled = locked;
-  generateButton.disabled = locked || !canGenerateNode(node);
-  if (document.activeElement !== titleInput) titleInput.value = node.title;
-  if (document.activeElement !== promptInput) promptInput.value = node.body;
-  if (document.activeElement !== modelInput)
-    modelInput.value =
-      node.model ??
-      (node.kind === "video" ? "agnes-video-v2.0" : "gpt-image-2");
-  jobLabel.textContent =
-    node.status === "succeeded"
-      ? "生成完成（模拟结果）"
-      : node.status === "running"
-        ? `生成中 ${node.progress ?? 0}%`
-        : node.status === "queued"
-          ? "任务排队中"
-          : "准备生成";
-  jobProgress.style.width = `${node.progress ?? 0}%`;
+  nodeEditorState.update();
 }
 
 function updateNodeJobProgressUi(node: FlowNode) {
-  if (pixiRenderer) draw(false);
-  const element = nodeLayer.querySelector<HTMLElement>(
-      `.flow-node[data-id="${node.id}"]`,
-    ),
-    workflowWaiting = Boolean(node.agentAuto && node.status === "waiting"),
-    locked =
-      (nodeIsActivelyGenerating(node) || workflowWaiting) &&
-      !(node.kind === "video" && node.role !== "result");
-  if (element) {
-    element.classList.toggle("generating", locked);
-    element.classList.toggle("workflow-waiting", workflowWaiting);
-    const progress = element.querySelector<HTMLElement>(".node-progress i"),
-      progressTrack =
-        element.querySelector<HTMLElement>(".node-progress"),
-      waitingWithoutProgress =
-        locked &&
-        (workflowWaiting ||
-          node.status === "queued" ||
-          Number(node.progress ?? 0) <= 0);
-    if (progress)
-      progress.style.width = waitingWithoutProgress
-        ? "100%"
-        : `${node.progress ?? 0}%`;
-    if (progressTrack) {
-      progressTrack.classList.toggle("visible", locked);
-      progressTrack.classList.toggle("indeterminate", waitingWithoutProgress);
-    }
-    if (node.kind === "video" && node.role === "result") {
-      const label = element.querySelector<HTMLElement>(
-        ".video-generation-count",
-      );
-      if (label)
-        label.textContent =
-          node.status === "queued"
-            ? "任务排队中"
-            : node.status === "running"
-              ? Number(node.progress ?? 0) > 0
-                ? `生成中 ${Math.round(node.progress ?? 0)}%`
-                : node.model?.startsWith("agnes-")
-                  ? "云端处理中"
-                  : "生成中 · 等待进度"
-              : label.textContent;
-    }
-  }
-  if (selection.selectedId === node.id) updateEditor();
-  updateTaskMonitor();
+  nodeEditorState.updateProgress(node);
 }
 
 function scheduleSave(recordHistory = true) {
@@ -2970,27 +2911,6 @@ generateButton.addEventListener("click", () => void generate());
 document
   .querySelector("#delete-node")!
   .addEventListener("click", deleteSelectedNode);
-titleInput.addEventListener("input", () => {
-  const node = selectedNode();
-  if (!node) return;
-  node.title = titleInput.value;
-  scheduleSave();
-  draw();
-});
-promptInput.addEventListener("input", () => {
-  const node = selectedNode();
-  if (!node) return;
-  node.body = promptInput.value;
-  scheduleSave();
-  draw();
-});
-modelInput.addEventListener("change", () => {
-  const node = selectedNode();
-  if (!node) return;
-  node.model = modelInput.value;
-  scheduleSave();
-  draw();
-});
 document
   .querySelectorAll<HTMLElement>("[data-add]")
   .forEach((button) =>
