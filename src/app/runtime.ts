@@ -64,8 +64,6 @@ import { GenerationCapabilitiesController } from "../services/generation-capabil
 import { GenerationFinalizer } from "../services/generation-finalizer";
 import type { GenerationJob } from "../services/generation";
 import { ClientDiagnostics } from "../services/client-diagnostics";
-import { ComicSessionController } from "../services/comic-session";
-import { ComicSessionState } from "../services/comic-session-state";
 import {
   clipVideoPrompt,
   composeStoryboardPrompt,
@@ -74,7 +72,6 @@ import {
   speechSegments,
 } from "../nodes/video-node";
 import { inferVoiceConfig } from "../nodes/voice-node";
-import type { ComicPlan, ComicShot } from "../nodes/comic-types";
 import { bindNodeConfigPanel } from "../ui/node-editor";
 import { AssetPreviewController } from "../ui/asset-preview";
 import { AssetLibraryFeature } from "../ui/asset-library-feature";
@@ -100,17 +97,7 @@ import type { AuthUser } from "../ui/user-menu-controller";
 import { NotificationFeature } from "../ui/notification-feature";
 import { AccountToolsFeature } from "../ui/account-tools-feature";
 import { PromptAgentFeature } from "../ui/prompt-agent-feature";
-import { createComicStudioShell } from "../ui/comic-studio-shell";
-import { ComicSidePanelController } from "../ui/comic-side-panel";
-import { ComicStudioView } from "../ui/comic-studio";
-import { ComicSessionRecoveryView } from "../ui/comic-session-recovery";
-import { ComicDialogueController } from "../ui/comic-dialogue-controller";
-import { ComicNewSessionController } from "../ui/comic-new-session-controller";
-import { ComicStudioInteractionController } from "../ui/comic-studio-interaction-controller";
-import { ComicStudioLifecycleController } from "../ui/comic-studio-lifecycle-controller";
-import { ComicPlanController } from "../ui/comic-plan-controller";
-import { ComicOutputController } from "../ui/comic-output-controller";
-import { ComicLabelController } from "../ui/comic-labels";
+import { ComicStudioFeature } from "../ui/comic-studio-feature";
 import { BoundNodeViewFactory } from "../nodes/bound-node-view-factory";
 import { BoundNodeDomSynchronizer } from "../nodes/bound-node-dom-synchronizer";
 import { createDefaultGenerationCapabilities } from "./state";
@@ -632,6 +619,7 @@ appUpdateController.start();
 
 let notificationFeature: NotificationFeature;
 let accountTools: AccountToolsFeature;
+let comicStudioFeature: ComicStudioFeature;
 const authWorkspace: AuthWorkspaceFeature = new AuthWorkspaceFeature({
   nodes,
   links,
@@ -670,7 +658,7 @@ notificationFeature = new NotificationFeature({
   hideGuide: hideCanvasGuide,
   isGuideVisible: (key) => canvasGuideController.isVisible(key),
   checkAppUpdate: () => void appUpdateController.checkNow(),
-  restoreAfterReconnect: () => void restoreComicAfterReconnect(),
+  restoreAfterReconnect: () => void comicStudioFeature.restoreAfterReconnect(),
   toast: (message, type) => showToast(message, type),
 });
 function showCanvasModeNotice(title: string, detail: string) {
@@ -1403,7 +1391,7 @@ promptAgentFeature = new PromptAgentFeature({
   setSelectedId: (id) => { selection.selectedId = id; },
   worldCenter: () => world({ x: innerWidth / 2, y: innerHeight / 2 }),
   addNode,
-  onComic: openComicStudio,
+  onComic: () => comicStudioFeature.open(),
   updateEditor,
   persist: scheduleSave,
   draw,
@@ -1412,297 +1400,35 @@ promptAgentFeature = new PromptAgentFeature({
   decodePrompt: decodePromptClipboardText,
   toast: (message, tone) => showToast(message, tone),
 });
-const comicShell = createComicStudioShell();
-const comicStudio = comicShell.studio,
-  comicConversationElement = comicShell.conversation,
-  comicPlanElement = comicShell.sourcePlan,
-  comicPlanSidePanel = comicShell.sidePlan,
-  comicHeaderNav = comicShell.headerNav,
-  comicThinkingStatus = comicShell.thinkingStatus,
-  comicComposer = comicShell.composer,
-  comicMessageField = comicShell.messageField,
-  comicBriefPanel = comicShell.briefPanel;
-const comicSidePanel = new ComicSidePanelController({
-  studio: comicStudio,
-  briefPanel: comicBriefPanel,
-  sourcePlan: comicPlanElement,
-  planPanel: comicPlanSidePanel,
-  headerNav: comicHeaderNav,
-  getState: () => ({
-    linkedLabelId: comicState.linkedLabelId,
-    sessionId: comicState.sessionId,
-    hasPlan: Boolean(comicState.plan),
-    pendingRevision: comicState.pendingRevision,
-    ready: comicState.ready,
-    submitting: comicState.submitting,
-  }),
-  showWarning: (message) => showToast(message, "warning"),
-});
-function showComicMobilePanel(kind: "brief" | "plan" | null) {
-  comicSidePanel.showMobile(kind);
-}
-function positionComicBriefPanel() {
-  comicSidePanel.position();
-}
-const comicStudioView = new ComicStudioView(
-  comicStudio,
-  comicBriefPanel,
-  positionComicBriefPanel,
-);
-function selectedPromptAgentNodes() {
-  return promptAgentFeature.selectedNodes();
-}
-const comicState = new ComicSessionState();
-function setComicInteractionLocked(locked: boolean) {
-  comicStudioView.setInteractionLocked(locked);
-}
-function currentComicOwnerKey() {
-  return `${authWorkspace.user?.id || "anonymous"}:${currentProjectId}`;
-}
-function resetComicConversationState(clearPlan = true) {
-  comicState.reset(currentComicOwnerKey(), clearPlan);
-  renderComicBrief();
-}
-async function ensureComicProjectContext() {
-  return comicStudioLifecycle.ensureProjectContext();
-}
-function renderComicBrief() {
-  const linkedTitle = nodes
-    .find((node) => node.id === comicState.linkedLabelId)
-    ?.title.replace(/^漫剧方案\s*·\s*/, "");
-  comicStudioView.renderBrief({
-    brief: comicState.brief,
-    plan: comicState.plan,
-    sessionId: comicState.sessionId,
-    pendingRevision: comicState.pendingRevision,
-    ready: comicState.ready,
-    linkedTitle,
-  });
-}
-function comicLabels() {
-  return nodes
-    .filter((node) => node.kind === "prompt" && node.body.trim())
-    .sort((a, b) => b.id - a.id);
-}
-const comicLabelController = new ComicLabelController({
-  studio: comicStudio,
-  state: comicState,
-  getLabels: comicLabels,
-  resetConversation: resetComicConversationState,
-  renderPlan: (plan) => renderComicPlan(plan),
-  renderBrief: renderComicBrief,
-});
-function renderComicLabelState() {
-  comicLabelController.renderState();
-}
-function renderComicLabelMenu() {
-  comicLabelController.renderMenu();
-}
-const comicSessionRecovery = new ComicSessionRecoveryView({
-  studio: comicStudio,
-  state: comicState,
-  ownerKey: currentComicOwnerKey,
-  setInteractionLocked: setComicInteractionLocked,
-  renderBrief: renderComicBrief,
-  renderPlan: (plan) => { if (plan) renderComicPlan(plan); },
-  renderLabelState: renderComicLabelState,
-  showWarning: (message) => showToast(message, "warning"),
-});
-const comicSessionController = new ComicSessionController({
-  getProjectId: () => currentProjectId,
-  getOwnerKey: currentComicOwnerKey,
-  getTrackedSessionId: () => (comicState.submitting ? comicState.sessionId : ""),
-  onEmpty: () => comicSessionRecovery.clear(),
-  onSnapshot: (snapshot) => comicSessionRecovery.apply(snapshot),
-});
-const comicStudioLifecycle = new ComicStudioLifecycleController({
-  studio: comicStudio,
-  briefPanel: comicBriefPanel,
-  planPanel: comicPlanSidePanel,
+comicStudioFeature = new ComicStudioFeature({
+  nodes,
   promptPanel: promptAgentFeature.panel,
-  getOwnerKey: currentComicOwnerKey,
-  getStoredOwnerKey: () => comicState.ownerKey,
-  setStoredOwnerKey: (owner) => { comicState.ownerKey = owner; },
-  hasProject: () => Boolean(currentProjectId),
+  getProjectId: () => currentProjectId,
+  getUserId: () => authWorkspace.user?.id,
   hasAuthenticatedContext: () => Boolean(authWorkspace.user && currentProjectId),
   ensureProject: () => authWorkspace.ensureCurrentProject(),
-  resetConversation: resetComicConversationState,
-  invalidateSession: () => comicSessionController.invalidate(),
-  restoreSession: (force) => restoreComicSession(force),
-  resetMarqueeGesture: resetMarqueeRightGesture,
+  getSelectedContexts: () => promptAgentFeature.selectedNodes(),
   isMultiSelect: () => selection.multiSelectMode,
   exitMultiSelect: exitMultiSelectMode,
+  resetMarqueeGesture: resetMarqueeRightGesture,
   closePromptAgent: () => promptAgentFeature.close(),
-  renderLabelState: renderComicLabelState,
-  renderBrief: renderComicBrief,
-});
-function restoreComicSession(force = false) {
-  return comicSessionController.restore(force);
-}
-async function restoreComicAfterReconnect() {
-  await comicStudioLifecycle.restoreAfterReconnect();
-}
-function openComicStudio() {
-  comicStudioLifecycle.open();
-}
-function closeComicStudio() {
-  comicStudioLifecycle.close();
-}
-function renderComicPlan(plan: ComicPlan) {
-  comicStudioView.renderPlan(plan);
-}
-const comicDialogueController = new ComicDialogueController({
-  studio: comicStudio,
-  briefPanel: comicBriefPanel,
-  state: comicState,
-  getProjectId: () => currentProjectId,
-  ensureProjectContext: ensureComicProjectContext,
-  getContext: () => {
-    const selectedContexts = selectedPromptAgentNodes();
-    const linkedLabel = nodes.find((node) => node.id === comicState.linkedLabelId);
-    return [
-      ...(linkedLabel
-        ? [`关联标签「${linkedLabel.title}」：${linkedLabel.body.slice(0, 5000)}`]
-        : []),
-      ...selectedContexts.map(
-        (node, index) =>
-          `素材 ${index + 1}「${node.title}」：${node.generationPrompt || node.body || "视觉参考"}`,
-      ),
-    ];
-  },
-  renderBrief: renderComicBrief,
-  showError: (message) => showToast(message, "error"),
-});
-function requestComicDialogue(message: string) {
-  return comicDialogueController.submit(message);
-}
-const comicPlanController = new ComicPlanController({
-  studio: comicStudio,
-  briefPanel: comicBriefPanel,
-  state: comicState,
-  getProjectId: () => currentProjectId,
-  ensureProjectContext: ensureComicProjectContext,
-  getInputs: () => {
-    const selectedContexts = selectedPromptAgentNodes();
-    const linkedLabel = nodes.find((node) => node.id === comicState.linkedLabelId);
-    return {
-      context: [
-        ...(linkedLabel
-          ? [`已关联故事标签「${linkedLabel.title}」：\n${linkedLabel.body}`]
-          : []),
-        ...selectedContexts.map(
-          (node, index) =>
-            `素材 ${index + 1}「${node.title}」：${node.generationPrompt || node.body || "视觉参考"}`,
-        ),
-      ],
-      visuals: selectedContexts
-        .filter((node) => node.kind === "image" && node.mediaUrl)
-        .map((node) => node.mediaUrl!),
-    };
-  },
-  renderBrief: renderComicBrief,
-  renderPlan: renderComicPlan,
-  setInteractionLocked: setComicInteractionLocked,
-  invalidateSession: () => comicSessionController.invalidate(),
-  restoreSession: () => restoreComicSession(true),
-  showToast: (message, tone) => showToast(message, tone),
-});
-function requestComicPlan() {
-  return comicPlanController.submit();
-}
-const comicOutputController = new ComicOutputController({
-  state: comicState,
-  getNodes: () => nodes,
-  prepareCanvas: () => {
-    resetMarqueeRightGesture();
-    if (selection.multiSelectMode) exitMultiSelectMode();
-  },
   applyPlan: (result) => promptAgentFeature.application.applyPlan(result),
-  closeStudio: closeComicStudio,
-  onWorkflowReady: (stats) => {
-    showToast(
-      `工作流已铺到画布：${stats.characterCount} 个角色、${stats.propCount} 个道具、${stats.sceneCount} 个场景、${stats.storyboardCount} 张关键帧${stats.compositeCount ? `、${stats.compositeCount} 张合成底图` : ""}`,
-      "success",
-    );
-    window.setTimeout(
-      () =>
-        showCanvasGuide({
-          key: "comic-empty-images-guide",
-          title: "连续分镜工作流已就绪",
-          detail: `每次生图最多使用 2 张参考${stats.compositeCount ? `，${stats.compositeCount} 个复杂画面会逐层合成` : ""}；检查素材和提示词后，可点击顶栏“启动空图”。`,
-          tone: "online",
-          priority: 58,
-          duration: 10000,
-          actions: [
-            {
-              label: "知道了",
-              run: () => hideCanvasGuide("comic-empty-images-guide"),
-            },
-            {
-              label: "启动空图",
-              primary: true,
-              run: () => {
-                hideCanvasGuide("comic-empty-images-guide");
-                startAllEmptyImages();
-              },
-            },
-          ],
-        }),
-      420,
-    );
-  },
-  onWorkflowError: (message, shots, nodeCount) => {
-    showToast("铺设漫剧工作流失败", "error", message);
-    clientLog("comic_canvas_apply_failed", { message, shots, nodes: nodeCount });
-  },
   createLabel: () => {
+    const center = world({ x: innerWidth / 2, y: innerHeight / 2 });
     const rightEdge = nodes.length
       ? Math.max(...nodes.map((node) => node.x + node.width))
-      : world({ x: innerWidth / 2, y: innerHeight / 2 }).x - 220;
-    addNode("prompt", {
-      x: rightEdge + 180,
-      y: world({ x: innerWidth / 2, y: innerHeight / 2 }).y - 280,
-    });
+      : center.x - 220;
+    addNode("prompt", { x: rightEdge + 180, y: center.y - 280 });
     return nodes.find((node) => node.id === selection.selectedId);
   },
-  renderLabelState: renderComicLabelState,
   persistCanvas: scheduleSave,
   draw,
-  showSaved: (copy) =>
-    showToast(
-      copy ? "漫剧方案已另存为新标签" : "漫剧方案已保存并可继续修改",
-      "success",
-    ),
+  startEmptyImages: startAllEmptyImages,
+  showGuide: showCanvasGuide,
+  hideGuide: (key) => hideCanvasGuide(key),
+  clientLog,
+  toast: (message, tone, detail) => showToast(message, tone, detail),
 });
-function applyComicToCanvas() {
-  comicOutputController.applyToCanvas();
-}
-function saveComicAsLabel(copy = false) {
-  comicOutputController.saveAsLabel(copy);
-}
-const comicNewSession = new ComicNewSessionController({
-  studio: comicStudio,
-  state: comicState,
-  closeMobilePanel: () => showComicMobilePanel(null),
-  resetConversation: () => resetComicConversationState(true),
-  renderLabelState: renderComicLabelState,
-  notify: (message, tone) => showToast(message, tone),
-});
-new ComicStudioInteractionController({
-  studio: comicStudio,
-  briefPanel: comicBriefPanel,
-  planPanel: comicPlanSidePanel,
-  headerNav: comicHeaderNav,
-  submitting: () => comicState.submitting,
-  close: closeComicStudio,
-  newSession: () => comicNewSession.start(),
-  send: (message) => { void requestComicDialogue(message); },
-  requestPlan: () => { void requestComicPlan(); },
-  applyCanvas: applyComicToCanvas,
-  saveLabel: saveComicAsLabel,
-  closeMobilePanel: () => showComicMobilePanel(null),
-  renderLabelMenu: renderComicLabelMenu,
-}).bind();
 const canvasClearResultApplier = new CanvasClearResultApplier({
   nodes,
   links,
@@ -1820,9 +1546,9 @@ const projectSwitchController = new ProjectSwitchController({
   save: saveCanvas,
   stopSave: () => canvasSaveCoordinator.stopAndReset(),
   resetNodeLease: () => canvasNodeIds.reset(),
-  closeComic: closeComicStudio,
-  resetComic: () => resetComicConversationState(true),
-  unlinkComicLabel: () => { comicState.linkedLabelId = 0; },
+  closeComic: () => comicStudioFeature.close(),
+  resetComic: () => comicStudioFeature.reset(true),
+  unlinkComicLabel: () => comicStudioFeature.unlinkLabel(),
   loadCanvas: () => loadCanvas(),
   loadAssets: () => loadAssets(),
   closePanels: closeWorkspacePanels,

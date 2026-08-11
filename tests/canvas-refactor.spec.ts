@@ -112,6 +112,18 @@ test("homepage defers Pixi until the workspace is opened", async ({ page }) => {
   expect(pixiRequests).toHaveLength(0);
 });
 
+test("prompt agent opens the isolated comic studio", async ({ page }) => {
+  await mockApi(page, 20);
+  await page.goto("/#/canvas");
+  await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
+  await page.locator("#prompt-agent-trigger").click();
+  await expect(page.locator(".prompt-agent-panel.open")).toBeVisible();
+  await page.locator("[data-agent-mode-trigger]").click();
+  await page.locator("[data-agent-comic]").click();
+  await expect(page.locator(".comic-studio.open")).toBeVisible();
+  await expect(page.locator(".prompt-agent-panel")).toHaveClass(/comic-hidden/);
+});
+
 test("400 nodes stay GPU-virtualized and recover WebGL context", async ({
   page,
 }) => {
