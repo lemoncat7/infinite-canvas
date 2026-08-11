@@ -24,6 +24,28 @@ export type ComicDialogueRequest = {
   model: string;
 };
 
+export type ComicPlanRequest = {
+  projectId: string;
+  sessionId: string;
+  idea: string;
+  context: string[];
+  visuals: string[];
+  previousPlan: ComicPlan | null;
+  revision: string;
+  model: string;
+};
+
+export type ComicPlanStreamEvent = {
+  type: "start" | "progress" | "heartbeat" | "error" | "result";
+  message?: string;
+  phase?: string;
+  progress?: number;
+  receivedBytes?: number;
+  idleSeconds?: number;
+  error?: string;
+  data?: ComicPlan;
+};
+
 export interface ComicSessionSnapshot {
   id?: string;
   phase?: string;
@@ -86,5 +108,44 @@ export async function streamComicDialogue(
     }
   }
   if (!result) throw new Error("漫剧对话没有完整结束");
+  return result;
+}
+
+export async function streamComicPlan(
+  request: ComicPlanRequest,
+  onEvent: (event: ComicPlanStreamEvent) => void,
+) {
+  const response = await apiFetch("/api/agents/comic", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(request),
+  });
+  if (!response.ok) {
+    const failure = (await response.json().catch(() => ({}))) as {
+      error?: string;
+    };
+    throw new Error(failure.error || "漫剧方案生成失败");
+  }
+  if (!response.body) throw new Error("浏览器未收到漫剧响应流");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result: ComicPlan | null = null;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const event = JSON.parse(line) as ComicPlanStreamEvent;
+      if (event.type === "error")
+        throw new Error(event.error || "漫剧策划流已中断");
+      if (event.type === "result" && event.data) result = event.data;
+      onEvent(event);
+    }
+  }
+  if (!result) throw new Error("漫剧方案未完整返回");
   return result;
 }

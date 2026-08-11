@@ -67,7 +67,7 @@ import {
   renameProject,
   type ProjectSummary,
 } from "../services/projects";
-import { streamComicDialogue } from "../services/comic";
+import { streamComicDialogue, streamComicPlan } from "../services/comic";
 import { ComicSessionController } from "../services/comic-session";
 import {
   clipVideoPrompt,
@@ -6120,91 +6120,45 @@ async function requestComicPlan() {
       .filter((node) => node.kind === "image" && node.mediaUrl)
       .map((node) => node.mediaUrl!);
   try {
-    let payload: ComicPlan | null = null,
-      lastError: unknown;
     const confirmedBrief = JSON.stringify(
       comicBrief || { premise: comicOriginalIdea.slice(0, 1200) },
     );
-    for (let attempt = 1; attempt <= 1 && !payload; attempt++) {
-      try {
-        const response = await apiFetch("/api/agents/comic", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            projectId: currentProjectId,
-            sessionId: comicSessionId,
-            idea: confirmedBrief,
-            context,
-            visuals,
-            previousPlan: comicPlan,
-            revision,
-            model: "gpt-5.5",
-          }),
-        });
-        if (!response.ok) {
-          const failure = (await response.json()) as { error?: string };
-          throw new Error(failure.error || "漫剧方案生成失败");
-        }
-        if (!response.body) throw new Error("浏览器未收到漫剧响应流");
-        const reader = response.body.getReader(),
-          decoder = new TextDecoder();
-        let buffer = "",
-          lastPhase = "正在构思…";
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-          for (const line of lines) {
-            if (!line.trim()) continue;
-            const event = JSON.parse(line) as {
-              type: string;
-              message?: string;
-              phase?: string;
-              progress?: number;
-              receivedBytes?: number;
-              idleSeconds?: number;
-              error?: string;
-              data?: ComicPlan;
-            };
-            if (event.type === "start")
-              status.textContent = event.message || "正在构思…";
-            else if (event.type === "progress") {
-              lastPhase = event.phase || lastPhase;
-              const progress = Math.max(0, Math.min(100, event.progress || 0)),
-                amount = event.receivedBytes
-                  ? ` · 已接收 ${(event.receivedBytes / 1024).toFixed(1)} KB`
-                  : "";
-              status.style.setProperty("--comic-progress", `${progress}%`);
-              status.textContent = `${lastPhase} · ${progress}%${amount}`;
-            } else if (event.type === "heartbeat") {
-              const amount = event.receivedBytes
-                ? ` · 已接收 ${(event.receivedBytes / 1024).toFixed(1)} KB`
-                : "";
-              const waiting =
-                (event.idleSeconds || 0) >= 10
-                  ? ` · 已等待 ${event.idleSeconds} 秒`
-                  : " · 持续接收中";
-              status.textContent = `${lastPhase} · ${event.progress || 0}%${amount}${waiting}`;
-            } else if (event.type === "error")
-              throw new Error(event.error || "漫剧策划流已中断");
-            else if (event.type === "result" && event.data) {
-              status.style.setProperty("--comic-progress", "100%");
-              payload = event.data;
-            }
-          }
-        }
-        if (!payload) throw new Error("漫剧方案未完整返回");
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    if (!payload)
-      throw lastError instanceof Error
-        ? lastError
-        : new Error("与漫剧策划服务的连接中断");
-    if (!payload) throw new Error("漫剧方案未完整返回");
+    let lastPhase = "正在构思…";
+    const payload = await streamComicPlan(
+      {
+        projectId: currentProjectId,
+        sessionId: comicSessionId,
+        idea: confirmedBrief,
+        context,
+        visuals,
+        previousPlan: comicPlan,
+        revision,
+        model: "gpt-5.5",
+      },
+      (event) => {
+        if (event.type === "start")
+          status.textContent = event.message || "正在构思…";
+        else if (event.type === "progress") {
+          lastPhase = event.phase || lastPhase;
+          const progress = Math.max(0, Math.min(100, event.progress || 0));
+          const amount = event.receivedBytes
+            ? ` · 已接收 ${(event.receivedBytes / 1024).toFixed(1)} KB`
+            : "";
+          status.style.setProperty("--comic-progress", `${progress}%`);
+          status.textContent = `${lastPhase} · ${progress}%${amount}`;
+        } else if (event.type === "heartbeat") {
+          const amount = event.receivedBytes
+            ? ` · 已接收 ${(event.receivedBytes / 1024).toFixed(1)} KB`
+            : "";
+          const waiting =
+            (event.idleSeconds || 0) >= 10
+              ? ` · 已等待 ${event.idleSeconds} 秒`
+              : " · 持续接收中";
+          status.textContent = `${lastPhase} · ${event.progress || 0}%${amount}${waiting}`;
+        } else if (event.type === "result")
+          status.style.setProperty("--comic-progress", "100%");
+      },
+    );
     comicPlan = payload;
     comicBrief = { ...(comicBrief || {}), title: payload.title };
     comicPendingRevision = "";
