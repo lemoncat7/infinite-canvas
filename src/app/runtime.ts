@@ -17,6 +17,7 @@ import { MarqueeController } from "../canvas/marquee-controller";
 import { CanvasPointerLifecycle } from "../canvas/canvas-pointer-lifecycle";
 import { TouchPinchController } from "../canvas/touch-pinch-controller";
 import { CameraViewportController } from "../canvas/camera-viewport-controller";
+import { normalizeCanvasDocument } from "../canvas/document-normalizer";
 import { LinkInteractionView } from "../canvas/link-interaction-view";
 import { GenerationPoller } from "../services/generation-poller";
 import { GenerationWorkflow } from "../services/generation-workflow";
@@ -4444,112 +4445,14 @@ async function loadCanvas(keepLoadingStatus = false) {
       version?: number;
       updatedAt?: string;
     };
-    if (
-      !Number.isSafeInteger(document.version) ||
-      Number(document.version) < 1 ||
-      !Array.isArray(document.nodes) ||
-      !Array.isArray(document.links)
-    )
-      throw new Error("invalid canvas envelope");
-    const restoredIds = new Set<number>();
-    for (const node of document.nodes) {
-      if (!node || !Number.isFinite(node.id) || restoredIds.has(node.id))
-        throw new Error("invalid canvas nodes");
-      restoredIds.add(node.id);
-    }
-    for (const link of document.links) {
-      const from = Array.isArray(link) ? link[0] : link?.from,
-        to = Array.isArray(link) ? link[1] : link?.to;
-      if (
-        !Number.isFinite(from) ||
-        !Number.isFinite(to) ||
-        !restoredIds.has(Number(from)) ||
-        !restoredIds.has(Number(to))
-      )
-        throw new Error("invalid canvas links");
-    }
-    const receivedBaseline: CanvasSyncSnapshot = {
-      nodes: structuredClone(document.nodes),
-      links: normalizeCanvasLinks(document.links),
-      camera: document.camera ? { ...document.camera } : { ...camera },
-      version: Number(document.version),
-      updatedAt: document.updatedAt || "",
-    };
-    document.nodes?.forEach((node) => {
-      if (node.kind === "video" && (!node.model || node.model === "Kling 2.1"))
-        node.model = "agnes-video-v2.0";
-      if (node.kind === "video" && node.role === "result") node.body = "";
-      if (
-        node.kind === "voice" &&
-        (node.status === "running" || node.status === "queued")
-      ) {
-        node.status = "idle";
-        node.progress = 0;
-      }
-    });
+    const normalizedDocument = normalizeCanvasDocument(document, camera, normalizePromptText),
+      receivedBaseline = normalizedDocument.baseline;
+    document.nodes = normalizedDocument.nodes;
+    document.links = normalizedDocument.links;
     nodeLayer.replaceChildren();
     pixiDetachedNodeCache.clear();
     pixiEditorWarmScheduled = false;
-    nodes.splice(0, nodes.length, ...(document.nodes ?? []));
-    nodes.forEach((node) => {
-      if (node.kind === "prompt" && node.title === "文本") node.title = "标签";
-      if (node.kind === "prompt" && node.body === "输入你的创意描述")
-        node.body = "记录标签、分组标题或画布备注";
-      if (
-        (node.kind === "image" || node.kind === "video") &&
-        !node.mediaUrl &&
-        node.body === "等待配置模型与生成参数"
-      )
-        node.body = "";
-      if (
-        node.kind === "image" &&
-        (node.status === "canceled" || node.status === "failed") &&
-        !node.body.trim() &&
-        (node.originalPrompt || node.generationPrompt)
-      ) {
-        node.body = normalizePromptText(
-          node.originalPrompt || node.generationPrompt || "",
-        );
-        node.progress = 0;
-        if (node.status === "canceled") delete node.jobId;
-      }
-      if (
-        node.kind === "image" &&
-        !node.jobId &&
-        (node.status === "queued" || node.status === "running") &&
-        node.body.trim()
-      ) {
-        node.status = "waiting";
-        node.progress = 0;
-        node.agentAuto = true;
-      }
-      if (node.kind === "video")
-        node.videoSettings = {
-          seconds: "5",
-          resolution: "720p",
-          aspectRatio: "16:9",
-          ...(node.videoSettings ?? {}),
-        };
-      if (node.kind === "video" && node.role !== "result") {
-        node.status = "idle";
-        node.progress = 0;
-        delete node.jobId;
-      }
-      if (
-        node.imageSettings?.size &&
-        ![
-          "auto",
-          "1024x1024",
-          "1344x1008",
-          "1008x1344",
-          "1536x1024",
-          "1024x1536",
-          "1536x864",
-          "864x1536",
-        ].includes(node.imageSettings.size)
-      )
-        node.imageSettings.size = "auto";
-    });
+    nodes.splice(0, nodes.length, ...normalizedDocument.nodes);
     await Promise.all(
       nodes
         .filter(
