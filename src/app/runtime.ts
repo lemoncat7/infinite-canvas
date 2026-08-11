@@ -136,6 +136,7 @@ import { PromptAgentControls } from "../ui/prompt-agent-controls";
 import { PromptAgentContextController } from "../ui/prompt-agent-context";
 import { PromptAgentRequestController } from "../ui/prompt-agent-request-controller";
 import { PromptAgentAnimationController } from "../ui/prompt-agent-animation";
+import { PromptAgentLifecycleController } from "../ui/prompt-agent-lifecycle-controller";
 import { createComicStudioShell } from "../ui/comic-studio-shell";
 import { ComicSidePanelController } from "../ui/comic-side-panel";
 import { ComicStudioView } from "../ui/comic-studio";
@@ -1868,21 +1869,12 @@ const comicStudioView = new ComicStudioView(
 function clearPromptAgentResult() {
   promptAgentRequests?.clearResult();
 }
+let promptAgentLifecycle: PromptAgentLifecycleController;
 function closePromptAgent() {
-  promptAgentAnimation.cancelFormation();
-  promptAgentRequests?.cancel();
-  promptAgentPanel
-    .querySelector(".agent-submit")
-    ?.classList.remove("is-running");
-  promptAgentPanel.classList.remove("open", "forming");
-  promptAgentTrigger.classList.remove("active");
-  promptAgentSelecting = false;
-  promptAgentContextSelection.clear();
-  clearPromptAgentResult();
-  draw();
+  promptAgentLifecycle.close();
 }
 function cancelPromptAgentRequest() {
-  promptAgentRequests?.cancel();
+  promptAgentLifecycle.cancelRequest();
 }
 function playAgentMeteor(nodeId: number) {
   const node = nodes.find((item) => item.id === nodeId);
@@ -1931,6 +1923,16 @@ const promptAgentAnimation = new PromptAgentAnimationController({
     promptAgentSelecting = true;
     draw();
   },
+});
+promptAgentLifecycle = new PromptAgentLifecycleController({
+  panel: promptAgentPanel,
+  trigger: promptAgentTrigger,
+  cancelFormation: () => promptAgentAnimation.cancelFormation(),
+  cancelRequest: () => promptAgentRequests?.cancel(),
+  clearResult: clearPromptAgentResult,
+  clearContext: () => promptAgentContextSelection.clear(),
+  setSelecting: (value) => { promptAgentSelecting = value; },
+  draw,
 });
 function dispersePromptAgent() { promptAgentAnimation.disperse(true); }
 function dispersePromptAgentDirect() { promptAgentAnimation.disperse(false); }
