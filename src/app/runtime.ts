@@ -94,6 +94,13 @@ import { syncImageNodePanel } from "../nodes/image-node-sync";
 import { syncVideoNodePanel } from "../nodes/video-node-sync";
 import { syncVoiceTtsAudioPanels } from "../nodes/voice-node-sync";
 import { syncVideoReferenceView } from "../nodes/video-reference-view";
+import {
+  nodeDomState,
+  nodeDomStateEquals,
+  normalizeNodeViewSize,
+  styleNodeEditor,
+  syncBasicNodeContent,
+} from "../nodes/node-dom-state";
 import { bindVoiceNodePanels } from "../nodes/voice-node-view";
 import { bindVideoNodePanel } from "../nodes/video-node-view";
 import {
@@ -3725,16 +3732,7 @@ function syncDomNodes() {
     else videoDependencyParts.set(link.to, [part]);
   }
   for (const node of nodes) {
-    if (!Number.isFinite(node.width) || node.width < 1) node.width = 280;
-    if (!Number.isFinite(node.height) || node.height < 1) node.height = 220;
-    if (
-      (node.kind === "video" && node.role !== "result") ||
-      node.kind === "voice" ||
-      node.kind === "tts"
-    ) {
-      node.width = 290;
-      node.height = 225;
-    }
+    normalizeNodeViewSize(node);
     if (!requiredPixiDomIds.has(node.id)) continue;
     let element = nodeLayer.querySelector<HTMLElement>(
       `.flow-node[data-id="${node.id}"]`,
@@ -3764,100 +3762,31 @@ function syncDomNodes() {
     const locked =
       (nodeIsActivelyGenerating(node) || workflowWaiting) &&
       !(node.kind === "video" && node.role !== "result");
-    const className = `flow-node pixi-card-editor kind-${node.kind}${node.role === "result" || node.kind === "audio" ? " node-result" : " node-generator"}${node.id === selection.selectedId ? " selected" : ""}${selection.batchIds.has(node.id) ? " batch-selected" : ""}${promptAgentSelecting && promptAgentContextSelection.has(node.id) ? " agent-reference" : ""}${locked ? " generating" : ""}${workflowWaiting ? " workflow-waiting" : ""}`;
-    if (element.className !== className) element.className = className;
-    element.style.transform = `translate(${node.x}px, ${node.y}px)`;
-    element.style.width = `${node.width}px`;
-    element.style.height = `${node.height}px`;
-    element.style.setProperty("--accent", node.accent);
-    element.style.setProperty("--font-scale", String(node.fontScale ?? 1));
-    if (node.kind === "audio")
-      element.style.setProperty("background", "#111820", "important");
-    else element.style.removeProperty("background");
-    const domState: unknown[] = [
-      node.kind,
-      node.role,
-      node.width,
-      node.height,
-      node.title,
-      node.body,
-      node.originalPrompt,
-      node.generationPrompt,
-      node.accent,
-      node.model,
-      node.jobId,
-      node.progress,
-      node.status,
-      node.mediaUrl,
-      node.fontScale,
-      node.agentAuto,
-      node.imageSettings?.size,
-      node.imageSettings?.quality,
-      node.imageSettings?.background,
-      node.videoSettings?.seconds,
-      node.videoSettings?.resolution,
-      node.videoSettings?.aspectRatio,
-      node.videoSettings?.referenceMode,
-      node.voiceSettings?.providerId,
-      node.voiceSettings?.voiceId,
-      node.voiceSettings?.language,
-      node.voiceSettings?.defaultSpeed,
-      node.voiceSettings?.pitch,
-      node.voiceSettings?.volume,
-      node.voiceSettings?.roleName,
-      node.voiceSettings?.tone,
-      node.ttsSettings?.emotion,
-      node.ttsSettings?.speed,
-      node.ttsSettings?.format,
-      node.ttsSettings?.duration,
-      node.id === selection.selectedId,
-      selection.batchIds.has(node.id),
-      promptAgentSelecting && promptAgentContextSelection.has(node.id),
+    const flags = {
+      selected: node.id === selection.selectedId,
+      batchSelected: selection.batchIds.has(node.id),
+      agentReference:
+        promptAgentSelecting && promptAgentContextSelection.has(node.id),
       locked,
       workflowWaiting,
       onscreen,
-      promptNodeEditor.editingId === node.id,
+      editing: promptNodeEditor.editingId === node.id,
       colorTheme,
-      node.kind === "video"
-        ? (videoDependencyParts.get(node.id) || []).join("|")
-        : "",
-      videoReferenceSwapSelection?.videoId === node.id
-        ? videoReferenceSwapSelection.sourceId
-        : 0,
-    ];
+      videoDependency:
+        node.kind === "video"
+          ? (videoDependencyParts.get(node.id) || []).join("|")
+          : "",
+      swapSourceId:
+        videoReferenceSwapSelection?.videoId === node.id
+          ? videoReferenceSwapSelection.sourceId
+          : 0,
+    };
+    styleNodeEditor(element, node, flags);
+    const domState = nodeDomState(node, flags);
     const previousState = nodeDomStates.get(node.id);
-    if (
-      previousState?.length === domState.length &&
-      domState.every((value, index) => value === previousState[index])
-    )
-      continue;
+    if (nodeDomStateEquals(previousState, domState)) continue;
     nodeDomStates.set(node.id, domState);
-    element.querySelectorAll<HTMLElement>(".node-port").forEach((port) => {
-      port.hidden = node.kind === "video" && node.role === "result";
-    });
-    const copy = element.querySelector<HTMLElement>(".node-copy")!;
-    if (promptNodeEditor.editingId !== node.id)
-      copy.textContent = node.body || defaultNodeCopy(node.kind);
-    const labelHeading = element.querySelector<HTMLElement>(
-      ".node-label-heading",
-    )!;
-    labelHeading.hidden = node.kind !== "prompt";
-    if (node.kind === "prompt" && document.activeElement !== labelHeading)
-      labelHeading.textContent = node.title || "未命名标签";
-    element.querySelector<HTMLElement>(".node-kind")!.textContent =
-      node.kind === "prompt"
-        ? "LABEL"
-        : node.kind === "note"
-          ? "NOTE"
-          : node.kind === "video"
-            ? "VIDEO"
-            : node.kind === "voice"
-              ? "VOICE"
-              : node.kind === "tts"
-                ? "TTS"
-                : node.kind === "audio"
-                  ? "AUDIO"
-                  : "IMAGE";
+    syncBasicNodeContent(element, node, flags.editing, defaultNodeCopy);
     syncVoiceTtsAudioPanels({
       element,
       node,
