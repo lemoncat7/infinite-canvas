@@ -16,6 +16,7 @@ import { DomPointerLifecycle } from "../canvas/dom-pointer-lifecycle";
 import { MarqueeController } from "../canvas/marquee-controller";
 import { CanvasPointerLifecycle } from "../canvas/canvas-pointer-lifecycle";
 import { TouchPinchController } from "../canvas/touch-pinch-controller";
+import { CameraViewportController } from "../canvas/camera-viewport-controller";
 import { MediaLruCache } from "../canvas/media-cache";
 import type {
   FlowLink,
@@ -331,7 +332,7 @@ function applySynchronizedCanvas(
   nodes.splice(0, nodes.length, ...mergedNodes);
   links.splice(0, links.length, ...structuredClone(snapshot.links));
   Object.assign(camera, snapshot.camera);
-  zoomTarget = camera.zoom;
+  cameraViewport.syncTarget();
   nextId = Math.max(
     nextId,
     nodes.length ? Math.max(...nodes.map((node) => node.id)) + 1 : 1,
@@ -1091,6 +1092,13 @@ batchToolbar.innerHTML =
 document.body.append(marqueeBox, batchToolbar);
 let promptAgentContextSelection = new Set<number>();
 let promptAgentSelecting = false;
+const cameraViewport = new CameraViewportController({
+  camera,
+  nodes,
+  viewport: () => ({ width: innerWidth, height: innerHeight }),
+  draw,
+  save: scheduleSave,
+});
 const domPointer = new DomPointerLifecycle({
   nodes,
   zoom: () => camera.zoom,
@@ -1124,7 +1132,7 @@ const domPointer = new DomPointerLifecycle({
 const touchPinch = new TouchPinchController({
   selector: "#canvas,.flow-node",
   zoom: () => camera.zoom,
-  setZoom,
+  setZoom: (zoom, anchor) => cameraViewport.setZoom(zoom, anchor),
   pan: (dx, dy) => { camera.x += dx; camera.y += dy; },
   cancelSingleTouch: () => {
     pointer.down = false;
@@ -1134,7 +1142,7 @@ const touchPinch = new TouchPinchController({
     stopConnectionAutoPan();
     domPointer.cancel();
   },
-  syncZoomTarget: () => { zoomTarget = camera.zoom; },
+  syncZoomTarget: cameraViewport.syncTarget,
   draw,
 });
 const marqueeController = new MarqueeController({
@@ -1161,12 +1169,7 @@ new CanvasPointerLifecycle({
   selection,
   zoom: () => camera.zoom,
   hitNode,
-  cancelCameraAnimation: () => {
-    if (cameraFrame === null) return;
-    cancelAnimationFrame(cameraFrame);
-    cameraFrame = null;
-    zoomTarget = camera.zoom;
-  },
+  cancelCameraAnimation: cameraViewport.cancel,
   toggleBatchNode,
   updateEditor,
   setEditing: () => setSaveState("editing", "编辑中…"),
@@ -1183,7 +1186,7 @@ new CanvasPointerLifecycle({
   save: scheduleSave,
   draw,
   closeQuickMenu: closeQuickNodeMenu,
-  smoothZoom: (factor, anchor) => smoothZoom(zoomTarget * factor, anchor),
+  smoothZoom: cameraViewport.smoothBy,
 });
 let saveTimer: number | undefined;
 let drawFrame: number | null = null;
@@ -1239,9 +1242,6 @@ function schedulePixiEditorWarmup() {
   if (requestIdle) requestIdle(warm, { timeout: 1200 });
   else globalThis.setTimeout(warm, 180);
 }
-let cameraFrame: number | null = null;
-let zoomTarget = camera.zoom;
-let zoomAnchor: Point = { x: innerWidth / 2, y: innerHeight / 2 };
 const pendingMediaLoads = new Set<string>();
 const thumbnailLoadRetries = new Map<string, number>();
 function releaseCachedImage(url: string, image: HTMLImageElement) {
@@ -3527,104 +3527,6 @@ function draw(syncDom = true) {
 function resize() {
   draw();
 }
-function setZoom(
-  next: number,
-  anchor = { x: innerWidth / 2, y: innerHeight / 2 },
-) {
-  const old = camera.zoom;
-  next = Math.min(2.5, Math.max(0.3, next));
-  const cx = innerWidth / 2 + camera.x,
-    cy = innerHeight / 2 + camera.y;
-  camera.x += (anchor.x - cx) * (1 - next / old);
-  camera.y += (anchor.y - cy) * (1 - next / old);
-  camera.zoom = next;
-  draw(false);
-}
-function smoothZoom(next: number, anchor: Point) {
-  zoomTarget = Math.min(2.5, Math.max(0.3, next));
-  zoomAnchor = anchor;
-  if (cameraFrame !== null) return;
-  const tick = () => {
-    const difference = zoomTarget - camera.zoom;
-    if (Math.abs(difference) < 0.001) {
-      setZoom(zoomTarget, zoomAnchor);
-      cameraFrame = null;
-      scheduleSave();
-      draw();
-      return;
-    }
-    setZoom(camera.zoom + difference * 0.24, zoomAnchor);
-    cameraFrame = requestAnimationFrame(tick);
-  };
-  cameraFrame = requestAnimationFrame(tick);
-}
-function fitCanvas() {
-  const start = { ...camera };
-  let target = { x: 0, y: 0, zoom: 1 };
-  if (nodes.length) {
-    const compact = innerWidth <= 780;
-    const viewport = {
-      left: compact ? 68 : 82,
-      top: 86,
-      right: innerWidth - 16,
-      bottom: innerHeight - 118,
-    };
-    const padding = 44;
-    const minX = Math.min(...nodes.map((node) => node.x)),
-      minY = Math.min(...nodes.map((node) => node.y));
-    const maxX = Math.max(...nodes.map((node) => node.x + node.width)),
-      maxY = Math.max(...nodes.map((node) => node.y + node.height));
-    const contentWidth = Math.max(1, maxX - minX),
-      contentHeight = Math.max(1, maxY - minY);
-    const availableWidth = Math.max(
-        1,
-        viewport.right - viewport.left - padding * 2,
-      ),
-      availableHeight = Math.max(
-        1,
-        viewport.bottom - viewport.top - padding * 2,
-      );
-    const targetZoom = Math.min(
-      1.15,
-      Math.max(
-        0.3,
-        Math.min(
-          availableWidth / contentWidth,
-          availableHeight / contentHeight,
-        ),
-      ),
-    );
-    const worldCenter = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
-    const viewportCenter = {
-      x: (viewport.left + viewport.right) / 2,
-      y: (viewport.top + viewport.bottom) / 2,
-    };
-    target = {
-      x: viewportCenter.x - innerWidth / 2 - worldCenter.x * targetZoom,
-      y: viewportCenter.y - innerHeight / 2 - worldCenter.y * targetZoom,
-      zoom: targetZoom,
-    };
-  }
-  if (cameraFrame !== null) cancelAnimationFrame(cameraFrame);
-  zoomTarget = target.zoom;
-  const startedAt = performance.now(),
-    duration = 420;
-  const tick = (now: number) => {
-    const progress = Math.min(1, (now - startedAt) / duration),
-      eased = 1 - Math.pow(1 - progress, 3);
-    camera.x = start.x + (target.x - start.x) * eased;
-    camera.y = start.y + (target.y - start.y) * eased;
-    camera.zoom = start.zoom + (target.zoom - start.zoom) * eased;
-    draw(false);
-    if (progress < 1) cameraFrame = requestAnimationFrame(tick);
-    else {
-      cameraFrame = null;
-      scheduleSave();
-      draw();
-    }
-  };
-  cameraFrame = requestAnimationFrame(tick);
-}
 function addNode(
   kind: NodeKind = "image",
   position?: Point,
@@ -4722,7 +4624,7 @@ async function loadCanvas(keepLoadingStatus = false) {
       });
     if (document.camera) {
       Object.assign(camera, document.camera);
-      zoomTarget = camera.zoom;
+      cameraViewport.syncTarget();
     }
     if (
       loadSequence !== canvasLoadSequence ||
@@ -5684,23 +5586,22 @@ canvas.addEventListener("contextmenu", (event) => {
   scheduleSave();
   draw();
 });
-document.querySelector("#reset")!.addEventListener("click", fitCanvas);
+document.querySelector("#reset")!.addEventListener("click", cameraViewport.fit);
 document
   .querySelector("#mobile-fit-canvas")!
-  .addEventListener("click", fitCanvas);
+  .addEventListener("click", cameraViewport.fit);
 zoomSlider.addEventListener("input", () => {
-  zoomTarget = Number(zoomSlider.value) / 100;
-  setZoom(zoomTarget, { x: innerWidth / 2, y: innerHeight / 2 });
+  cameraViewport.setImmediate(Number(zoomSlider.value) / 100, { x: innerWidth / 2, y: innerHeight / 2 });
 });
 document
   .querySelector("#zoom-in")!
   .addEventListener("click", () =>
-    smoothZoom(zoomTarget * 1.15, { x: innerWidth / 2, y: innerHeight / 2 }),
+    cameraViewport.smoothBy(1.15, { x: innerWidth / 2, y: innerHeight / 2 }),
   );
 document
   .querySelector("#zoom-out")!
   .addEventListener("click", () =>
-    smoothZoom(zoomTarget / 1.15, { x: innerWidth / 2, y: innerHeight / 2 }),
+    cameraViewport.smoothBy(1 / 1.15, { x: innerWidth / 2, y: innerHeight / 2 }),
   );
 document
   .querySelector("#quick-create")!
