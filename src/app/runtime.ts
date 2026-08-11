@@ -85,6 +85,7 @@ import { AssetBulkController } from "../ui/asset-bulk-controller";
 import { SquarePanelView } from "../ui/square-panel";
 import { WorkspacePanelController } from "../ui/toolbar";
 import { WorkspaceKeyboardController } from "../ui/workspace-keyboard-controller";
+import { TaskMonitorController } from "../ui/task-monitor-controller";
 import {
   createProjectDialog,
 } from "../ui/dialogs/project-dialog";
@@ -201,41 +202,7 @@ const promptInput =
 const modelInput = document.querySelector<HTMLSelectElement>("#node-model")!;
 const saveState = document.querySelector<HTMLSpanElement>("#save-state")!;
 document.querySelector<HTMLElement>(".brand")!.append(saveState);
-const taskMonitorButton = document.createElement("button"),
-  taskMonitorPanel = document.createElement("section");
-taskMonitorButton.type = "button";
-taskMonitorButton.className = "task-monitor-button";
-taskMonitorButton.setAttribute("aria-label", "项目生成任务");
-taskMonitorButton.innerHTML =
-  "<i></i><span>任务</span><b>0</b><small>暂无任务</small>";
 const resetButton = document.querySelector<HTMLElement>("#reset")!;
-resetButton.parentElement!.insertBefore(taskMonitorButton, resetButton);
-taskMonitorPanel.className = "task-monitor-panel";
-taskMonitorPanel.innerHTML =
-  '<header><span><b>项目任务</b><small>当前画布生成状态</small></span><button type="button" aria-label="关闭">×</button></header><div data-task-list></div>';
-document.body.append(taskMonitorPanel);
-taskMonitorPanel
-  .querySelector<HTMLElement>("[data-task-list]")!
-  .addEventListener("pointerup", (event) => {
-    const button = (event.target as HTMLElement).closest<HTMLElement>(
-      "[data-task-node]",
-    );
-    if (button) focusTaskNode(Number(button.dataset.taskNode));
-  });
-const startEmptyImagesButton = document.createElement("button");
-startEmptyImagesButton.type = "button";
-startEmptyImagesButton.className = "start-empty-images-button";
-startEmptyImagesButton.setAttribute("aria-label", "一键启动所有空图任务");
-startEmptyImagesButton.innerHTML =
-  "<span>✦</span><strong>启动空图</strong><b>0</b>";
-taskMonitorButton.parentElement!.insertBefore(
-  startEmptyImagesButton,
-  taskMonitorButton,
-);
-taskMonitorPanel.insertAdjacentHTML(
-  "beforeend",
-  '<footer><button type="button" data-start-empty-mobile disabled>启动空图 · 0</button><button type="button" data-cancel-pending disabled>取消等待任务</button></footer>',
-);
 const jobLabel = document.querySelector<HTMLSpanElement>("#job-label")!;
 const jobProgress = document.querySelector<HTMLElement>("#job-progress")!;
 const generateButton = document.querySelector<HTMLButtonElement>("#generate")!;
@@ -390,6 +357,19 @@ function syncDraggedNodeElements(ids: Iterable<number>) {
 }
 const nodes = canvasStore.nodes;
 const links = canvasStore.links;
+const taskMonitorController = new TaskMonitorController({
+  nodes,
+  resetButton,
+  canGenerate: canGenerateNode,
+  modelName: modelDisplayName,
+  focusNode: focusTaskNode,
+  startAllEmpty: startAllEmptyImages,
+  cancelPending: () => void cancelPendingProjectTasks(),
+  closeOtherMenus: (opening) =>
+    closeTopbarMenus(opening ? "task" : undefined),
+});
+const taskMonitorButton = taskMonitorController.button;
+const taskMonitorPanel = taskMonitorController.panel;
 type CanvasHistorySnapshot = {
   nodes: FlowNode[];
   links: FlowLink[];
@@ -723,61 +703,8 @@ async function redoCanvas() {
   showHistoryShortcutGuide("redo");
 }
 undoButton.addEventListener("click", () => void undoCanvas());
-let taskMonitorSignature = "";
-function taskStatus(node: FlowNode) {
-  if (node.status === "running")
-    return {
-      order: 0,
-      label: `生成中${Number(node.progress ?? 0) > 0 ? ` ${Math.round(node.progress ?? 0)}%` : ""}`,
-      className: "running",
-    };
-  if (node.status === "queued")
-    return { order: 1, label: "排队中", className: "queued" };
-  if (node.agentAuto && node.status === "waiting")
-    return { order: 2, label: "等待上游", className: "waiting" };
-  if (node.status === "failed")
-    return { order: 3, label: "生成失败", className: "failed" };
-  return null;
-}
-function updateCancelPendingButton() {
-  const count = nodes.filter(
-      (node) =>
-        node.status === "queued" ||
-        (node.agentAuto && node.status === "waiting"),
-    ).length,
-    button = taskMonitorPanel.querySelector<HTMLButtonElement>(
-      "[data-cancel-pending]",
-    )!;
-  button.disabled = count === 0;
-  button.textContent = count ? `取消等待任务 · ${count}` : "没有等待任务";
-}
 function emptyImageCandidates() {
-  return nodes.filter(
-    (node) =>
-      node.kind === "image" &&
-      !node.mediaUrl &&
-      node.role !== "result" &&
-      canGenerateNode(node) &&
-      node.status !== "queued" &&
-      node.status !== "running" &&
-      node.status !== "waiting" &&
-      !node.agentAuto,
-  );
-}
-function updateStartEmptyImagesButton() {
-  const count = emptyImageCandidates().length,
-    mobileButton = taskMonitorPanel.querySelector<HTMLButtonElement>(
-      "[data-start-empty-mobile]",
-    )!;
-  startEmptyImagesButton.querySelector("b")!.textContent = String(count);
-  startEmptyImagesButton.disabled = count === 0;
-  startEmptyImagesButton.classList.toggle("ready", count > 0);
-  startEmptyImagesButton.title = count
-    ? `将 ${count} 个没有图片的节点加入生成队列`
-    : "当前没有可启动的空图节点";
-  mobileButton.disabled = count === 0;
-  mobileButton.textContent = count ? `启动空图 · ${count}` : "暂无可生成空图";
-  mobileButton.classList.toggle("ready", count > 0);
+  return taskMonitorController.emptyImageCandidates();
 }
 function startAllEmptyImages() {
   const candidates = emptyImageCandidates();
@@ -910,89 +837,13 @@ function focusTaskNode(nodeId: number) {
   selection.selectedId = node.id;
   camera.x = -(node.x + node.width / 2) * camera.zoom;
   camera.y = -(node.y + node.height / 2) * camera.zoom;
-  taskMonitorPanel.classList.remove("open");
+  taskMonitorController.close();
   updateEditor();
   draw();
 }
 function updateTaskMonitor() {
-  const tasks = nodes
-      .map((node) => ({ node, status: taskStatus(node) }))
-      .filter(
-        (
-          item,
-        ): item is {
-          node: FlowNode;
-          status: NonNullable<ReturnType<typeof taskStatus>>;
-        } => Boolean(item.status),
-      )
-      .sort(
-        (left, right) =>
-          left.status.order - right.status.order ||
-          left.node.id - right.node.id,
-      ),
-    running = tasks.filter(
-      (item) => item.status.className === "running",
-    ).length,
-    queued = tasks.filter((item) => item.status.className === "queued").length,
-    waiting = tasks.filter(
-      (item) => item.status.className === "waiting",
-    ).length,
-    signature = tasks
-      .map(
-        (item) =>
-          `${item.node.id}:${item.node.status}:${item.node.title}:${item.node.model}`,
-      )
-      .join("|");
-  updateStartEmptyImagesButton();
-  taskMonitorButton.classList.toggle("active", running + queued > 0);
-  taskMonitorButton.querySelector("b")!.textContent = String(running + queued);
-  taskMonitorButton.querySelector("small")!.textContent =
-    `${running ? `生成中 ${running}` : ""}${running && queued ? " · " : ""}${queued ? `排队 ${queued}` : ""}${!running && !queued ? "暂无任务" : ""}`;
-  taskMonitorPanel.querySelector<HTMLElement>("header small")!.textContent =
-    `生成中 ${running} · 排队 ${queued} · 等待上游 ${waiting}`;
-  if (signature !== taskMonitorSignature) {
-    taskMonitorSignature = signature;
-    const list =
-        taskMonitorPanel.querySelector<HTMLElement>("[data-task-list]")!,
-      visible = tasks.slice(0, 30),
-      previousTop = list.scrollTop,
-      anchor = [...list.querySelectorAll<HTMLElement>("[data-task-node]")].find(
-        (item) => item.offsetTop + item.offsetHeight > previousTop,
-      ),
-      anchorId = anchor?.dataset.taskNode,
-      anchorOffset = anchor ? previousTop - anchor.offsetTop : 0;
-    list.innerHTML = visible.length
-      ? visible
-          .map(
-            ({ node, status }) =>
-              `<button type="button" data-task-node="${node.id}"><i class="${status.className}">${node.kind === "video" ? "▶" : "▧"}</i><span><b>${escapeHtml(node.title || "未命名任务")}</b><small>${escapeHtml(modelDisplayName(node.model) || "默认模型")}</small></span><em>${status.label}</em></button>`,
-          )
-          .join("")
-      : '<div class="task-monitor-empty"><b>✓</b><span>当前没有生成任务</span></div>';
-    const nextAnchor = anchorId
-      ? list.querySelector<HTMLElement>(`[data-task-node="${anchorId}"]`)
-      : null;
-    list.scrollTop = nextAnchor
-      ? nextAnchor.offsetTop + anchorOffset
-      : Math.min(
-          previousTop,
-          Math.max(0, list.scrollHeight - list.clientHeight),
-        );
-  } else
-    tasks.forEach(({ node, status }) => {
-      const label = taskMonitorPanel.querySelector<HTMLElement>(
-        `[data-task-node="${node.id}"] > em`,
-      );
-      if (label) label.textContent = status.label;
-    });
+  taskMonitorController.update();
 }
-startEmptyImagesButton.addEventListener("click", startAllEmptyImages);
-taskMonitorPanel
-  .querySelector("[data-start-empty-mobile]")!
-  .addEventListener("click", () => {
-    startAllEmptyImages();
-    taskMonitorPanel.classList.remove("open");
-  });
 function closeTopbarMenus(
   except?: "workspace" | "task" | "user" | "notifications" | "presence",
 ) {
@@ -1003,23 +854,6 @@ function closeTopbarMenus(
     document.querySelector("#online-status-panel")?.classList.remove("open");
   if (except !== "workspace") closeMobileWorkspaceMenu();
 }
-taskMonitorButton.addEventListener("click", (event) => {
-  event.stopPropagation();
-  const opening = !taskMonitorPanel.classList.contains("open");
-  closeTopbarMenus(opening ? "task" : undefined);
-  if (!opening) return;
-  const rect = taskMonitorButton.getBoundingClientRect();
-  taskMonitorPanel.style.top = `${rect.bottom + 8}px`;
-  taskMonitorPanel.style.right = `${Math.max(12, innerWidth - rect.right)}px`;
-  taskMonitorPanel.classList.add("open");
-});
-taskMonitorPanel
-  .querySelector("header button")!
-  .addEventListener("click", () => taskMonitorPanel.classList.remove("open"));
-taskMonitorPanel
-  .querySelector("[data-cancel-pending]")!
-  .addEventListener("click", () => void cancelPendingProjectTasks());
-taskMonitorPanel.addEventListener("click", (event) => event.stopPropagation());
 document.addEventListener("click", () => {
   taskMonitorPanel.classList.remove("open");
   document.querySelector("#online-status-panel")?.classList.remove("open");
@@ -2639,7 +2473,6 @@ function paint() {
     syncDomNodes();
     schedulePixiEditorWarmup();
     updateTaskMonitor();
-    updateCancelPendingButton();
     updateHistoryControls();
     zoomSlider.value = String(Math.round(camera.zoom * 100));
     zoomSlider.title = `${Math.round(camera.zoom * 100)}%`;
