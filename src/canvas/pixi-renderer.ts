@@ -165,6 +165,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
     number,
     {
       container: Container;
+      shadow: Graphics;
       shell: Graphics;
       detail: Graphics;
       mediaMask: Graphics;
@@ -399,6 +400,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       let view = this.cardViews.get(node.id);
       if (!view) {
         const container = new Container(),
+          shadow = new Graphics(),
           shell = new Graphics(),
           detail = new Graphics(),
           mediaMask = new Graphics(),
@@ -452,6 +454,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         media.visible = false;
         media.mask = mediaMask;
         container.addChild(
+          shadow,
           shell,
           media,
           detail,
@@ -465,6 +468,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         this.cards.addChild(container);
         view = {
           container,
+          shadow,
           shell,
           detail,
           mediaMask,
@@ -572,10 +576,14 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       view.meta.position.set(14, Math.max(58, node.height - 25));
       view.body.style.wordWrapWidth = Math.max(80, node.width - 28);
       view.detail.clear();
+      view.shadow
+        .clear()
+        .roundRect(0, 7, node.width, node.height, 14)
+        .fill({ color: 0x000000, alpha: snapshot.dark ? 0.24 : 0.1 });
       view.shell
         .clear()
         .roundRect(0, 0, node.width, node.height, 14)
-        .fill({ color: snapshot.dark ? 0x121a1c : 0xf7f7f4, alpha: 1 })
+        .fill({ color: snapshot.dark ? 0x111a1c : 0xf7f9f8, alpha: 1 })
         .stroke({
           color:
             node.id === snapshot.selectedId || selectedIds.has(node.id)
@@ -585,18 +593,30 @@ export class PixiCanvasRenderer implements CanvasRenderer {
                 : 0xc9d0cc,
           width:
             node.id === snapshot.selectedId || selectedIds.has(node.id) ? 2 : 1,
-        })
-        .roundRect(0, 0, node.width, 4, 2)
-        .fill({ color: node.accent, alpha: 0.75 })
-        .circle(0, node.height / 2, 5)
-        .circle(node.width, node.height / 2, 5)
-        .fill({
-          color:
-            node.id === snapshot.selectedId || selectedIds.has(node.id)
-              ? node.accent
-              : 0x7b8985,
         });
-      if (!mediaOnly && node.kind === "video" && node.role !== "result") {
+      // DOM ports are intentionally hidden until interaction. Keeping gray
+      // circles and a colored top rail on every Pixi card made the idle state
+      // look like a different component rather than the same card renderer.
+      if (selectedIds.has(node.id))
+        view.shell
+          .circle(0, node.height / 2, 5)
+          .circle(node.width, node.height / 2, 5)
+          .fill({ color: node.accent });
+      if (!mediaOnly && node.kind === "prompt") {
+        view.title.style.fontSize = 16;
+        view.title.style.fontWeight = "700";
+        view.title.anchor.set(0);
+        view.title.position.set(22, 32);
+        view.subtitle.visible = false;
+        view.icon.visible = false;
+        view.body.anchor.set(0);
+        view.body.position.set(22, 62);
+        view.body.style.fontSize = 11;
+        view.body.style.lineHeight = 18;
+        view.body.style.align = "left";
+        view.body.style.wordWrapWidth = Math.max(80, node.width - 44);
+        view.meta.visible = false;
+      } else if (!mediaOnly && node.kind === "video" && node.role !== "result") {
         const frameTop = 65,
           frameGap = 8,
           frameWidth = (node.width - 44 - frameGap * 2) / 3;
