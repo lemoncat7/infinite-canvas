@@ -31,7 +31,6 @@ import { LinkInteractionView } from "../canvas/link-interaction-view";
 import { GenerationPoller } from "../services/generation-poller";
 import { GenerationWorkflow } from "../services/generation-workflow";
 import { CanvasNodeIdAllocator } from "../services/canvas-node-id-allocator";
-import { NotificationStreamController } from "../services/notification-stream";
 import { SessionActivityController } from "../services/session-activity";
 import {
   appendRevisionNode,
@@ -96,7 +95,6 @@ import { AppearanceController } from "../ui/appearance-controller";
 import { NodeEditorStateController } from "../ui/node-editor-state-controller";
 import { CanvasGuideController, type CanvasGuideMessage } from "../ui/canvas-guide-controller";
 import { ToastController, type ToastType } from "../ui/toast-controller";
-import { ServiceStatusController } from "../ui/service-status-controller";
 import {
   createProjectDialog,
 } from "../ui/dialogs/project-dialog";
@@ -106,10 +104,7 @@ import {
   type AuthUser,
 } from "../ui/user-menu-controller";
 import { AuthModalController } from "../ui/auth-modal-controller";
-import {
-  NotificationCenterController,
-  OnlinePresenceView,
-} from "../ui/notification-center";
+import { NotificationFeature } from "../ui/notification-feature";
 import { FeedbackController } from "../ui/feedback-controller";
 import { CreditLabController } from "../ui/credit-lab-controller";
 import {
@@ -716,9 +711,9 @@ workspaceRoute.bind();
 function renderAuthenticatedUser() {
   userMenuController.render(authUser);
   if (authUser) {
-    void notificationCenter.load();
-    connectNotificationStream();
-  } else disconnectNotificationStream();
+    void notificationFeature.load();
+    notificationFeature.connect();
+  } else notificationFeature.disconnect();
 }
 const workspaceSession = new WorkspaceSessionController({
   nodes,
@@ -784,39 +779,20 @@ const userMenuController = new UserMenuController({
 const feedbackModal = document.querySelector<HTMLElement>("#feedback-modal")!,
   feedbackForm =
     feedbackModal.querySelector<HTMLFormElement>("#feedback-form")!;
-const notificationModal = document.querySelector<HTMLElement>(
-    "#notification-modal",
-  )!,
-  notificationList =
-    notificationModal.querySelector<HTMLElement>("#notification-list")!,
-  notificationCount = document.querySelector<HTMLElement>(
-    "[data-notification-count]",
-  )!;
-topbarMenus.register("notifications", () =>
-  notificationModal.classList.remove("open"),
-);
-const notificationCenter = new NotificationCenterController({
-  modal: notificationModal,
-  list: notificationList,
-  count: notificationCount,
-  openButton: document.querySelector<HTMLElement>("#open-notifications")!,
+const notificationFeature = new NotificationFeature({
   getUserId: () => authUser?.id,
-  closeTopbarMenus: (opening) =>
+  registerTopbarMenu: (close) => topbarMenus.register("notifications", close),
+  closeNotificationMenus: (opening) =>
     closeTopbarMenus(opening ? "notifications" : undefined),
+  closePresenceMenus: (opening) =>
+    closeTopbarMenus(opening ? "presence" : undefined),
+  showGuide: showCanvasGuide,
+  hideGuide: hideCanvasGuide,
+  isGuideVisible: (key) => canvasGuideController.isVisible(key),
+  checkAppUpdate: () => void appUpdateController.checkNow(),
+  restoreAfterReconnect: () => void restoreComicAfterReconnect(),
   toast: (message, type) => showToast(message, type),
 });
-const onlinePresenceView = new OnlinePresenceView(
-  document.querySelector("#open-notifications")!,
-  (opening) => closeTopbarMenus(opening ? "presence" : undefined),
-);
-const renderOnlineStatus = (
-  count = onlinePresenceView.current(),
-  reconnecting = false,
-) => onlinePresenceView.render(count, reconnecting);
-const serviceStatus = new ServiceStatusController(showCanvasGuide);
-function showServiceStatusNotice(mode: "offline" | "online") {
-  serviceStatus.show(mode);
-}
 function showCanvasModeNotice(title: string, detail: string) {
   showCanvasGuide({
     key: "canvas-mode",
@@ -826,28 +802,6 @@ function showCanvasModeNotice(title: string, detail: string) {
     priority: 20,
     duration: 2100,
   });
-}
-const notificationStreamController = new NotificationStreamController({
-  isAuthenticated: () => Boolean(authUser),
-  isServiceKnownOffline: () => serviceStatus.offline,
-  isServiceGuideVisible: () => canvasGuideController.isVisible("service-status"),
-  renderPresence: renderOnlineStatus,
-  currentPresence: () => onlinePresenceView.current(),
-  clearPresence: () => onlinePresenceView.clear(),
-  onNotifications: () => {
-    void notificationCenter.load();
-  },
-  onServerVersionChanged: () => void appUpdateController.checkNow(),
-  onServiceStatus: showServiceStatusNotice,
-  onReconnect: () => void restoreComicAfterReconnect(),
-});
-function disconnectNotificationStream(clearPresence = true) {
-  notificationStreamController.disconnect(clearPresence);
-  hideCanvasGuide("service-status");
-}
-function connectNotificationStream() {
-  if (!authUser) return disconnectNotificationStream();
-  notificationStreamController.connect(authUser.id);
 }
 new FeedbackController({
   modal: feedbackModal,
