@@ -27,7 +27,7 @@ import { CanvasHistoryController } from "../canvas/history-controller";
 import { LinkInteractionView } from "../canvas/link-interaction-view";
 import { GenerationPoller } from "../services/generation-poller";
 import { GenerationWorkflow } from "../services/generation-workflow";
-import { requestNodeIdLease } from "../services/node-id-lease";
+import { CanvasNodeIdAllocator } from "../services/canvas-node-id-allocator";
 import { NotificationStreamController } from "../services/notification-stream";
 import { SessionActivityController } from "../services/session-activity";
 import {
@@ -246,14 +246,15 @@ const selection = new CanvasSelectionController();
 let videoReferenceSwapSelection: { videoId: number; sourceId: number } | null =
   null;
 const promptNodeEditor = new PromptNodeController();
-let nextId = 1;
-let canvasNodeIdBlockEnd = 0;
-let canvasNodeIdLeasePromise: Promise<boolean> | null = null;
 let contextPosition: Point = { x: 0, y: 0 };
 const connection = new CanvasConnectionController();
 let connectionAutoPanFrame = 0,
   connectionAutoPanPointer: Point | null = null;
 let currentProjectId = localStorage.getItem("flow-project-id") ?? "default";
+const canvasNodeIds = new CanvasNodeIdAllocator({
+  projectId: () => currentProjectId,
+  notifyExhausted: () => showToast("正在扩展节点编号空间，请稍后重试", "warning"),
+});
 const canvasSyncClientId = (() => {
   const existing = sessionStorage.getItem("flow-canvas-client-id");
   if (existing) return existing;
@@ -292,8 +293,7 @@ function applySynchronizedCanvas(
   links.splice(0, links.length, ...structuredClone(snapshot.links));
   Object.assign(camera, snapshot.camera);
   cameraViewport.syncTarget();
-  nextId = Math.max(
-    nextId,
+  canvasNodeIds.ensureAtLeast(
     nodes.length ? Math.max(...nodes.map((node) => node.id)) + 1 : 1,
   );
   selection.selectedId = nodes.some((node) => node.id === selected) ? selected : 0;
@@ -301,27 +301,10 @@ function applySynchronizedCanvas(
   draw();
 }
 async function reserveCanvasNodeIds(projectId = currentProjectId) {
-  if (canvasNodeIdLeasePromise) return canvasNodeIdLeasePromise;
-  canvasNodeIdLeasePromise = (async () => {
-    try {
-      const result = await requestNodeIdLease(projectId);
-      if (projectId !== currentProjectId) return false;
-      nextId = result.start;
-      canvasNodeIdBlockEnd = result.end;
-      return true;
-    } catch {
-      return false;
-    } finally {
-      canvasNodeIdLeasePromise = null;
-    }
-  })();
-  return canvasNodeIdLeasePromise;
+  return canvasNodeIds.reserve(projectId);
 }
 function allocateCanvasNodeId() {
-  if (nextId <= canvasNodeIdBlockEnd) return nextId++;
-  showToast("正在扩展节点编号空间，请稍后重试", "warning");
-  void reserveCanvasNodeIds();
-  return null;
+  return canvasNodeIds.allocate();
 }
 let backgroundMode: "dots" | "lines" | "blank" = "lines";
 let colorTheme: "light" | "dark" =
@@ -406,8 +389,8 @@ const canvasHistory = new CanvasHistoryController({
   undoButton,
   redoButton,
   projectId: () => currentProjectId,
-  nextId: () => nextId,
-  setNextId: (value) => { nextId = value; },
+  nextId: () => canvasNodeIds.nextId,
+  setNextId: (value) => { canvasNodeIds.nextId = value; },
   selectedId: () => selection.selectedId,
   setSelectedId: (value) => { selection.selectedId = value; },
   clearBatch: () => selection.batchIds.clear(),
@@ -824,7 +807,7 @@ const workspaceSession = new WorkspaceSessionController({
   serverVersion: () => canvasSaveCoordinator.serverVersion,
   ensureRenderer: ensurePixiRenderer,
   stopSave: (logout) => canvasSaveCoordinator.stopAndReset(logout),
-  resetNodeLease: () => { canvasNodeIdBlockEnd = 0; },
+  resetNodeLease: () => canvasNodeIds.reset(),
   loadCanvas: (keepStatus) => loadCanvas(keepStatus),
   loadAssets: () => loadAssets(false),
   loadModels: () => loadCustomApiModels(),
@@ -1643,16 +1626,14 @@ const canvasLoadCoordinator = new CanvasLoadCoordinator({
     pixiEditorCache.clear();
   },
   cancelPolling: () => generationPoller.cancelAll(),
-  getLease: () => ({ nextId, end: canvasNodeIdBlockEnd }),
+  getLease: () => ({ nextId: canvasNodeIds.nextId, end: canvasNodeIds.end }),
   restoreLease: (leasedNextId, leasedEnd) => {
-    nextId = leasedNextId;
-    canvasNodeIdBlockEnd = leasedEnd;
+    canvasNodeIds.restore(leasedNextId, leasedEnd);
   },
   resetLease: (value) => {
-    nextId = value;
-    canvasNodeIdBlockEnd = 0;
+    canvasNodeIds.reset(value);
   },
-  needsLease: () => nextId > canvasNodeIdBlockEnd,
+  needsLease: () => canvasNodeIds.needsLease(),
   reserveIds: reserveCanvasNodeIds,
   syncCamera: () => cameraViewport.syncTarget(),
   setBootStatus: setWorkspaceBootStatus,
@@ -2678,7 +2659,7 @@ const projectSwitchController = new ProjectSwitchController({
   loadedProjectId: () => canvasSaveCoordinator.loadedProjectId,
   save: saveCanvas,
   stopSave: () => canvasSaveCoordinator.stopAndReset(),
-  resetNodeLease: () => { canvasNodeIdBlockEnd = 0; },
+  resetNodeLease: () => canvasNodeIds.reset(),
   closeComic: closeComicStudio,
   resetComic: () => resetComicConversationState(true),
   unlinkComicLabel: () => { comicState.linkedLabelId = 0; },
