@@ -112,6 +112,10 @@ import {
   type AuthUser,
 } from "../ui/user-menu-controller";
 import { AuthModalController } from "../ui/auth-modal-controller";
+import {
+  NotificationCenterController,
+  OnlinePresenceView,
+} from "../ui/notification-center";
 import { ComicSidePanelController } from "../ui/comic-side-panel";
 import { ComicStudioView } from "../ui/comic-studio";
 import { ComicLabelController } from "../ui/comic-labels";
@@ -1795,18 +1799,8 @@ type CustomApiModel = {
   hasKey: boolean;
   hasProxy: boolean;
 };
-type AppNotification = {
-  id: string;
-  title: string;
-  content: string;
-  type: string;
-  createdAt: string;
-  isRead: boolean;
-};
 let authUser: AuthUser | null = null;
 let customApiModels: CustomApiModel[] = [];
-let appNotifications: AppNotification[] = [];
-let autoPopupCheckedUserId = "";
 let authReady = false;
 let showcaseLoaded = false;
 const authModalController = new AuthModalController({
@@ -1873,7 +1867,7 @@ function openAuth(mode: "login" | "register") {
 function renderAuthenticatedUser() {
   userMenuController.render(authUser);
   if (authUser) {
-    void loadNotifications();
+    void notificationCenter.load();
     connectNotificationStream();
   } else disconnectNotificationStream();
 }
@@ -2208,150 +2202,24 @@ const notificationModal = document.querySelector<HTMLElement>(
   notificationCount = document.querySelector<HTMLElement>(
     "[data-notification-count]",
   )!;
-let notificationVisibleCount = 3;
-const notificationLoadObserver = new IntersectionObserver(
-  (entries) => {
-    if (
-      !entries.some((entry) => entry.isIntersecting) ||
-      notificationVisibleCount >= appNotifications.length
-    )
-      return;
-    notificationVisibleCount = Math.min(
-      appNotifications.length,
-      notificationVisibleCount + 3,
-    );
-    renderNotifications();
-  },
-  { root: notificationList, rootMargin: "0px 0px 20px" },
-);
-const onlineStatus = document.createElement("button"),
-  onlineStatusPanel = document.createElement("div");
-onlineStatus.id = "online-status";
-onlineStatus.type = "button";
-onlineStatus.ariaLabel = "在线状态";
-onlineStatus.innerHTML = "<i></i><b>同步中</b>";
-onlineStatusPanel.id = "online-status-panel";
-onlineStatusPanel.innerHTML =
-  "<header><i></i><span><b>创作空间在线</b><small>按登录用户去重统计</small></span></header><p>关闭页面或连接中断后，在线状态会自动更新。</p>";
-document
-  .querySelector("#open-notifications")!
-  .before(onlineStatus, onlineStatusPanel);
-let lastOnlineUserCount: number | undefined;
-function renderOnlineStatus(count = lastOnlineUserCount, reconnecting = false) {
-  if (count !== undefined) lastOnlineUserCount = count;
-  const label =
-    count === undefined
-      ? "同步中"
-      : count <= 1
-        ? "创作空间在线"
-        : `${count} 人在线`;
-  onlineStatus.querySelector("b")!.textContent = label;
-  onlineStatus.classList.toggle("connected", count !== undefined);
-  onlineStatus.classList.toggle("reconnecting", reconnecting);
-  onlineStatus.title = reconnecting ? "在线人数连接正在恢复" : label;
-  onlineStatusPanel.querySelector("header b")!.textContent = label;
-  onlineStatusPanel.querySelector("header small")!.textContent = reconnecting
-    ? "连接波动，正在后台恢复"
-    : "按登录用户去重统计";
-}
-onlineStatus.addEventListener("click", (event) => {
-  event.stopPropagation();
-  const opening = !onlineStatusPanel.classList.contains("open");
-  closeTopbarMenus(opening ? "presence" : undefined);
-  onlineStatusPanel.classList.toggle("open", opening);
+const notificationCenter = new NotificationCenterController({
+  modal: notificationModal,
+  list: notificationList,
+  count: notificationCount,
+  openButton: document.querySelector<HTMLElement>("#open-notifications")!,
+  getUserId: () => authUser?.id,
+  closeTopbarMenus: (opening) =>
+    closeTopbarMenus(opening ? "notifications" : undefined),
+  toast: (message, type) => showToast(message, type),
 });
-onlineStatusPanel.addEventListener("click", (event) => event.stopPropagation());
-function notificationTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat("zh-CN", {
-    timeZone: "Asia/Shanghai",
-    month: "long",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
-function renderNotifications() {
-  const scrollTop = notificationList.scrollTop,
-    unread = appNotifications.filter((item) => !item.isRead).length,
-    visible = appNotifications.slice(0, notificationVisibleCount);
-  notificationLoadObserver.disconnect();
-  notificationCount.textContent = String(unread);
-  notificationCount.parentElement!.classList.toggle("has-unread", unread > 0);
-  notificationCount.parentElement!.title = unread
-    ? `${unread} 条未读通知`
-    : "暂无未读通知";
-  notificationList.innerHTML = appNotifications.length
-    ? visible
-        .map(
-          (item) =>
-            `<article class="notification-item${item.isRead ? " read" : " unread"}" data-notification-id="${escapeHtml(item.id)}"><i aria-hidden="true"></i><div><header><span>${item.type === "fix" ? "问题修复" : "产品更新"}</span><time>${escapeHtml(notificationTime(item.createdAt))}</time></header><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.content)}</p></div></article>`,
-        )
-        .join("") +
-      (visible.length < appNotifications.length
-        ? `<div class="notification-load-hint">向下滚动加载更多 · ${visible.length} / ${appNotifications.length}</div>`
-        : "")
-    : '<div class="notification-empty"><i>◇</i><b>暂时没有新通知</b><span>产品进展会在这里与你同步</span></div>';
-  notificationList.scrollTop = scrollTop;
-  const loadHint = notificationList.querySelector<HTMLElement>(
-    ".notification-load-hint",
-  );
-  if (loadHint) notificationLoadObserver.observe(loadHint);
-  notificationList
-    .querySelectorAll<HTMLElement>("[data-notification-id]")
-    .forEach((item) =>
-      item.addEventListener("click", async () => {
-        const id = item.dataset.notificationId!,
-          target = appNotifications.find((entry) => entry.id === id);
-        if (!target || target.isRead) return;
-        target.isRead = true;
-        renderNotifications();
-        const response = await apiFetch(
-          `/api/notifications/${encodeURIComponent(id)}/read`,
-          { method: "POST" },
-        );
-        if (!response.ok) {
-          target.isRead = false;
-          renderNotifications();
-          showToast("通知状态同步失败，请稍后重试", "error");
-        }
-      }),
-    );
-}
-async function claimDailyNotificationPopup() {
-  if (!authUser || autoPopupCheckedUserId === authUser.id) return;
-  autoPopupCheckedUserId = authUser.id;
-  try {
-    const response = await apiFetch("/api/notifications/claim-popup", {
-        method: "POST",
-      }),
-      result = (await response.json()) as { show?: boolean };
-    if (response.ok && result.show) notificationModal.classList.add("open");
-  } catch {
-    /* 未读角标仍可正常使用 */
-  }
-}
-async function loadNotifications() {
-  if (!authUser) {
-    appNotifications = [];
-    autoPopupCheckedUserId = "";
-    renderNotifications();
-    return;
-  }
-  try {
-    const response = await apiFetch("/api/notifications");
-    if (!response.ok) throw new Error(String(response.status));
-    appNotifications = (await response.json()) as AppNotification[];
-    renderNotifications();
-    void claimDailyNotificationPopup();
-  } catch {
-    notificationCount.textContent = "!";
-    if (notificationModal.classList.contains("open"))
-      notificationList.innerHTML =
-        '<div class="notification-empty"><i>!</i><b>通知加载失败</b><span>请稍后重新打开</span></div>';
-  }
-}
+const onlinePresenceView = new OnlinePresenceView(
+  document.querySelector("#open-notifications")!,
+  (opening) => closeTopbarMenus(opening ? "presence" : undefined),
+);
+const renderOnlineStatus = (
+  count = onlinePresenceView.current(),
+  reconnecting = false,
+) => onlinePresenceView.render(count, reconnecting);
 function showServiceStatusNotice(mode: "offline" | "online") {
   serviceKnownOffline = mode === "offline";
   showCanvasGuide(
@@ -2388,13 +2256,10 @@ const notificationStreamController = new NotificationStreamController({
   isServiceKnownOffline: () => serviceKnownOffline,
   isServiceGuideVisible: () => canvasGuideKey === "service-status",
   renderPresence: renderOnlineStatus,
-  currentPresence: () => lastOnlineUserCount,
-  clearPresence: () => {
-    lastOnlineUserCount = undefined;
-  },
+  currentPresence: () => onlinePresenceView.current(),
+  clearPresence: () => onlinePresenceView.clear(),
   onNotifications: () => {
-    autoPopupCheckedUserId = "";
-    void loadNotifications();
+    void notificationCenter.load();
   },
   onServerVersionChanged: () => void checkForAppUpdate(),
   onServiceStatus: showServiceStatusNotice,
@@ -2408,62 +2273,6 @@ function connectNotificationStream() {
   if (!authUser) return disconnectNotificationStream();
   notificationStreamController.connect(authUser.id);
 }
-document.querySelector("#open-notifications")!.addEventListener("click", () => {
-  const opening = !notificationModal.classList.contains("open");
-  closeTopbarMenus(opening ? "notifications" : undefined);
-  if (opening) {
-    notificationVisibleCount = 3;
-    notificationList.scrollTop = 0;
-    notificationModal.classList.add("open");
-    void loadNotifications();
-  }
-});
-notificationList.addEventListener(
-  "scroll",
-  () => {
-    if (
-      notificationVisibleCount >= appNotifications.length ||
-      notificationList.scrollTop + notificationList.clientHeight <
-        notificationList.scrollHeight - 18
-    )
-      return;
-    notificationVisibleCount = Math.min(
-      appNotifications.length,
-      notificationVisibleCount + 3,
-    );
-    renderNotifications();
-  },
-  { passive: true },
-);
-notificationModal
-  .querySelectorAll("[data-notification-close]")
-  .forEach((button) =>
-    button.addEventListener("click", () =>
-      notificationModal.classList.remove("open"),
-    ),
-  );
-notificationModal.addEventListener("pointerdown", (event) => {
-  if (event.target === notificationModal)
-    notificationModal.classList.remove("open");
-});
-notificationModal
-  .querySelector<HTMLElement>("[data-notification-read-all]")!
-  .addEventListener("click", async () => {
-    if (!appNotifications.some((item) => !item.isRead)) return;
-    const previous = appNotifications.map((item) => item.isRead);
-    appNotifications.forEach((item) => (item.isRead = true));
-    renderNotifications();
-    const response = await apiFetch("/api/notifications/read-all", {
-      method: "POST",
-    });
-    if (!response.ok) {
-      appNotifications.forEach(
-        (item, index) => (item.isRead = previous[index]),
-      );
-      renderNotifications();
-      showToast("全部已读同步失败，请稍后重试", "error");
-    }
-  });
 document.querySelector("#open-feedback")!.addEventListener("click", () => {
   workspaceUserMenu.classList.remove("open");
   feedbackModal.classList.add("open");
