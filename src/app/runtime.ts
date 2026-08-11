@@ -61,13 +61,11 @@ import {
   type GenerationJob,
 } from "../services/generation";
 import {
-  deleteAsset,
   deleteAssets,
   fetchAssetBlob,
   fetchAssets,
   fetchShowcaseAssets,
   type LibraryAsset,
-  updateAssetVisibility,
 } from "../services/assets";
 import {
   createProject,
@@ -110,6 +108,7 @@ import { AssetLibraryView } from "../ui/asset-library-view";
 import { AssetTouchController } from "../ui/asset-touch-controller";
 import { AssetPreviewController } from "../ui/asset-preview";
 import { AssetUploadController } from "../ui/asset-upload-controller";
+import { AssetContextController } from "../ui/asset-context-controller";
 import { SquarePanelView } from "../ui/square-panel";
 import { WorkspacePanelController } from "../ui/toolbar";
 import {
@@ -149,7 +148,6 @@ import {
   bindNodePorts,
   bindNodeToolbarActions,
 } from "../nodes/node-interaction-view";
-import { ContextMenuController } from "../ui/context-menu";
 import { createDefaultGenerationCapabilities } from "./state";
 import {
   connectionControlPoint,
@@ -7032,13 +7030,6 @@ let draggingAsset: {
   name: string;
   kind: "image" | "video";
 } | null = null;
-let selectedAsset: {
-  id: string;
-  url: string;
-  name: string;
-  kind: "image" | "video";
-  isPublic: boolean;
-} | null = null;
 let libraryAssets: LibraryAsset[] = [];
 const ASSET_PAGE_SIZE = 36;
 const selectedAssetIds = new Set<string>(),
@@ -7055,28 +7046,32 @@ assetTypeFilter.insertAdjacentHTML(
 );
 let libraryAudio: HTMLAudioElement | null = null,
   libraryAudioAssetId = "";
-const assetContextMenu = document.querySelector<HTMLElement>(
-  "#asset-context-menu",
-)!;
-const assetContextMenuController = new ContextMenuController(assetContextMenu);
-function openAssetContextAt(asset: LibraryAsset, x: number, y: number) {
-  const kind = asset.mimeType.startsWith("video/")
-    ? ("video" as const)
-    : ("image" as const);
-  selectedAsset = {
-    id: asset.id,
-    url: asset.url,
-    name: asset.name,
-    kind,
-    isPublic: asset.isPublic,
-  };
-  document.querySelector<HTMLElement>(
-    "#asset-context-publish span",
-  )!.textContent = asset.isPublic ? "从主页撤下" : "展示到主页";
-  const width = innerWidth <= 800 ? 210 : 190,
-    height = 250;
-  assetContextMenuController.openAt(x - 18, y - 24, width, height);
-}
+const assetContextController = new AssetContextController({
+  menu: document.querySelector<HTMLElement>("#asset-context-menu")!,
+  placeButton: document.querySelector<HTMLElement>("#asset-context-place")!,
+  previewButton: document.querySelector<HTMLElement>("#asset-context-preview")!,
+  publishButton: document.querySelector<HTMLElement>("#asset-context-publish")!,
+  publishLabel: document.querySelector<HTMLElement>("#asset-context-publish span")!,
+  deleteButton: document.querySelector<HTMLElement>("#asset-context-delete")!,
+  onPlace: (asset) =>
+    addMediaNode(
+      asset.url,
+      asset.name,
+      world({ x: innerWidth / 2, y: innerHeight / 2 }),
+      asset.kind,
+    ),
+  onPreview: (asset) =>
+    openAssetPreview(asset.url, asset.name, asset.kind),
+  onCloseWorkspace: closeWorkspacePanels,
+  onVisibilityChanged: () => {
+    showcaseLoaded = false;
+  },
+  onDeleted: (asset) => imageCache.delete(asset.url),
+  reloadAssets: () => loadAssets(),
+  toast: (message, type) => showToast(message, type),
+});
+const openAssetContextAt = (asset: LibraryAsset, x: number, y: number) =>
+  assetContextController.open(asset, x, y);
 function visibleLibraryAssets() {
   return filterAssets(libraryAssets, {
     query: assetSearch.value,
@@ -7484,65 +7479,6 @@ async function downloadNodeImage(node: FlowNode) {
     );
   }
 }
-document
-  .querySelector("#asset-context-place")!
-  .addEventListener("click", () => {
-    if (selectedAsset)
-      addMediaNode(
-        selectedAsset.url,
-        selectedAsset.name,
-        world({ x: innerWidth / 2, y: innerHeight / 2 }),
-        selectedAsset.kind,
-      );
-    assetContextMenu.classList.remove("open");
-    closeWorkspacePanels();
-  });
-document
-  .querySelector("#asset-context-preview")!
-  .addEventListener("click", () => {
-    if (selectedAsset)
-      openAssetPreview(
-        selectedAsset.url,
-        selectedAsset.name,
-        selectedAsset.kind,
-      );
-    assetContextMenu.classList.remove("open");
-  });
-document
-  .querySelector("#asset-context-publish")!
-  .addEventListener("click", async () => {
-    if (!selectedAsset) return;
-    const next = !selectedAsset.isPublic;
-    assetContextMenu.classList.remove("open");
-    try {
-      await updateAssetVisibility(selectedAsset.id, next);
-    } catch {
-      showToast("主页展示状态更新失败", "error");
-      return;
-    }
-    selectedAsset.isPublic = next;
-    showcaseLoaded = false;
-    showToast(next ? "作品已展示到主页" : "作品已从主页撤下", "success");
-    await loadAssets();
-  });
-document
-  .querySelector("#asset-context-delete")!
-  .addEventListener("click", async () => {
-    if (
-      !selectedAsset ||
-      !window.confirm(`确定删除“${selectedAsset.name}”吗？`)
-    )
-      return;
-    const response = await deleteAsset(selectedAsset.id);
-    if (!response.ok) {
-      window.alert("删除失败，请重试");
-      return;
-    }
-    imageCache.delete(selectedAsset.url);
-    selectedAsset = null;
-    assetContextMenu.classList.remove("open");
-    await loadAssets();
-  });
 document.addEventListener("dragover", (event) => {
   event.preventDefault();
   if (event.dataTransfer)
@@ -7570,8 +7506,7 @@ function escapeHtml(value: string) {
 document.addEventListener("pointerdown", (event) => {
   const target = event.target as Node;
   if (!quickNodeMenu.contains(target)) closeQuickNodeMenu();
-  if (!assetContextMenu.contains(target))
-    assetContextMenu.classList.remove("open");
+  assetContextController.closeIfOutside(target);
   document
     .querySelectorAll<HTMLDetailsElement>(
       ".image-config-panel details[open],.video-config-panel details[open],.voice-config-panel details[open]",
