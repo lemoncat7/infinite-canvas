@@ -143,6 +143,7 @@ import { createDefaultGenerationCapabilities } from "./state";
 import { WorkspaceSessionController } from "./workspace-session-controller";
 import { ProjectSwitchController } from "./project-switch-controller";
 import { ApplicationBootstrapController } from "./application-bootstrap-controller";
+import { WorkspaceRouteController } from "./workspace-route-controller";
 import {
   connectionControlPoint,
   nodePortPosition,
@@ -705,50 +706,29 @@ const authModalController = new AuthModalController({
     } else showToast(`欢迎回来，${user.name}`, "success");
   },
 });
-const workspaceBootStatus = document.createElement("div");
-workspaceBootStatus.className = "workspace-boot-status";
-workspaceBootStatus.innerHTML = "<i></i><span>正在检测登录状态</span>";
-document.body.append(workspaceBootStatus);
-let workspaceBootStatusVersion = 0;
 function setWorkspaceBootStatus(message: string, visible = true) {
-  const version = ++workspaceBootStatusVersion;
-  workspaceBootStatus.querySelector("span")!.textContent = message;
-  workspaceBootStatus.classList.toggle(
-    "visible",
-    visible &&
-      (location.hash === "#/canvas" ||
-        document.body.classList.contains("workspace-preparing")),
-  );
-  return version;
+  return workspaceRoute.status(message, visible);
 }
 function hideWorkspaceBootStatusAfter(version: number, delay: number) {
-  window.setTimeout(() => {
-    if (workspaceBootStatusVersion === version)
-      setWorkspaceBootStatus("", false);
-  }, delay);
-}
-function randomizeHomeTheme() {
-  const theme =
-    crypto.getRandomValues(new Uint8Array(1))[0] % 2 ? "dark" : "light";
-  homePage.dataset.homeTheme = theme;
-  document.body.dataset.homeTheme = theme;
+  workspaceRoute.hideStatus(version, delay);
 }
 function applyAppRoute() {
-  const home = location.hash !== "#/canvas" || !authUser;
-  const wasHome = document.body.classList.contains("home-mode");
-  if (home && !wasHome) randomizeHomeTheme();
-  document.body.classList.toggle("home-mode", home);
-  if (home && !homeShowcase.loaded) void homeShowcase.load();
-  if (!home) requestAnimationFrame(resize);
-  if (authReady && location.hash === "#/canvas" && !authUser) openAuth("login");
-}
-function requestWorkspace() {
-  if (authUser) void enterWorkspace();
-  else openAuth("register");
+  workspaceRoute.apply();
 }
 function openAuth(mode: "login" | "register") {
   authModalController.open(mode);
 }
+const workspaceRoute = new WorkspaceRouteController({
+  homePage,
+  authenticated: () => Boolean(authUser),
+  authReady: () => authReady,
+  showcaseLoaded: () => homeShowcase.loaded,
+  loadShowcase: () => homeShowcase.load(),
+  enterWorkspace: () => { void enterWorkspace(); },
+  openAuth,
+  resize,
+});
+workspaceRoute.bind();
 function renderAuthenticatedUser() {
   userMenuController.render(authUser);
   if (authUser) {
@@ -792,15 +772,6 @@ async function synchronizeCanvasAfterAuthentication(force = false) {
 async function enterWorkspace() {
   await workspaceSession.enter();
 }
-document.querySelector("#home-login")!.addEventListener("click", () => {
-  if (!authUser) openAuth("login");
-});
-document
-  .querySelector("#home-enter")!
-  .addEventListener("click", requestWorkspace);
-document
-  .querySelector("#home-start")!
-  .addEventListener("click", requestWorkspace);
 new HomeSceneController(homePage, homeLoginModal, homePreview);
 const workspaceUserMenu = document.querySelector<HTMLElement>(
   "#workspace-user-menu",
@@ -940,7 +911,6 @@ const customApiController = new CustomApiController({
   refreshNodeModels: refreshNodeModelMenus,
 });
 const loadCustomApiModels = () => customApiController.load();
-window.addEventListener("hashchange", applyAppRoute);
 applyAppRoute();
 
 const viewportSize = () => ({ width: innerWidth, height: innerHeight });
@@ -2302,7 +2272,7 @@ const applicationBootstrap = new ApplicationBootstrapController<AuthUser>({
   synchronizeCanvas: () => synchronizeCanvasAfterAuthentication(true),
   loadAssets: () => loadAssets(false),
   status: setWorkspaceBootStatus,
-  randomizeTheme: randomizeHomeTheme,
+  randomizeTheme: workspaceRoute.randomizeTheme,
   applyRoute: applyAppRoute,
   notifyError: (message) => showToast(message, "error"),
 });
