@@ -24,6 +24,7 @@ import { LinkInteractionView } from "../canvas/link-interaction-view";
 import { GenerationPoller } from "../services/generation-poller";
 import { GenerationWorkflow } from "../services/generation-workflow";
 import { requestNodeIdLease } from "../services/node-id-lease";
+import { NotificationStreamController } from "../services/notification-stream";
 import {
   appendRevisionNode,
   findOutputPosition,
@@ -1807,12 +1808,6 @@ let authUser: AuthUser | null = null;
 let customApiModels: CustomApiModel[] = [];
 let appNotifications: AppNotification[] = [];
 let autoPopupCheckedUserId = "";
-let notificationStream: EventSource | null = null;
-let notificationStreamUserId = "";
-let notificationServerVersion = "";
-let notificationOfflineTimer = 0;
-let notificationFallbackTimer = 0;
-let serviceReachabilityFailures = 0;
 let authReady = false;
 let authMode: "login" | "register" = "login";
 let showcaseLoaded = false;
@@ -2642,126 +2637,30 @@ function showCanvasModeNotice(title: string, detail: string) {
     duration: 2100,
   });
 }
-function stopNotificationFallback() {
-  window.clearInterval(notificationFallbackTimer);
-  notificationFallbackTimer = 0;
-}
-function startNotificationFallback() {
-  if (notificationFallbackTimer) return;
-  notificationFallbackTimer = window.setInterval(() => {
-    if (!authUser || document.hidden) return;
-    const stream = notificationStream;
-    if (stream) void verifyServiceReachability(stream);
+const notificationStreamController = new NotificationStreamController({
+  isAuthenticated: () => Boolean(authUser),
+  isServiceKnownOffline: () => serviceKnownOffline,
+  isServiceGuideVisible: () => canvasGuideKey === "service-status",
+  renderPresence: renderOnlineStatus,
+  currentPresence: () => lastOnlineUserCount,
+  clearPresence: () => {
+    lastOnlineUserCount = undefined;
+  },
+  onNotifications: () => {
+    autoPopupCheckedUserId = "";
     void loadNotifications();
-  }, 15000);
-}
-async function verifyServiceReachability(stream: EventSource) {
-  if (notificationStream !== stream || !authUser) return;
-  try {
-    const response = await apiFetch(`/api/health?guide-check=${Date.now()}`, {
-      cache: "no-store",
-      signal: AbortSignal.timeout(4000),
-    });
-    if (response.ok) {
-      serviceReachabilityFailures = 0;
-      if (serviceKnownOffline) {
-        showServiceStatusNotice("online");
-        void restoreComicAfterReconnect();
-      }
-      startNotificationFallback();
-      return;
-    }
-  } catch {
-    /* 连续失败后再显示离线 */
-  }
-  if (notificationStream !== stream) return;
-  serviceReachabilityFailures++;
-  if (serviceReachabilityFailures >= 2 && !serviceKnownOffline)
-    showServiceStatusNotice("offline");
-}
+  },
+  onServerVersionChanged: () => void checkForAppUpdate(),
+  onServiceStatus: showServiceStatusNotice,
+  onReconnect: () => void restoreComicAfterReconnect(),
+});
 function disconnectNotificationStream(clearPresence = true) {
-  window.clearTimeout(notificationOfflineTimer);
-  stopNotificationFallback();
-  serviceReachabilityFailures = 0;
-  notificationStream?.close();
-  notificationStream = null;
-  notificationStreamUserId = "";
-  notificationServerVersion = "";
-  if (clearPresence) lastOnlineUserCount = undefined;
-  renderOnlineStatus(lastOnlineUserCount);
+  notificationStreamController.disconnect(clearPresence);
   hideCanvasGuide("service-status");
 }
 function connectNotificationStream() {
   if (!authUser) return disconnectNotificationStream();
-  if (notificationStream && notificationStreamUserId === authUser.id) return;
-  disconnectNotificationStream(false);
-  notificationStreamUserId = authUser.id;
-  let connected = false,
-    wasOffline = false;
-  const stream = new EventSource("/api/notifications/stream");
-  notificationStream = stream;
-  stream.onopen = () => {
-    if (notificationStream !== stream) return;
-    window.clearTimeout(notificationOfflineTimer);
-    stopNotificationFallback();
-    serviceReachabilityFailures = 0;
-    renderOnlineStatus(lastOnlineUserCount, false);
-    const recovered = wasOffline || canvasGuideKey === "service-status";
-    if (recovered) {
-      showServiceStatusNotice("online");
-      void restoreComicAfterReconnect();
-    }
-    connected = true;
-    wasOffline = false;
-  };
-  stream.onerror = () => {
-    if (!authUser || notificationStream !== stream) return;
-    connected = false;
-    renderOnlineStatus(lastOnlineUserCount, true);
-    window.clearTimeout(notificationOfflineTimer);
-    startNotificationFallback();
-    notificationOfflineTimer = window.setTimeout(() => {
-      if (
-        notificationStream === stream &&
-        !connected &&
-        stream.readyState !== EventSource.OPEN
-      ) {
-        wasOffline = true;
-        void verifyServiceReachability(stream);
-      }
-    }, 3500);
-  };
-  stream.addEventListener("notifications", (event) => {
-    if (notificationStream !== stream) return;
-    autoPopupCheckedUserId = "";
-    void loadNotifications();
-    try {
-      const payload = JSON.parse((event as MessageEvent<string>).data) as {
-        serverVersion?: string;
-      };
-      if (
-        notificationServerVersion &&
-        payload.serverVersion &&
-        payload.serverVersion !== notificationServerVersion
-      )
-        void checkForAppUpdate();
-      if (payload.serverVersion)
-        notificationServerVersion = payload.serverVersion;
-    } catch {
-      /* 下一次事件继续同步 */
-    }
-  });
-  stream.addEventListener("presence", (event) => {
-    if (notificationStream !== stream) return;
-    try {
-      const payload = JSON.parse((event as MessageEvent<string>).data) as {
-        online?: number;
-      };
-      renderOnlineStatus(Math.max(1, Number(payload.online) || 1), false);
-    } catch {
-      renderOnlineStatus(lastOnlineUserCount ?? 1, false);
-    }
-  });
+  notificationStreamController.connect(authUser.id);
 }
 document.querySelector("#open-notifications")!.addEventListener("click", () => {
   const opening = !notificationModal.classList.contains("open");
