@@ -13,9 +13,8 @@ import type {
   Point,
 } from "../nodes/node-types";
 import { defaultNodeCopy } from "../nodes/node-lifecycle-controller";
-import { CanvasNodeLifecycleFeature } from "../nodes/canvas-node-lifecycle-feature";
 import { decodePromptClipboardText, normalizePromptText } from "../nodes/prompt-text";
-import { CanvasNodeEditorFeature } from "../nodes/canvas-node-editor-feature";
+import { CanvasNodeRuntimeFeature } from "../nodes/canvas-node-runtime-feature";
 import { TtsFeature } from "../services/tts-feature";
 import { apiFetch } from "../services/api";
 import { AppUpdateController } from "../services/app-update-controller";
@@ -51,8 +50,7 @@ let renderingRuntime: CanvasRenderingRuntimeFeature;
 let generationCapabilities: GenerationCapabilities =
   createDefaultGenerationCapabilities();
 let generationRuntime: CanvasGenerationRuntimeFeature;
-let nodeEditorFeature: CanvasNodeEditorFeature;
-let nodeLifecycleFeature: CanvasNodeLifecycleFeature;
+let nodeRuntime: CanvasNodeRuntimeFeature;
 let assetRuntime: WorkspaceAssetsRuntimeFeature;
 const foundation = new RuntimeFoundation(() =>
   showToast("正在扩展节点编号空间，请稍后重试", "warning"),
@@ -75,7 +73,7 @@ const canvasTasks = new CanvasTaskFeature<AuthUser>({
   nodes,
   links,
   resetButton,
-  canGenerate: (node) => nodeEditorFeature.canGenerate(node),
+  canGenerate: (node) => nodeRuntime.editor.canGenerate(node),
   modelName: modelDisplayName,
   projectId: () => foundation.projectId,
   cancelPoll: (jobId) => generationRuntime.cancel(jobId),
@@ -251,7 +249,7 @@ const nodeViews = new CanvasNodeViewFeature({
   normalizePrompt: normalizePromptText,
   displayModelName: modelDisplayName,
   decodePrompt: (value = "") => decodePromptClipboardText(value),
-  canGenerate: (node) => nodeEditorFeature.canGenerate(node),
+  canGenerate: (node) => nodeRuntime.editor.canGenerate(node),
   updateEditor,
   draw,
   scheduleSave,
@@ -265,7 +263,7 @@ const nodeViews = new CanvasNodeViewFeature({
   focusEditor: () => promptInput.focus(),
   generate,
   downloadImage: (node) => assetRuntime.downloadNodeImage(node),
-  deleteNode: () => { void nodeLifecycleFeature.deleteSelected(); },
+  deleteNode: () => { void nodeRuntime.lifecycle.deleteSelected(); },
   confirmClearImage: async () => Boolean(await assetRuntime.ask({
     title: "清除当前卡片的图片？",
     description: "资产库中的原图不会删除。原提示词、当前描述、模型、图像设置和参考连线都会保留。",
@@ -400,19 +398,19 @@ authWorkspace.applyRoute();
 const screen = (point: Point) => renderingRuntime.screen(point);
 const world = (point: Point) => renderingRuntime.world(point);
 function nodeIsActivelyGenerating(node: FlowNode | undefined) {
-  return nodeLifecycleFeature.isActive(node);
+  return nodeRuntime.lifecycle.isActive(node);
 }
 function canvasHasActiveGeneration() {
-  return nodeLifecycleFeature.hasActiveGeneration();
+  return nodeRuntime.lifecycle.hasActiveGeneration();
 }
 function orderedImageInputs(targetId: number) {
-  return nodeLifecycleFeature.orderedImageInputs(targetId);
+  return nodeRuntime.lifecycle.orderedImageInputs(targetId);
 }
 function imageInputOrder(link: FlowLink) {
-  return nodeLifecycleFeature.imageInputOrder(link);
+  return nodeRuntime.lifecycle.imageInputOrder(link);
 }
 function orderedTargetLinks(targetId: number) {
-  return nodeLifecycleFeature.orderedTargetLinks(targetId);
+  return nodeRuntime.lifecycle.orderedTargetLinks(targetId);
 }
 function canvasInteractionActive() {
   return Boolean(pointer.down || domPointer.drag || interaction.marquee?.active || touchPinch.active);
@@ -459,18 +457,33 @@ function draw(syncDom = true) { renderingRuntime.render.draw(syncDom); }
 function resize() {
   draw();
 }
-nodeLifecycleFeature = new CanvasNodeLifecycleFeature({
+nodeRuntime = new CanvasNodeRuntimeFeature({
   nodes,
   links,
+  promptEditor: promptNodeEditor,
+  titleInput,
+  promptInput,
+  modelInput,
+  generateButton,
+  jobLabel,
+  jobProgress,
+  nodeLayer,
+  infoModal: document.querySelector<HTMLElement>("#node-info-modal")!,
   allocateId: () => canvasNodeIds.allocate(),
   capabilities: () => generationCapabilities,
   center: () => world({ x: innerWidth / 2, y: innerHeight / 2 }),
   selectedId: () => selection.selectedId,
   select: (id) => { selection.selectedId = id; },
   batchIds: selection.batchIds,
+  availableCredits: () =>
+    Number(authWorkspace.user?.credits ?? 0) - Number(authWorkspace.user?.reservedCredits ?? 0),
+  hasConnectedVoice: (node) => Boolean(ttsFeature.connectedVoice(node)),
+  pixiActive: renderingRuntime.render.active,
   updateEditor,
+  setEditingState: () => setSaveState("editing", "编辑中…"),
   save: scheduleSave,
   draw,
+  updateTasks: () => canvasTasks.update(),
   cascadeIds: (seed) => canvasBatch.cascade(seed),
   confirmDelete: async (input) => Boolean(await assetRuntime.ask(input)),
   notify: (message, tone) => showToast(message, tone),
@@ -483,7 +496,7 @@ function addNode(
   position?: Point,
   deferRender = false,
 ) {
-  nodeLifecycleFeature.add(kind, position, deferRender);
+  nodeRuntime.add(kind, position, deferRender);
 }
 function addMediaNode(
   url: string,
@@ -491,48 +504,26 @@ function addMediaNode(
   position = foundation.contextPosition,
   kind: "image" | "video" = "image",
 ) {
-  nodeLifecycleFeature.addMedia(url, title, position, kind);
+  nodeRuntime.addMedia(url, title, position, kind);
 }
 
 function enterTextEdit(node: FlowNode, element: HTMLElement) {
-  nodeEditorFeature.beginTextEdit(node, element);
+  nodeRuntime.beginTextEdit(node, element);
 }
 
 function openNodeInfo(node: FlowNode) {
-  nodeEditorFeature.openInfo(node);
+  nodeRuntime.editor.openInfo(node);
 }
 function closeNodeInfo() {
-  nodeEditorFeature.closeInfo();
+  nodeRuntime.editor.closeInfo();
 }
 
-nodeEditorFeature = new CanvasNodeEditorFeature({
-  nodes,
-  promptEditor: promptNodeEditor,
-  titleInput,
-  promptInput,
-  modelInput,
-  generateButton,
-  jobLabel,
-  jobProgress,
-  nodeLayer,
-  infoModal: document.querySelector<HTMLElement>("#node-info-modal")!,
-  getSelectedId: () => selection.selectedId,
-  getAvailableCredits: () =>
-    Number(authWorkspace.user?.credits ?? 0) - Number(authWorkspace.user?.reservedCredits ?? 0),
-  hasConnectedVoice: (node) => Boolean(ttsFeature.connectedVoice(node)),
-  activelyGenerating: nodeIsActivelyGenerating,
-  pixiActive: renderingRuntime.render.active,
-  setEditingState: () => setSaveState("editing", "编辑中…"),
-  draw,
-  save: scheduleSave,
-  updateTasks: () => canvasTasks.update(),
-});
 function updateEditor() {
-  nodeEditorFeature.update();
+  nodeRuntime.editor.update();
 }
 
 function updateNodeJobProgressUi(node: FlowNode) {
-  nodeEditorFeature.updateProgress(node);
+  nodeRuntime.editor.updateProgress(node);
 }
 
 function scheduleSave(recordHistory = true) {
@@ -603,8 +594,8 @@ generationRuntime = new CanvasGenerationRuntimeFeature({
     jobLabel,
     getSelectedId: () => selection.selectedId,
     setSelectedId: (id) => { selection.selectedId = id; },
-    selectedNode: () => nodeEditorFeature.selected(),
-    blockedReason: (node) => nodeEditorFeature.blockedReason(node),
+    selectedNode: () => nodeRuntime.editor.selected(),
+    blockedReason: (node) => nodeRuntime.editor.blockedReason(node),
     normalizePrompt: normalizePromptText,
     getProjectId: () => foundation.projectId,
     allocateNodeId: () => canvasNodeIds.allocate(),
@@ -629,7 +620,7 @@ generationRuntime = new CanvasGenerationRuntimeFeature({
     ),
     toast: (message, tone, detail) => showToast(message, tone, detail),
   },
-  canGenerate: (node) => nodeEditorFeature.canGenerate(node),
+  canGenerate: (node) => nodeRuntime.editor.canGenerate(node),
   onProgress: (node, _job, changed) => {
     if (changed) updateNodeJobProgressUi(node);
   },
@@ -663,7 +654,7 @@ const canvasControls: CanvasControlsFeature = new CanvasControlsFeature({
     zoomBy: cameraViewport.smoothBy,
     addNode: (kind) => addNode(kind),
     generate: () => { void generate(); },
-    deleteSelected: () => { void nodeLifecycleFeature.deleteSelected(); },
+    deleteSelected: () => { void nodeRuntime.lifecycle.deleteSelected(); },
   },
   quickMenu: {
     canvas,
@@ -821,7 +812,7 @@ const workspaceRuntime = new WorkspaceRuntimeFeature<AuthUser>({
     },
     undo: () => { void canvasHistory.undo(); },
     redo: () => { void canvasHistory.redo(); },
-    deleteSelected: () => { void nodeLifecycleFeature.deleteSelected(); },
+    deleteSelected: () => { void nodeRuntime.lifecycle.deleteSelected(); },
   },
 });
 workspaceRuntime.start(resize, updateEditor);
