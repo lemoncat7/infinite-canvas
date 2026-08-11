@@ -12,6 +12,7 @@ import {
 import { CanvasSelectionController } from "../canvas/selection-controller";
 import { CanvasConnectionController } from "../canvas/connection-controller";
 import { CanvasInteractionController } from "../canvas/interaction-controller";
+import { DomPointerLifecycle } from "../canvas/dom-pointer-lifecycle";
 import { MediaLruCache } from "../canvas/media-cache";
 import type {
   FlowLink,
@@ -112,7 +113,6 @@ import {
   bindNodePointerInteraction,
   bindNodePorts,
   bindNodeToolbarActions,
-  type DomNodeDrag,
 } from "../nodes/node-interaction-view";
 import { ContextMenuController } from "../ui/context-menu";
 import { createDefaultGenerationCapabilities } from "./state";
@@ -443,8 +443,6 @@ if (interruptedThemeTransition) {
     });
   }
 }
-let domDrag: DomNodeDrag | null = null;
-let domDragFrame: number | null = null;
 function syncDraggedNodeElements(ids: Iterable<number>) {
   for (const id of ids) {
     const node = nodes.find((item) => item.id === id),
@@ -452,15 +450,6 @@ function syncDraggedNodeElements(ids: Iterable<number>) {
     if (node && element) element.style.transform = `translate(${node.x}px, ${node.y}px)`;
   }
 }
-let suppressNodeReleaseUntil = 0;
-let domResize: {
-  id: number;
-  startX: number;
-  startY: number;
-  width: number;
-  height: number;
-} | null = null;
-
 const nodes = canvasStore.nodes;
 const links = canvasStore.links;
 type CanvasHistorySnapshot = {
@@ -1108,6 +1097,36 @@ batchToolbar.innerHTML =
 document.body.append(marqueeBox, batchToolbar);
 let promptAgentContextSelection = new Set<number>();
 let promptAgentSelecting = false;
+const domPointer = new DomPointerLifecycle({
+  nodes,
+  zoom: () => camera.zoom,
+  groupMovingElement: batchToolbar,
+  setEditing: () => setSaveState("editing", "编辑中…"),
+  save: scheduleSave,
+  draw,
+  syncElements: syncDraggedNodeElements,
+  refreshBatchSelection,
+  isMultiSelectMode: () => selection.multiSelectMode,
+  toggleBatchNode,
+  selectNode: (id) => { selection.selectedId = id; updateEditor(); },
+  clearSelection: () => { selection.selectedId = 0; updateEditor(); draw(); },
+  selectedId: () => selection.selectedId,
+  isAgentSelected: (id) => promptAgentContextSelection.has(id),
+  agentSelectionSize: () => promptAgentContextSelection.size,
+  toggleAgentSelection: (id) => {
+    if (promptAgentContextSelection.has(id)) promptAgentContextSelection.delete(id);
+    else promptAgentContextSelection.add(id);
+  },
+  renderAgentSelection: () => renderPromptAgentContext(false),
+  warnAgentLimit: () => showToast("参考素材最多选择 8 个", "warning"),
+  hasConnection: () => Boolean(connection.active),
+  moveConnection: (event) => {
+    updateConnectionPointer(event.clientX, event.clientY);
+    startConnectionAutoPan(event.clientX, event.clientY);
+    draw();
+  },
+  finishConnection: finishDomConnection,
+});
 let saveTimer: number | undefined;
 let drawFrame: number | null = null;
 let drawNeedsDomSync = true;
@@ -3197,7 +3216,7 @@ function linkPathGeometry(link: FlowLink) {
   };
 }
 function canvasInteractionActive() {
-  return Boolean(pointer.down || domDrag || interaction.marquee?.active || pinchGesture);
+  return Boolean(pointer.down || domPointer.drag || interaction.marquee?.active || pinchGesture);
 }
 function hitNode(sx: number, sy: number) {
   const p = world({ x: sx, y: sy }),
@@ -3480,12 +3499,7 @@ function cancelSingleTouchActions() {
   canvas.classList.remove("dragging");
   connection.cancel();
   stopConnectionAutoPan();
-  if (domDrag) {
-    domDrag.element.classList.remove("dragging");
-    domDrag = null;
-  }
-  if (domDragFrame !== null) cancelAnimationFrame(domDragFrame);
-  domDragFrame = null;
+  domPointer.cancel();
 }
 document.addEventListener(
   "pointerdown",
@@ -3687,7 +3701,7 @@ function syncDomNodes() {
   const requiredPixiDomIds = new Set<number>([
           ...(selection.selectedId ? [selection.selectedId] : []),
           ...(promptNodeEditor.editingId ? [promptNodeEditor.editingId] : []),
-          ...(domDrag ? [domDrag.id] : []),
+          ...(domPointer.drag ? [domPointer.drag.id] : []),
         ]),
     allNodeIds = new Set(nodes.map((node) => String(node.id))),
     live = new Set(
@@ -3876,13 +3890,13 @@ function createDomNode(node: FlowNode) {
     event.stopPropagation();
     selection.selectedId = node.id;
     updateEditor();
-    domResize = {
+    domPointer.beginResize({
       id: node.id,
       startX: event.clientX,
       startY: event.clientY,
       width: node.width,
       height: node.height,
-    };
+    });
     resizeHandle.setPointerCapture(event.pointerId);
   });
   bindNodePointerInteraction({
@@ -3891,13 +3905,13 @@ function createDomNode(node: FlowNode) {
     allNodes: nodes,
     batchIds: selection.batchIds,
     isMultiSelectMode: () => selection.multiSelectMode,
-    getDrag: () => domDrag,
+    getDrag: () => domPointer.drag,
     setDrag: (drag) => {
-      domDrag = drag;
+      domPointer.drag = drag;
     },
     isAgentSelecting: () => promptAgentSelecting,
     isAgentCreateMode: () => promptAgentMode === "create",
-    isReleaseSuppressed: () => performance.now() < suppressNodeReleaseUntil,
+    isReleaseSuppressed: domPointer.isReleaseSuppressed,
     selectNode: (id) => {
       selection.selectedId = id;
       updateEditor();
@@ -4236,36 +4250,7 @@ function repaintAllMedia() {
     .forEach((node) => repaintMediaUrl(node.mediaUrl!));
 }
 
-window.addEventListener("pointermove", (event) => {
-  if (domResize) {
-    const node = nodes.find((item) => item.id === domResize!.id);
-    if (!node) return;
-    const width = Math.max(
-      220,
-      domResize.width + (event.clientX - domResize.startX) / camera.zoom,
-    );
-    let height = Math.max(
-      160,
-      domResize.height + (event.clientY - domResize.startY) / camera.zoom,
-    );
-    if (node.mediaUrl && !event.shiftKey)
-      height = Math.max(180, (domResize.height * width) / domResize.width);
-    node.width = width;
-    node.height = height;
-    setSaveState("editing", "编辑中…");
-    draw();
-  }
-  if (connection.active) {
-    updateConnectionPointer(event.clientX, event.clientY);
-    startConnectionAutoPan(event.clientX, event.clientY);
-    draw();
-  }
-});
-window.addEventListener("pointerup", (event) => {
-  if (domResize) {
-    domResize = null;
-    scheduleSave();
-  }
+function finishDomConnection(event: PointerEvent) {
   if (!connection.active) return;
   const snappedNode = connection.snap
     ? nodes.find((node) => node.id === connection.snap!.nodeId)
@@ -4296,201 +4281,7 @@ window.addEventListener("pointerup", (event) => {
   connection.cancel();
   stopConnectionAutoPan();
   draw();
-});
-window.addEventListener("pointermove", (event) => {
-  if (!domDrag || event.pointerId !== domDrag.pointerId) return;
-  // Edge can report a final mousemove with buttons=0 before mouseup. Keep the
-  // release guarded here too, otherwise its synthetic drop/click may navigate
-  // to the image URL after a node drag.
-  if (event.buttons === 0) {
-    if (domDrag.moved) suppressNodeReleaseUntil = performance.now() + 700;
-    else if (!domDrag.agentSelect) {
-      if (selection.multiSelectMode) toggleBatchNode(domDrag.id);
-      else {
-        selection.selectedId = domDrag.id;
-        updateEditor();
-      }
-    }
-    const groupMoved = Boolean(domDrag.moved && domDrag.groupInitial?.size);
-    domDrag.element.classList.remove("dragging");
-    batchToolbar.classList.remove("group-moving");
-    domDrag = null;
-    if (domDragFrame !== null) cancelAnimationFrame(domDragFrame);
-    domDragFrame = null;
-    if (groupMoved) refreshBatchSelection();
-    scheduleSave();
-    draw();
-    return;
-  }
-  const drag = domDrag,
-    dx = (event.clientX - drag.startX) / camera.zoom,
-    dy = (event.clientY - drag.startY) / camera.zoom;
-  if (
-    !drag.moved &&
-    (Math.abs(event.clientX - drag.startX) > 3 ||
-      Math.abs(event.clientY - drag.startY) > 3)
-  ) {
-    drag.moved = true;
-    if (drag.nativeControl) {
-      drag.element.setPointerCapture(event.pointerId);
-      event.preventDefault();
-    }
-    drag.element.classList.add("dragging");
-    if (drag.groupInitial?.size) batchToolbar.classList.add("group-moving");
-    if (!drag.agentSelect && selection.selectedId === drag.id) {
-      selection.selectedId = 0;
-      updateEditor();
-      draw();
-    }
-  }
-  if (domDragFrame !== null) cancelAnimationFrame(domDragFrame);
-  domDragFrame = requestAnimationFrame(() => {
-    if (drag.groupInitial?.size) {
-      for (const [id, origin] of drag.groupInitial) {
-        const item = nodes.find((node) => node.id === id);
-        if (item) {
-          item.x = origin.x + dx;
-          item.y = origin.y + dy;
-        }
-      }
-    } else {
-      const node = nodes.find((item) => item.id === drag.id);
-      if (node) {
-        node.x = drag.initialX + dx;
-        node.y = drag.initialY + dy;
-      }
-    }
-    syncDraggedNodeElements(
-      drag.groupInitial?.size ? drag.groupInitial.keys() : [drag.id],
-    );
-    setSaveState("editing", "编辑中…");
-    draw(false);
-    domDragFrame = null;
-  });
-});
-window.addEventListener("pointerup", (event) => {
-  if (!domDrag || event.pointerId !== domDrag.pointerId || event.button !== 0)
-    return;
-  if (domDragFrame !== null) {
-    cancelAnimationFrame(domDragFrame);
-    domDragFrame = null;
-  }
-  const drag = domDrag,
-    node = nodes.find((item) => item.id === drag.id),
-    dx = (event.clientX - drag.startX) / camera.zoom,
-    dy = (event.clientY - drag.startY) / camera.zoom;
-  if (drag.moved && drag.groupInitial?.size) {
-    for (const [id, origin] of drag.groupInitial) {
-      const item = nodes.find((candidate) => candidate.id === id);
-      if (item) {
-        item.x = origin.x + dx;
-        item.y = origin.y + dy;
-      }
-    }
-  } else if (node && drag.moved) {
-    node.x = drag.initialX + dx;
-    node.y = drag.initialY + dy;
-  }
-  if (drag.agentSelect && !drag.moved) {
-    if (promptAgentContextSelection.has(drag.id))
-      promptAgentContextSelection.delete(drag.id);
-    else if (promptAgentContextSelection.size < 8)
-      promptAgentContextSelection.add(drag.id);
-    else showToast("参考素材最多选择 8 个", "warning");
-    renderPromptAgentContext(false);
-  } else if (!drag.agentSelect && !drag.moved) {
-    if (selection.multiSelectMode) toggleBatchNode(drag.id);
-    else {
-      selection.selectedId = drag.id;
-      updateEditor();
-    }
-  }
-  if (drag.moved) suppressNodeReleaseUntil = performance.now() + 700;
-  drag.element.classList.remove("dragging");
-  batchToolbar.classList.remove("group-moving");
-  domDrag = null;
-  if (drag.moved && drag.groupInitial?.size) refreshBatchSelection();
-  scheduleSave();
-  draw();
-});
-window.addEventListener("pointercancel", (event) => {
-  if (!domDrag || event.pointerId !== domDrag.pointerId) return;
-  domDrag.element.classList.remove("dragging");
-  batchToolbar.classList.remove("group-moving");
-  domDrag = null;
-  if (domDragFrame !== null) cancelAnimationFrame(domDragFrame);
-  domDragFrame = null;
-  draw();
-});
-window.addEventListener("blur", () => {
-  if (domDrag) domDrag.element.classList.remove("dragging");
-  batchToolbar.classList.remove("group-moving");
-  domDrag = null;
-  if (domDragFrame !== null) cancelAnimationFrame(domDragFrame);
-  domDragFrame = null;
-});
-window.addEventListener(
-  "dragstart",
-  (event) => {
-    if (
-      (event.target as HTMLElement | null)?.closest(".flow-node,.asset-item")
-    ) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      if (event.dataTransfer) event.dataTransfer.clearData();
-    }
-  },
-  true,
-);
-window.addEventListener(
-  "dragend",
-  (event) => {
-    if (
-      (event.target as HTMLElement | null)?.closest(".flow-node,.asset-item")
-    ) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-    }
-  },
-  true,
-);
-window.addEventListener(
-  "dragover",
-  (event) => {
-    if (
-      (event.target as HTMLElement | null)?.closest(".flow-node,.asset-item")
-    ) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
-    }
-  },
-  true,
-);
-window.addEventListener(
-  "drop",
-  (event) => {
-    event.preventDefault();
-    if (
-      performance.now() < suppressNodeReleaseUntil ||
-      (event.target as HTMLElement | null)?.closest(".flow-node,.asset-item")
-    )
-      event.stopImmediatePropagation();
-  },
-  true,
-);
-for (const type of ["click", "auxclick", "dblclick"] as const)
-  window.addEventListener(
-    type,
-    (event) => {
-      if (performance.now() < suppressNodeReleaseUntil) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-      }
-    },
-    true,
-  );
-
+}
 async function deleteSelectedNode() {
   const index = nodes.findIndex((node) => node.id === selection.selectedId);
   if (index < 0) return;
