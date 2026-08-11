@@ -19,8 +19,8 @@ import type {
   NodeKind,
   Point,
 } from "../nodes/node-types";
-import { NodeLifecycleController, defaultNodeCopy } from "../nodes/node-lifecycle-controller";
-import { GenerationGraph } from "../nodes/generation-graph";
+import { defaultNodeCopy } from "../nodes/node-lifecycle-controller";
+import { CanvasNodeLifecycleFeature } from "../nodes/canvas-node-lifecycle-feature";
 import { decodePromptClipboardText, normalizePromptText } from "../nodes/prompt-text";
 import { PromptNodeController } from "../nodes/prompt-node";
 import { CanvasNodeEditorFeature } from "../nodes/canvas-node-editor-feature";
@@ -67,6 +67,7 @@ let generationCapabilities: GenerationCapabilities =
   createDefaultGenerationCapabilities();
 let generationRuntime: CanvasGenerationRuntimeFeature;
 let nodeEditorFeature: CanvasNodeEditorFeature;
+let nodeLifecycleFeature: CanvasNodeLifecycleFeature;
 function loadTtsProviders() {
   return ttsFeature.loadProviders();
 }
@@ -451,21 +452,20 @@ const world = (point: Point) =>
   screenToWorld(point, camera, viewportSize());
 const portWorld = nodePortPosition;
 const controlPoint = connectionControlPoint;
-const generationGraph = new GenerationGraph(nodes, links);
 function nodeIsActivelyGenerating(node: FlowNode | undefined) {
-  return generationGraph.isActive(node);
+  return nodeLifecycleFeature.isActive(node);
 }
 function canvasHasActiveGeneration() {
-  return generationGraph.hasActiveGeneration();
+  return nodeLifecycleFeature.hasActiveGeneration();
 }
 function orderedImageInputs(targetId: number) {
-  return generationGraph.orderedImageInputs(targetId);
+  return nodeLifecycleFeature.orderedImageInputs(targetId);
 }
 function imageInputOrder(link: FlowLink) {
-  return generationGraph.imageInputOrder(link);
+  return nodeLifecycleFeature.imageInputOrder(link);
 }
 function orderedTargetLinks(targetId: number) {
-  return generationGraph.orderedTargetLinks(targetId);
+  return nodeLifecycleFeature.orderedTargetLinks(targetId);
 }
 connectionFeature = new CanvasConnectionFeature({
   nodes,
@@ -544,7 +544,7 @@ function draw(syncDom = true) { canvasRender.draw(syncDom); }
 function resize() {
   draw();
 }
-const nodeLifecycle = new NodeLifecycleController({
+nodeLifecycleFeature = new CanvasNodeLifecycleFeature({
   nodes,
   links,
   allocateId: allocateCanvasNodeId,
@@ -556,7 +556,6 @@ const nodeLifecycle = new NodeLifecycleController({
   updateEditor,
   save: scheduleSave,
   draw,
-  hasActiveGeneration: canvasHasActiveGeneration,
   cascadeIds: cascadeSelectionIds,
   confirmDelete: async (input) => Boolean(await askProjectDialog(input)),
   notify: (message, tone) => showToast(message, tone),
@@ -569,7 +568,7 @@ function addNode(
   position?: Point,
   deferRender = false,
 ) {
-  nodeLifecycle.add(kind, position, deferRender);
+  nodeLifecycleFeature.add(kind, position, deferRender);
 }
 function addMediaNode(
   url: string,
@@ -577,7 +576,7 @@ function addMediaNode(
   position = contextPosition,
   kind: "image" | "video" = "image",
 ) {
-  nodeLifecycle.addMedia(url, title, position, kind);
+  nodeLifecycleFeature.addMedia(url, title, position, kind);
 }
 
 function enterTextEdit(node: FlowNode, element: HTMLElement) {
@@ -595,7 +594,7 @@ function finishDomConnection(event: PointerEvent) {
   connectionFeature.finish(event);
 }
 async function deleteSelectedNode() {
-  await nodeLifecycle.deleteSelected();
+  await nodeLifecycleFeature.deleteSelected();
 }
 
 function selectedNode() {
