@@ -18,6 +18,7 @@ import { CanvasPointerLifecycle } from "../canvas/canvas-pointer-lifecycle";
 import { TouchPinchController } from "../canvas/touch-pinch-controller";
 import { CameraViewportController } from "../canvas/camera-viewport-controller";
 import { LinkInteractionView } from "../canvas/link-interaction-view";
+import { GenerationPoller } from "../services/generation-poller";
 import { MediaLruCache } from "../canvas/media-cache";
 import type {
   FlowLink,
@@ -41,6 +42,7 @@ import {
   fetchGenerationJob,
   missingGenerationInputs,
   runGenerationJob,
+  type GenerationJob,
 } from "../services/generation";
 import {
   fetchAssets,
@@ -897,9 +899,7 @@ async function cancelPendingProjectTasks() {
       node.progress = 0;
     });
     for (const jobId of canceledIds) {
-      const timer = activeJobPolls.get(jobId);
-      if (timer) window.clearInterval(timer);
-      activeJobPolls.delete(jobId);
+      generationPoller.cancel(jobId);
     }
     for (let index = nodes.length - 1; index >= 0; index--) {
       const node = nodes[index],
@@ -1339,8 +1339,16 @@ function modelDisplayName(value?: string) {
     "自定义模型"
   );
 }
-const activeJobPolls = new Map<string, number>();
-const retryNotifiedJobs = new Set<string>();
+const generationPoller = new GenerationPoller({
+  nodes,
+  onProgress: (node, _job, changed) => { if (changed) updateNodeJobProgressUi(node); },
+  onRetry: () => showToast("首次生成请求超时，正在自动重试一次", "warning"),
+  onTerminal: finalizeGenerationJob,
+  onSyncFailure: (_failures, notify) => {
+    jobLabel.textContent = "状态同步中断，正在重试…";
+    if (notify) showToast("任务状态暂时无法同步，服务恢复后将自动重试", "error");
+  },
+});
 const toastStack = document.querySelector<HTMLElement>("#toast-stack")!;
 function friendlyGenerationError(raw: string, fallback: string) {
   const text = raw.trim() || fallback,
@@ -4401,8 +4409,7 @@ async function loadCanvas(keepLoadingStatus = false) {
       leasedNextId = nextId,
       leasedEnd = canvasNodeIdBlockEnd;
     setWorkspaceBootStatus("正在读取画布与生成任务");
-    activeJobPolls.forEach((timer) => window.clearInterval(timer));
-    activeJobPolls.clear();
+    generationPoller.cancelAll();
     const response = await apiFetch(`/api/projects/${loadingProjectId}/canvas`);
     if (
       loadingProjectId !== currentProjectId ||
@@ -4983,7 +4990,6 @@ function removeFailedResult(node: FlowNode, sourceId = node.sourceNodeId) {
 }
 
 const agentWorkflowSubmitting = new Set<number>();
-const finalizedJobIds = new Set<string>();
 function runAgentWorkflow() {
   for (const node of nodes.filter(
     (item) => item.agentAuto && !agentWorkflowSubmitting.has(item.id),
@@ -5036,156 +5042,45 @@ function findRevisionPosition(source: FlowNode, excludeId?: number) {
   return { x: source.x + source.width + 110, y: source.y };
 }
 
-function pollJob(node: FlowNode) {
-  if (!node.jobId) return;
-  const jobId = node.jobId,
-    nodeId = node.id;
-  const previousTimer = activeJobPolls.get(jobId);
-  if (previousTimer) window.clearInterval(previousTimer);
-  let failures = 0,
-    failureNotified = false;
-  const timer = window.setInterval(async () => {
-    let currentNode = nodes.find((item) => item.id === nodeId);
-    if (!currentNode?.jobId || currentNode.jobId !== jobId) {
-      window.clearInterval(timer);
-      activeJobPolls.delete(jobId);
-      return;
-    }
+async function finalizeGenerationJob(currentNode: FlowNode, job: GenerationJob) {
+  if (job.status === "succeeded" && job.result_url) {
+    currentNode.mediaUrl = job.result_url;
     try {
-      const job = await fetchGenerationJob(jobId);
-      currentNode = nodes.find((item) => item.id === nodeId);
-      if (!currentNode?.jobId || currentNode.jobId !== jobId) {
-        window.clearInterval(timer);
-        activeJobPolls.delete(jobId);
-        return;
-      }
-      failures = 0;
-      failureNotified = false;
-      const previousStatus = currentNode.status,
-        previousProgress = Number(currentNode.progress ?? 0),
-        nextProgress = Number(job.progress ?? 0),
-        terminal =
-          job.status === "succeeded" ||
-          job.status === "failed" ||
-          job.status === "canceled";
-      currentNode.status = job.status;
-      if (
-        currentNode.kind === "image" &&
-        job.status === "running" &&
-        job.progress === 20 &&
-        !retryNotifiedJobs.has(jobId)
-      ) {
-        retryNotifiedJobs.add(jobId);
-        showToast("首次生成请求超时，正在自动重试一次", "warning");
-      }
-      currentNode.progress = nextProgress;
-      if (
-        !terminal &&
-        (previousStatus !== job.status || previousProgress !== nextProgress)
-      ) {
-        updateNodeJobProgressUi(currentNode);
-      }
-      if (terminal) {
-        window.clearInterval(timer);
-        activeJobPolls.delete(jobId);
-        retryNotifiedJobs.delete(jobId);
-        if (finalizedJobIds.has(jobId)) return;
-        finalizedJobIds.add(jobId);
-        if (finalizedJobIds.size > 200)
-          finalizedJobIds.delete(finalizedJobIds.values().next().value!);
-        if (job.status === "succeeded" && job.result_url) {
-          currentNode.mediaUrl = job.result_url;
-          try {
-            const metadata = JSON.parse(job.result_metadata || "{}");
-            if (metadata && typeof metadata === "object")
-              currentNode.videoResult = metadata;
-          } catch {
-            /* 旧任务没有结果规格 */
-          }
-          imageCache.delete(job.result_url);
-          void loadAssets(false).then(() => {
-            if (
-              document
-                .querySelector("#assets-panel")
-                ?.classList.contains("open")
-            )
-              renderAssets();
-          });
-          if (currentNode.kind === "video")
-            showToast("视频已生成并加入资产库", "success");
-        }
-        if (job.status === "failed") {
-          const message = job.error || "视频生成失败";
-          jobLabel.textContent = `生成失败：${message}`;
-          showToast(message, "error");
-          if (currentNode.role === "result") removeFailedResult(currentNode);
-        }
-        if (job.status === "canceled") {
-          currentNode.progress = 0;
-          if (!currentNode.body.trim())
-            currentNode.body = normalizePromptText(
-              currentNode.originalPrompt || currentNode.generationPrompt || "",
-            );
-          delete currentNode.jobId;
-          jobLabel.textContent = "任务已取消，可重新生成";
-          showToast(
-            "等待任务已取消",
-            "warning",
-            "卡片描述和配置已保留，可随时重新生成。",
-          );
-        }
-        try {
-          const userResponse = await apiFetch("/api/users/me");
-          if (userResponse.ok) {
-            const previousAvailable = Math.max(
-              0,
-              Number(authUser?.credits ?? 0) -
-                Number(authUser?.reservedCredits ?? 0),
-            );
-            authUser = (await userResponse.json()) as AuthUser;
-            const nextAvailable = Math.max(
-              0,
-              Number(authUser.credits ?? 0) -
-                Number(authUser.reservedCredits ?? 0),
-            );
-            renderAuthenticatedUser();
-            if (
-              previousAvailable >= 1 !== nextAvailable >= 1 ||
-              previousAvailable >= 2 !== nextAvailable >= 2
-            )
-              refreshNodeModelMenus();
-          }
-        } catch {
-          /* 下次刷新同步余额 */
-        }
-        updateEditor();
-        draw();
-        scheduleSave(false);
-        runAgentWorkflow();
-      }
-    } catch {
-      failures++;
-      jobLabel.textContent = "状态同步中断，正在重试…";
-      if (failures >= 5 && !failureNotified) {
-        failureNotified = true;
-        showToast("任务状态暂时无法同步，服务恢复后将自动重试", "error");
-      }
+      const metadata = JSON.parse(job.result_metadata || "{}");
+      if (metadata && typeof metadata === "object") currentNode.videoResult = metadata;
+    } catch { /* 旧任务没有结果规格 */ }
+    imageCache.delete(job.result_url);
+    void loadAssets(false).then(() => {
+      if (document.querySelector("#assets-panel")?.classList.contains("open")) renderAssets();
+    });
+    if (currentNode.kind === "video") showToast("视频已生成并加入资产库", "success");
+  }
+  if (job.status === "failed") {
+    const message = job.error || "视频生成失败";
+    jobLabel.textContent = `生成失败：${message}`;
+    showToast(message, "error");
+    if (currentNode.role === "result") removeFailedResult(currentNode);
+  }
+  if (job.status === "canceled") {
+    currentNode.progress = 0;
+    if (!currentNode.body.trim()) currentNode.body = normalizePromptText(currentNode.originalPrompt || currentNode.generationPrompt || "");
+    delete currentNode.jobId;
+    jobLabel.textContent = "任务已取消，可重新生成";
+    showToast("等待任务已取消", "warning", "卡片描述和配置已保留，可随时重新生成。");
+  }
+  try {
+    const response = await apiFetch("/api/users/me");
+    if (response.ok) {
+      const previous = Math.max(0, Number(authUser?.credits ?? 0)-Number(authUser?.reservedCredits ?? 0));
+      authUser = (await response.json()) as AuthUser;
+      const next = Math.max(0, Number(authUser.credits ?? 0)-Number(authUser.reservedCredits ?? 0));
+      renderAuthenticatedUser();
+      if (previous >= 1 !== next >= 1 || previous >= 2 !== next >= 2) refreshNodeModelMenus();
     }
-  }, 1500);
-  activeJobPolls.set(jobId, timer);
+  } catch { /* 下次刷新同步余额 */ }
+  updateEditor(); draw(); scheduleSave(false); runAgentWorkflow();
 }
-
-function resumeActiveJobPolls() {
-  nodes
-    .filter(
-      (node) =>
-        node.jobId && (node.status === "queued" || node.status === "running"),
-    )
-    .forEach(pollJob);
-}
-window.addEventListener("online", resumeActiveJobPolls);
-window.addEventListener("focus", resumeActiveJobPolls);
-
+function pollJob(node: FlowNode) { generationPoller.poll(node); }
 function refreshBatchSelection() {
   selection.prune(nodes);
   batchToolbar.classList.toggle("open", selection.batchIds.size > 0);
