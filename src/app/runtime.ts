@@ -62,6 +62,7 @@ import { PendingTaskCancellationController } from "../nodes/pending-task-cancell
 import { apiFetch } from "../services/api";
 import { AppUpdateController } from "../services/app-update-controller";
 import { GenerationCapabilitiesController } from "../services/generation-capabilities-controller";
+import { ClientDiagnostics } from "../services/client-diagnostics";
 import {
   type GenerationJob,
 } from "../services/generation";
@@ -326,39 +327,10 @@ let backgroundMode: "dots" | "lines" | "blank" = "lines";
 let colorTheme: "light" | "dark" =
   localStorage.getItem("flow-theme") === "light" ? "light" : "dark";
 document.body.dataset.theme = colorTheme;
-function clientLog(event: string, details: unknown = {}) {
-  const payload = {
-    event,
-    details,
-    userAgent: navigator.userAgent,
-    path: location.pathname,
-    timestamp: new Date().toISOString(),
-  };
-  console.info("[client-diagnostic]", payload);
-  void apiFetch("/api/client-logs", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-    keepalive: true,
-  }).catch(() => {});
-}
-window.addEventListener("error", (event) =>
-  clientLog("window-error", {
-    message: event.message,
-    file: event.filename,
-    line: event.lineno,
-    column: event.colno,
-    stack: event.error?.stack,
-  }),
-);
-window.addEventListener("unhandledrejection", (event) =>
-  clientLog("unhandled-rejection", {
-    reason:
-      event.reason instanceof Error
-        ? { message: event.reason.message, stack: event.reason.stack }
-        : String(event.reason),
-  }),
-);
+const clientDiagnostics = new ClientDiagnostics();
+const clientLog = (event: string, details: unknown = {}) =>
+  clientDiagnostics.log(event, details);
+clientDiagnostics.bindGlobalErrors();
 const interruptedThemeTransition = sessionStorage.getItem(
   "flow-theme-transition-inflight",
 );
