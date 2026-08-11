@@ -1,5 +1,6 @@
 import "../style.css";
 import { CanvasRenderFeature } from "../canvas/canvas-render-feature";
+import { CanvasRenderState } from "../canvas/canvas-render-state";
 import { CanvasPersistenceFeature } from "../canvas/canvas-persistence-feature";
 import { CanvasConnectionFeature } from "../canvas/canvas-connection-feature";
 import { CanvasStore } from "../canvas/store";
@@ -530,6 +531,21 @@ function startConnectionAutoPan(sx: number, sy: number) { connectionFeature.star
 function hitLink(sx: number, sy: number, tolerance = 9) {
   return connectionFeature.hitLink(sx, sy, tolerance);
 }
+const canvasRenderState = new CanvasRenderState({
+  nodes,
+  links,
+  camera,
+  connectionFeature,
+  connection,
+  domNodeIds: () => [...nodeViews.mountedIds],
+  selectedId: () => selection.selectedId,
+  batchIds: selection.batchIds,
+  agentIds: () => creationSuite.prompt.selectedIds,
+  dark: () => colorTheme === "dark",
+  backgroundMode: () => backgroundMode,
+  screen,
+  portWorld,
+});
 canvasRender = new CanvasRenderFeature({
   viewport: nodeViewport,
   zoomSlider,
@@ -538,36 +554,7 @@ canvasRender = new CanvasRenderFeature({
   viewportSize: () => ({ width: innerWidth, height: innerHeight }),
   camera: () => camera,
   interacting: canvasInteractionActive,
-  state: () => {
-  const pendingNode = connection.active
-    ? connectionFeature.geometry.nodeIndex.get(connection.active.nodeId) ??
-      nodes.find((node) => node.id === connection.active!.nodeId)
-    : undefined;
-    return {
-    nodes,
-    links,
-    nodeCount: nodes.length,
-    indexedNodeCount: connectionFeature.geometry.nodeIndex.size,
-    domNodeIds: [...nodeViews.mountedIds],
-    camera,
-    selectedId: selection.selectedId,
-    selectedIds: [
-      ...new Set([...selection.batchIds, ...creationSuite.prompt.selectedIds]),
-    ],
-    dark: colorTheme === "dark",
-    backgroundMode,
-    hoveredLinkIndex: connection.hoveredLinkIndex,
-    touchSelectedLinkIndex: connection.touchSelectedLinkIndex,
-    pendingConnection: connection.active && pendingNode
-      ? {
-          from: screen(portWorld(pendingNode, connection.active.side)),
-          to: connection.active.pointer,
-          fromSide: connection.active.side,
-          snapped: Boolean(connection.snap),
-        }
-      : undefined,
-    };
-  },
+  state: canvasRenderState.snapshot,
   rebuildIndexes: rebuildPaintIndexes,
   syncDom: () => nodeViews.sync(),
   warmEditors: () => nodeViews.scheduleWarmup(),
