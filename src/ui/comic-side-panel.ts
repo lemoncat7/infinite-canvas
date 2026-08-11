@@ -34,6 +34,7 @@ export class ComicSidePanelController {
     planPanel.insertAdjacentHTML("afterbegin", MOBILE_TABS);
     this.bindTabs(briefPanel);
     this.bindTabs(planPanel);
+    this.bindHeaderControls();
     this.preparePlanSections();
     this.observer = new MutationObserver(() => this.syncPlan());
     this.observer.observe(sourcePlan, {
@@ -141,6 +142,33 @@ export class ComicSidePanelController {
         this.showMobile(button.dataset.comicTab as "brief" | "plan"),
       ),
     );
+  }
+
+  private bindHeaderControls() {
+    const { studio, briefPanel, planPanel, headerNav } = this.options;
+    headerNav
+      .querySelector<HTMLButtonElement>("[data-comic-scheme]")!
+      .addEventListener("click", () => {
+        studio
+          .querySelector<HTMLElement>("[data-comic-label-menu]")
+          ?.classList.remove("open");
+        this.showMobile(
+          briefPanel.classList.contains("mobile-open") ||
+            planPanel.classList.contains("mobile-open")
+            ? null
+            : "brief",
+        );
+      });
+    headerNav
+      .querySelectorAll<HTMLButtonElement>("[data-comic-desktop-side]")
+      .forEach((button) =>
+        button.addEventListener("click", () =>
+          this.toggleDesktop(
+            button.dataset.comicDesktopSide as "brief" | "plan",
+            button,
+          ),
+        ),
+      );
   }
 
   private preparePlanSections() {

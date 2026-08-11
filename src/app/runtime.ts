@@ -4318,29 +4318,6 @@ const comicStudioView = new ComicStudioView(
   comicBriefPanel,
   positionComicBriefPanel,
 );
-comicHeaderNav
-  .querySelector<HTMLButtonElement>("[data-comic-scheme]")!
-  .addEventListener("click", () => {
-    comicStudio
-      .querySelector<HTMLElement>("[data-comic-label-menu]")
-      ?.classList.remove("open");
-    showComicMobilePanel(
-      comicBriefPanel.classList.contains("mobile-open") ||
-        comicPlanSidePanel.classList.contains("mobile-open")
-        ? null
-        : "brief",
-    );
-  });
-comicHeaderNav
-  .querySelectorAll<HTMLButtonElement>("[data-comic-desktop-side]")
-  .forEach((button) =>
-    button.addEventListener("click", () =>
-      comicSidePanel.toggleDesktop(
-        button.dataset.comicDesktopSide as "brief" | "plan",
-        button,
-      ),
-    ),
-  );
 const promptAgentModelSelect = promptAgentControls.modelSelect;
 const promptAgentEffects = document.createElement("canvas"),
   promptAgentEffectsFront = document.createElement("canvas");
