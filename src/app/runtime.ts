@@ -19,6 +19,12 @@ import { TouchPinchController } from "../canvas/touch-pinch-controller";
 import { CameraViewportController } from "../canvas/camera-viewport-controller";
 import { LinkInteractionView } from "../canvas/link-interaction-view";
 import { GenerationPoller } from "../services/generation-poller";
+import { GenerationWorkflow } from "../services/generation-workflow";
+import {
+  appendRevisionNode,
+  findOutputPosition,
+  removeResultNode,
+} from "../nodes/generation-node-lifecycle";
 import { MediaLruCache } from "../canvas/media-cache";
 import type {
   FlowLink,
@@ -1348,6 +1354,14 @@ const generationPoller = new GenerationPoller({
     jobLabel.textContent = "状态同步中断，正在重试…";
     if (notify) showToast("任务状态暂时无法同步，服务恢复后将自动重试", "error");
   },
+});
+const generationWorkflow = new GenerationWorkflow({
+  nodes,
+  links,
+  generate,
+  save: scheduleSave,
+  draw,
+  canGenerate: canGenerateNode,
 });
 const toastStack = document.querySelector<HTMLElement>("#toast-stack")!;
 function friendlyGenerationError(raw: string, fallback: string) {
@@ -4597,7 +4611,7 @@ async function loadCanvas(keepLoadingStatus = false) {
       .forEach((node) => {
         const source = nodes.find((item) => item.id === node.sourceNodeId);
         if (source && Math.abs(node.y - source.y) > 780) {
-          const position = findRevisionPosition(source, node.id);
+          const position = findOutputPosition(source, nodes, node.id);
           node.x = position.x;
           node.y = position.y;
           repositionedResult = true;
@@ -4865,7 +4879,7 @@ async function generateTts(source: FlowNode) {
     } else {
       const id = allocateCanvasNodeId();
       if (id === null) throw new Error("无法创建音频结果卡片");
-      const position = findRevisionPosition(source);
+      const position = findOutputPosition(source, nodes);
       audioNode = {
         id,
         publicId: makeNodePublicId("audio"),
@@ -4920,128 +4934,18 @@ async function generateTts(source: FlowNode) {
   }
 }
 
-function compactPromptPart(value: string, limit: number) {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  if (normalized.length <= limit) return normalized;
-  const pieces = normalized.match(/[^。！？；.!?;]+[。！？；.!?;]?/g) ?? [
-    normalized,
-  ];
-  let result = "";
-  for (const piece of pieces) {
-    const next = `${result}${piece.trim()}`;
-    if (next.length > limit) break;
-    result = next;
-  }
-  return (result || normalized.slice(0, limit)).replace(/[，、：:\s]+$/, "");
-}
 function createRevisionNode(source: FlowNode) {
   const id = allocateCanvasNodeId();
   if (id === null) return null;
-  const position = findRevisionPosition(source);
-  const kind: "image" | "video" = source.kind === "video" ? "video" : "image";
-  const revision: FlowNode = {
-    id,
-    publicId: makeNodePublicId(kind),
-    kind,
-    role: kind === "video" ? "result" : undefined,
-    sourceNodeId: kind === "video" ? source.id : undefined,
-    x: position.x,
-    y: position.y,
-    width: 280,
-    height: 220,
-    title: kind === "video" ? "视频生成结果" : "图片修改结果",
-    body: "",
-    originalPrompt: kind === "image" ? source.originalPrompt : undefined,
-    corePrompt: kind === "image" ? source.corePrompt : undefined,
-    promptProfile: kind === "image" ? source.promptProfile : undefined,
-    styleConstraint: kind === "image" ? source.styleConstraint : undefined,
-    formConstraint: kind === "image" ? source.formConstraint : undefined,
-    continuityConstraint:
-      kind === "image" ? source.continuityConstraint : undefined,
-    accent: kind === "video" ? "#ffb774" : "#8ee7ff",
-    model:
-      source.model ?? (kind === "video" ? "agnes-video-v2.0" : "gpt-image-2"),
-    imageSettings:
-      kind === "image" ? { ...(source.imageSettings ?? {}) } : undefined,
-    videoSettings:
-      kind === "video" ? { ...(source.videoSettings ?? {}) } : undefined,
-    status: "queued",
-    progress: 0,
-  };
-  nodes.push(revision);
-  links.push({
-    from: source.id,
-    to: revision.id,
-    fromSide: "right",
-    toSide: "left",
-  });
-  scheduleSave();
-  draw();
+  const revision = appendRevisionNode(id, source, nodes, links);
+  scheduleSave(); draw();
   return revision;
 }
-
 function removeFailedResult(node: FlowNode, sourceId = node.sourceNodeId) {
-  const index = nodes.indexOf(node);
-  if (index >= 0) nodes.splice(index, 1);
-  for (let linkIndex = links.length - 1; linkIndex >= 0; linkIndex--)
-    if (links[linkIndex].from === node.id || links[linkIndex].to === node.id)
-      links.splice(linkIndex, 1);
+  removeResultNode(node, nodes, links);
   if (selection.selectedId === node.id) selection.selectedId = sourceId ?? 0;
 }
-
-const agentWorkflowSubmitting = new Set<number>();
-function runAgentWorkflow() {
-  for (const node of nodes.filter(
-    (item) => item.agentAuto && !agentWorkflowSubmitting.has(item.id),
-  )) {
-    const upstream = links
-      .filter((link) => link.to === node.id)
-      .map((link) => nodes.find((item) => item.id === link.from))
-      .filter((item): item is FlowNode => Boolean(item));
-    if (upstream.some((item) => item.status === "failed")) {
-      node.status = "waiting";
-      continue;
-    }
-    if (upstream.some((item) => item.kind === "image" && !item.mediaUrl))
-      continue;
-    agentWorkflowSubmitting.add(node.id);
-    node.status = "waiting";
-    void generate(node).finally(() => {
-      agentWorkflowSubmitting.delete(node.id);
-      scheduleSave();
-      draw();
-    });
-  }
-}
-
-function findRevisionPosition(source: FlowNode, excludeId?: number) {
-  const columnStep = 390,
-    rowStep = 260,
-    rowOffsets = [0, 1, -1, 2, -2];
-  const candidates: Array<{ column: number; row: number }> = [];
-  for (let column = 0; column < 8; column++)
-    candidates.push({ column, row: 0 });
-  for (const row of rowOffsets.slice(1))
-    for (let column = 0; column < 8; column++) candidates.push({ column, row });
-  for (const { column, row } of candidates) {
-    const candidate = {
-      x: source.x + source.width + 110 + column * columnStep,
-      y: source.y + row * rowStep,
-    };
-    const occupied = nodes.some(
-      (node) =>
-        node.id !== source.id &&
-        node.id !== excludeId &&
-        candidate.x < node.x + node.width + 24 &&
-        candidate.x + 280 + 24 > node.x &&
-        candidate.y < node.y + node.height + 24 &&
-        candidate.y + 220 + 24 > node.y,
-    );
-    if (!occupied) return candidate;
-  }
-  return { x: source.x + source.width + 110, y: source.y };
-}
-
+function runAgentWorkflow() { generationWorkflow.run(); }
 async function finalizeGenerationJob(currentNode: FlowNode, job: GenerationJob) {
   if (job.status === "succeeded" && job.result_url) {
     currentNode.mediaUrl = job.result_url;
@@ -5174,37 +5078,15 @@ function deleteBatchSelection() {
   showToast(`已删除 ${targets.size} 个节点`, "success");
 }
 function generateBatchSelection() {
-  const selected = nodes.filter((node) => selection.batchIds.has(node.id)),
-    candidates = selected.filter(
-      (node) =>
-        canGenerateNode(node) &&
-        node.status !== "queued" &&
-        node.status !== "running",
-    );
-  if (!candidates.length) {
+  const result = generationWorkflow.enqueue(selection.batchIds);
+  if (!result.candidates) {
     showToast("选中区域没有可生成的任务节点", "warning");
     return;
   }
-  candidates.forEach((node) => {
-    node.agentAuto = true;
-    node.status = "waiting";
-  });
-  const ready = candidates.filter(
-      (node) =>
-        !links
-          .filter((link) => link.to === node.id)
-          .map((link) => nodes.find((item) => item.id === link.from))
-          .some((upstream) => upstream?.kind === "image" && !upstream.mediaUrl),
-    ).length,
-    waiting = candidates.length - ready,
-    skipped = selected.length - candidates.length;
-  scheduleSave();
-  draw();
-  runAgentWorkflow();
   showToast(
-    `${candidates.length} 个任务已进入依赖队列`,
+    `${result.candidates} 个任务已进入依赖队列`,
     "success",
-    `${ready} 个可立即排队${waiting ? ` · ${waiting} 个等待上游` : ""}${skipped ? ` · ${skipped} 个不可生成` : ""}`,
+    `${result.ready} 个可立即排队${result.waiting ? ` · ${result.waiting} 个等待上游` : ""}${result.skipped ? ` · ${result.skipped} 个不可生成` : ""}`,
   );
 }
 batchToolbar
