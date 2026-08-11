@@ -44,7 +44,8 @@ import type {
   Point,
   PortSide,
 } from "../nodes/node-types";
-import { createNode, makeNodePublicId } from "../nodes/node-service";
+import { makeNodePublicId } from "../nodes/node-service";
+import { NodeLifecycleController } from "../nodes/node-lifecycle-controller";
 import { downloadNodeImage as downloadNodeImageFile } from "../nodes/node-download";
 import { PromptNodeController } from "../nodes/prompt-node";
 import { TtsCatalogController } from "../services/tts-catalog";
@@ -1452,21 +1453,32 @@ function draw(syncDom = true) {
 function resize() {
   draw();
 }
+const nodeLifecycle = new NodeLifecycleController({
+  nodes,
+  links,
+  allocateId: allocateCanvasNodeId,
+  capabilities: () => generationCapabilities,
+  center: () => world({ x: innerWidth / 2, y: innerHeight / 2 }),
+  selectedId: () => selection.selectedId,
+  select: (id) => { selection.selectedId = id; },
+  batchIds: selection.batchIds,
+  updateEditor,
+  save: scheduleSave,
+  draw,
+  hasActiveGeneration: canvasHasActiveGeneration,
+  cascadeIds: cascadeSelectionIds,
+  confirmDelete: async (input) => Boolean(await askProjectDialog(input)),
+  notify: (message, tone) => showToast(message, tone),
+  guide: showCanvasGuide,
+  hideGuide: hideCanvasGuide,
+  undo: undoCanvas,
+});
 function addNode(
   kind: NodeKind = "image",
   position?: Point,
   deferRender = false,
 ) {
-  const id = allocateCanvasNodeId();
-  if (id === null) return;
-  const center = position ?? world({ x: innerWidth / 2, y: innerHeight / 2 });
-  nodes.push(createNode(id, kind, center, generationCapabilities));
-  selection.selectedId = id;
-  if (!deferRender) {
-    updateEditor();
-    scheduleSave();
-    draw();
-  }
+  nodeLifecycle.add(kind, position, deferRender);
 }
 function addMediaNode(
   url: string,
@@ -1474,34 +1486,7 @@ function addMediaNode(
   position = contextPosition,
   kind: "image" | "video" = "image",
 ) {
-  const id = allocateCanvasNodeId();
-  if (id === null) return;
-  nodes.push({
-    id,
-    publicId: makeNodePublicId(kind),
-    kind,
-    role: kind === "video" ? "result" : undefined,
-    x: position.x - 145,
-    y: position.y - 120,
-    width: 290,
-    height: 240,
-    title,
-    body: "",
-    accent: kind === "video" ? "#ffb774" : "#8ee7ff",
-    mediaUrl: url,
-    model:
-      kind === "video"
-        ? (generationCapabilities.video?.defaultModel ?? "agnes-video-v2.0")
-        : (generationCapabilities.image?.defaultModel ?? "gpt-image-2"),
-    videoSettings:
-      kind === "video"
-        ? { seconds: "5", resolution: "720p", aspectRatio: "16:9" }
-        : undefined,
-  });
-  selection.selectedId = id;
-  updateEditor();
-  scheduleSave();
-  draw();
+  nodeLifecycle.addMedia(url, title, position, kind);
 }
 
 const boundNodeDomSynchronizer = new BoundNodeDomSynchronizer({
@@ -1744,55 +1729,7 @@ function finishDomConnection(event: PointerEvent) {
   draw();
 }
 async function deleteSelectedNode() {
-  const index = nodes.findIndex((node) => node.id === selection.selectedId);
-  if (index < 0) return;
-  if (canvasHasActiveGeneration()) {
-    showToast("画布正在生成，任务完成后即可删除节点", "warning");
-    return;
-  }
-  const targets = cascadeSelectionIds(new Set([nodes[index].id]));
-  const cascadeCount = targets.size - 1;
-  const targetTitle = nodes[index].title || "未命名卡片",
-    confirmed = await askProjectDialog({
-      title: "删除这张卡片？",
-      description: cascadeCount
-        ? `将删除“${targetTitle}”，并连带清理 ${cascadeCount} 张只依赖它的下游卡片。此操作无法撤销。`
-        : `将删除“${targetTitle}”。此操作无法撤销。`,
-      confirm: cascadeCount ? `删除 ${targets.size} 张卡片` : "确认删除",
-      danger: true,
-    });
-  if (!confirmed || nodes.findIndex((node) => node.id === selection.selectedId) < 0)
-    return;
-  for (let nodeIndex = nodes.length - 1; nodeIndex >= 0; nodeIndex--)
-    if (targets.has(nodes[nodeIndex].id)) nodes.splice(nodeIndex, 1);
-  for (let linkIndex = links.length - 1; linkIndex >= 0; linkIndex--) {
-    if (targets.has(links[linkIndex].from) || targets.has(links[linkIndex].to))
-      links.splice(linkIndex, 1);
-  }
-  selection.selectedId = 0;
-  for (const id of targets) selection.batchIds.delete(id);
-  updateEditor();
-  scheduleSave();
-  draw();
-  showCanvasGuide({
-    key: "delete-cascade",
-    title: `已删除 ${targets.size} 张卡片`,
-    detail: cascadeCount
-      ? `同时清理了 ${cascadeCount} 张只依赖该上游的下游卡片。`
-      : "需要恢复时可立即撤销。",
-    tone: "online",
-    duration: 5200,
-    actions: [
-      {
-        label: "撤销",
-        primary: true,
-        run: () => {
-          hideCanvasGuide("delete-cascade");
-          void undoCanvas();
-        },
-      },
-    ],
-  });
+  await nodeLifecycle.deleteSelected();
 }
 
 function selectedNode() {
