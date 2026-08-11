@@ -51,8 +51,7 @@ import {
 import type { AuthUser } from "../ui/user-menu-controller";
 import { NotificationFeature } from "../ui/notification-feature";
 import { AccountToolsFeature } from "../ui/account-tools-feature";
-import { PromptAgentFeature } from "../ui/prompt-agent-feature";
-import { ComicStudioFeature } from "../ui/comic-studio-feature";
+import { CanvasCreationSuiteFeature } from "../ui/canvas-creation-suite-feature";
 import { CanvasNodeViewFeature } from "../nodes/canvas-node-view-feature";
 import { createDefaultGenerationCapabilities } from "./state";
 import { WorkspaceRuntimeFeature } from "./workspace-runtime-feature";
@@ -227,7 +226,7 @@ const canvasBatch = new CanvasBatchFeature({
   toast: (message, tone, detail) => showToast(message, tone, detail),
   confirm: (message) => window.confirm(message),
 });
-let promptAgentFeature: PromptAgentFeature;
+let creationSuite: CanvasCreationSuiteFeature;
 const canvasInput = new CanvasInputFeature({
   canvas,
   nodeLayer,
@@ -247,8 +246,8 @@ const canvasInput = new CanvasInputFeature({
   toggleBatchNode,
   refreshCanvasModeHint,
   showCanvasModeNotice,
-  getAgentIds: () => promptAgentFeature.selectedIds,
-  renderAgentSelection: () => promptAgentFeature.renderContext(false),
+  getAgentIds: () => creationSuite.prompt.selectedIds,
+  renderAgentSelection: () => creationSuite.prompt.renderContext(false),
   warnAgentLimit: () => showToast("参考素材最多选择 8 个", "warning"),
   hasConnection: () => Boolean(connection.active),
   moveConnection: (event, syncDom) => {
@@ -289,9 +288,9 @@ const nodeViews = new CanvasNodeViewFeature({
   setDrag: (drag) => { domPointer.drag = drag; },
   beginResize: (value) => domPointer.beginResize(value),
   isReleaseSuppressed: domPointer.isReleaseSuppressed,
-  isAgentSelecting: () => promptAgentFeature.selecting,
-  isAgentCreateMode: () => promptAgentFeature.controls.mode === "create",
-  getAgentIds: () => promptAgentFeature.selectedIds,
+  isAgentSelecting: () => creationSuite.prompt.selecting,
+  isAgentCreateMode: () => creationSuite.prompt.controls.mode === "create",
+  getAgentIds: () => creationSuite.prompt.selectedIds,
   getColorTheme: () => colorTheme,
   getSwap: () => videoReferenceSwapSelection,
   setSwap: (value) => { videoReferenceSwapSelection = value; },
@@ -403,7 +402,6 @@ appUpdateController.start();
 
 let notificationFeature: NotificationFeature;
 let accountTools: AccountToolsFeature;
-let comicStudioFeature: ComicStudioFeature;
 const authWorkspace: AuthWorkspaceFeature = new AuthWorkspaceFeature({
   nodes,
   links,
@@ -442,7 +440,7 @@ notificationFeature = new NotificationFeature({
   hideGuide: hideCanvasGuide,
   isGuideVisible: (key) => canvasFeedback.isGuideVisible(key),
   checkAppUpdate: () => void appUpdateController.checkNow(),
-  restoreAfterReconnect: () => void comicStudioFeature.restoreAfterReconnect(),
+  restoreAfterReconnect: () => void creationSuite.comic.restoreAfterReconnect(),
   toast: (message, type) => showToast(message, type),
 });
 function showCanvasModeNotice(title: string, detail: string) {
@@ -554,7 +552,7 @@ canvasRender = new CanvasRenderFeature({
     camera,
     selectedId: selection.selectedId,
     selectedIds: [
-      ...new Set([...selection.batchIds, ...promptAgentFeature.selectedIds]),
+      ...new Set([...selection.batchIds, ...creationSuite.prompt.selectedIds]),
     ],
     dark: colorTheme === "dark",
     backgroundMode,
@@ -894,52 +892,49 @@ const canvasControls: CanvasControlsFeature = new CanvasControlsFeature({
 const quickNodeMenu = canvasControls.quickMenu;
 function closeQuickNodeMenu() { canvasControls.closeQuickMenu(); }
 function refreshAppearanceButton() { canvasControls.refreshAppearance(); }
-promptAgentFeature = new PromptAgentFeature({
-  nodes,
-  links,
-  nodeLayer,
-  camera,
-  getSelectedId: () => selection.selectedId,
-  setSelectedId: (id) => { selection.selectedId = id; },
-  worldCenter: () => world({ x: innerWidth / 2, y: innerHeight / 2 }),
-  addNode,
-  onComic: () => comicStudioFeature.open(),
-  updateEditor,
-  persist: scheduleSave,
-  draw,
-  runWorkflow: runAgentWorkflow,
-  loadVoices: (providerId) => { void loadTtsVoices(providerId); },
-  decodePrompt: decodePromptClipboardText,
-  toast: (message, tone) => showToast(message, tone),
-});
-comicStudioFeature = new ComicStudioFeature({
-  nodes,
-  promptPanel: promptAgentFeature.panel,
-  getProjectId: () => currentProjectId,
-  getUserId: () => authWorkspace.user?.id,
-  hasAuthenticatedContext: () => Boolean(authWorkspace.user && currentProjectId),
-  ensureProject: () => authWorkspace.ensureCurrentProject(),
-  getSelectedContexts: () => promptAgentFeature.selectedNodes(),
-  isMultiSelect: () => selection.multiSelectMode,
-  exitMultiSelect: exitMultiSelectMode,
-  resetMarqueeGesture: resetMarqueeRightGesture,
-  closePromptAgent: () => promptAgentFeature.close(),
-  applyPlan: (result) => promptAgentFeature.application.applyPlan(result),
-  createLabel: () => {
-    const center = world({ x: innerWidth / 2, y: innerHeight / 2 });
-    const rightEdge = nodes.length
-      ? Math.max(...nodes.map((node) => node.x + node.width))
-      : center.x - 220;
-    addNode("prompt", { x: rightEdge + 180, y: center.y - 280 });
-    return nodes.find((node) => node.id === selection.selectedId);
+creationSuite = new CanvasCreationSuiteFeature({
+  prompt: {
+    nodes,
+    links,
+    nodeLayer,
+    camera,
+    getSelectedId: () => selection.selectedId,
+    setSelectedId: (id) => { selection.selectedId = id; },
+    worldCenter: () => world({ x: innerWidth / 2, y: innerHeight / 2 }),
+    addNode,
+    updateEditor,
+    persist: scheduleSave,
+    draw,
+    runWorkflow: runAgentWorkflow,
+    loadVoices: (providerId) => { void loadTtsVoices(providerId); },
+    decodePrompt: decodePromptClipboardText,
+    toast: (message, tone) => showToast(message, tone),
   },
-  persistCanvas: scheduleSave,
-  draw,
-  startEmptyImages: startAllEmptyImages,
-  showGuide: showCanvasGuide,
-  hideGuide: (key) => hideCanvasGuide(key),
-  clientLog,
-  toast: (message, tone, detail) => showToast(message, tone, detail),
+  comic: {
+    nodes,
+    getProjectId: () => currentProjectId,
+    getUserId: () => authWorkspace.user?.id,
+    hasAuthenticatedContext: () => Boolean(authWorkspace.user && currentProjectId),
+    ensureProject: () => authWorkspace.ensureCurrentProject(),
+    isMultiSelect: () => selection.multiSelectMode,
+    exitMultiSelect: exitMultiSelectMode,
+    resetMarqueeGesture: resetMarqueeRightGesture,
+    createLabel: () => {
+      const center = world({ x: innerWidth / 2, y: innerHeight / 2 });
+      const rightEdge = nodes.length
+        ? Math.max(...nodes.map((node) => node.x + node.width))
+        : center.x - 220;
+      addNode("prompt", { x: rightEdge + 180, y: center.y - 280 });
+      return nodes.find((node) => node.id === selection.selectedId);
+    },
+    persistCanvas: scheduleSave,
+    draw,
+    startEmptyImages: startAllEmptyImages,
+    showGuide: showCanvasGuide,
+    hideGuide: (key) => hideCanvasGuide(key),
+    clientLog,
+    toast: (message, tone, detail) => showToast(message, tone, detail),
+  },
 });
 const projectDialog = document.querySelector<HTMLElement>("#project-dialog")!;
 const askProjectDialog = createProjectDialog(projectDialog);
@@ -956,9 +951,9 @@ const workspaceAssets = new WorkspaceAssetsFeature({
   stopSave: () => canvasPersistence.stopAndReset(),
   resetNodeLease: () => canvasNodeIds.reset(),
   loadCanvas: () => loadCanvas(),
-  closeComic: () => comicStudioFeature.close(),
-  resetComic: () => comicStudioFeature.reset(true),
-  unlinkComicLabel: () => comicStudioFeature.unlinkLabel(),
+  closeComic: () => creationSuite.comic.close(),
+  resetComic: () => creationSuite.comic.reset(true),
+  unlinkComicLabel: () => creationSuite.comic.unlinkLabel(),
   invalidateShowcase: () => authWorkspace.invalidateShowcase(),
   deleteCachedImage: (url) => { imageCache.delete(url); },
   updateEditor,
