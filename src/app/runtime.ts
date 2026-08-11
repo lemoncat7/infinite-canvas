@@ -27,7 +27,6 @@ import { CanvasNodeEditorFeature } from "../nodes/canvas-node-editor-feature";
 import { TtsFeature } from "../services/tts-feature";
 import { apiFetch } from "../services/api";
 import { AppUpdateController } from "../services/app-update-controller";
-import { GenerationCapabilitiesController } from "../services/generation-capabilities-controller";
 import { CanvasGenerationRuntimeFeature } from "../services/canvas-generation-runtime-feature";
 import { RuntimeDiagnosticsFeature } from "./runtime-diagnostics-feature";
 import {
@@ -40,8 +39,6 @@ import {
 import { inferVoiceConfig } from "../nodes/voice-node";
 import { bindNodeConfigPanel } from "../ui/node-editor";
 import { WorkspaceAssetsFeature } from "../ui/workspace-assets-feature";
-import { WorkspaceOverlayController } from "../ui/workspace-overlay-controller";
-import { WorkspaceKeyboardController } from "../ui/workspace-keyboard-controller";
 import { CanvasTaskFeature } from "../ui/canvas-task-feature";
 import { TopbarMenuCoordinator } from "../ui/topbar-menu-coordinator";
 import { CanvasControlsFeature } from "../ui/canvas-controls-feature";
@@ -58,7 +55,7 @@ import { PromptAgentFeature } from "../ui/prompt-agent-feature";
 import { ComicStudioFeature } from "../ui/comic-studio-feature";
 import { CanvasNodeViewFeature } from "../nodes/canvas-node-view-feature";
 import { createDefaultGenerationCapabilities } from "./state";
-import { ApplicationBootstrapController } from "./application-bootstrap-controller";
+import { WorkspaceRuntimeFeature } from "./workspace-runtime-feature";
 import { AuthWorkspaceFeature } from "./auth-workspace-feature";
 import {
   connectionControlPoint,
@@ -1009,62 +1006,60 @@ function escapeHtml(value: string) {
   element.textContent = value;
   return element.innerHTML;
 }
-new WorkspaceOverlayController({
-  quickMenu: quickNodeMenu,
-  closeQuickMenu: closeQuickNodeMenu,
-  closeAssetContextIfOutside: (target) =>
-    workspaceAssets.closeContextIfOutside(target),
-}).bind();
-new WorkspaceKeyboardController({
-  closeQuickMenu: () => {
-    if (!quickNodeMenu.classList.contains("open")) return false;
-    closeQuickNodeMenu();
-    return true;
-  },
-  closeNodeInfo: () => {
-    if (!document.querySelector<HTMLElement>("#node-info-modal")!.classList.contains("open")) return false;
-    closeNodeInfo();
-    return true;
-  },
-  closeAssetPreview: () => {
-    if (!workspaceAssets.isPreviewOpen) return false;
-    workspaceAssets.closePreview();
-    return true;
-  },
-  undo: () => { void undoCanvas(); },
-  redo: () => { void redoCanvas(); },
-  deleteSelected: () => { void deleteSelectedNode(); },
-});
 function refreshLocalImageAvailabilityUI() {
   /* 本地 Provider 暂不在模型列表展示 */
 }
-const generationCapabilitiesController = new GenerationCapabilitiesController({
-  current: () => generationCapabilities,
-  apply: (capabilities) => { generationCapabilities = capabilities; },
-  availabilityChanged: () => {
-    refreshLocalImageAvailabilityUI();
-    draw();
+function loadGenerationCapabilities(redraw = false) {
+  return workspaceRuntime.loadCapabilities(redraw);
+}
+const workspaceRuntime = new WorkspaceRuntimeFeature<AuthUser>({
+  capabilities: {
+    current: () => generationCapabilities,
+    apply: (capabilities) => { generationCapabilities = capabilities; },
+    availabilityChanged: () => {
+      refreshLocalImageAvailabilityUI();
+      draw();
+    },
+  },
+  bootstrap: {
+    apiFetch,
+    setUser: (user) => authWorkspace.setUser(user),
+    user: () => authWorkspace.user,
+    setReady: () => authWorkspace.markReady(),
+    renderUser: () => authWorkspace.renderUser(),
+    touchSession: () => authWorkspace.touch(),
+    loadCapabilities: () => Promise.resolve(),
+    synchronizeCanvas: () => authWorkspace.synchronize(true),
+    loadAssets: () => loadAssets(false),
+    status: (message, visible) => authWorkspace.status(message, visible),
+    randomizeTheme: authWorkspace.randomizeTheme,
+    applyRoute: () => authWorkspace.applyRoute(),
+    notifyError: (message) => showToast(message, "error"),
+  },
+  overlay: {
+    quickMenu: quickNodeMenu,
+    closeQuickMenu: closeQuickNodeMenu,
+    closeAssetContextIfOutside: (target) => workspaceAssets.closeContextIfOutside(target),
+  },
+  keyboard: {
+    closeQuickMenu: () => {
+      if (!quickNodeMenu.classList.contains("open")) return false;
+      closeQuickNodeMenu();
+      return true;
+    },
+    closeNodeInfo: () => {
+      if (!document.querySelector<HTMLElement>("#node-info-modal")!.classList.contains("open")) return false;
+      closeNodeInfo();
+      return true;
+    },
+    closeAssetPreview: () => {
+      if (!workspaceAssets.isPreviewOpen) return false;
+      workspaceAssets.closePreview();
+      return true;
+    },
+    undo: () => { void undoCanvas(); },
+    redo: () => { void redoCanvas(); },
+    deleteSelected: () => { void deleteSelectedNode(); },
   },
 });
-function loadGenerationCapabilities(redraw = false) {
-  return generationCapabilitiesController.load(redraw);
-}
-const applicationBootstrap = new ApplicationBootstrapController<AuthUser>({
-  apiFetch,
-  setUser: (user) => authWorkspace.setUser(user),
-  user: () => authWorkspace.user,
-  setReady: () => authWorkspace.markReady(),
-  renderUser: () => authWorkspace.renderUser(),
-  touchSession: () => authWorkspace.touch(),
-  loadCapabilities: () => loadGenerationCapabilities(),
-  synchronizeCanvas: () => authWorkspace.synchronize(true),
-  loadAssets: () => loadAssets(false),
-  status: (message, visible) => authWorkspace.status(message, visible),
-  randomizeTheme: authWorkspace.randomizeTheme,
-  applyRoute: () => authWorkspace.applyRoute(),
-  notifyError: (message) => showToast(message, "error"),
-});
-window.addEventListener("resize", resize);
-resize();
-updateEditor();
-void applicationBootstrap.run();
+workspaceRuntime.start(resize, updateEditor);
