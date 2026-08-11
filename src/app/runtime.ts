@@ -18,10 +18,7 @@ import { CanvasPointerLifecycle } from "../canvas/canvas-pointer-lifecycle";
 import { TouchPinchController } from "../canvas/touch-pinch-controller";
 import { CameraViewportController } from "../canvas/camera-viewport-controller";
 import { normalizeCanvasDocument } from "../canvas/document-normalizer";
-import {
-  cancelActiveProjectJobs,
-  clearCanvasDocument,
-} from "../canvas/clear-client";
+import { CanvasClearController } from "../canvas/clear-controller";
 import { fetchCanvasDocument, submitCanvasChanges } from "../canvas/sync-client";
 import { repairRestoredCanvas } from "../canvas/restoration";
 import { LinkInteractionView } from "../canvas/link-interaction-view";
@@ -4828,65 +4825,37 @@ window.addEventListener("resize", () => {
     positionPromptAgentCapsule();
   }
 });
-document.querySelector("#dock-clear")!.addEventListener("click", async () => {
-  if (!nodes.length || !currentProjectId) return;
-  if (!window.confirm("确定清除图片、视频和生成节点吗？标签将保留。")) return;
-  const cancelJobs = window.confirm(
-    "是否同时取消当前项目中排队和生成中的任务？\n\n确定：清除并取消任务\n取消：只清除画布内容，任务继续并保存到资产库",
-  );
-  if (cancelJobs) {
-    try {
-      const canceled = await cancelActiveProjectJobs(currentProjectId);
-      showToast(
-        canceled
-          ? `已取消 ${canceled} 个未完成任务`
-          : "当前没有未完成任务",
-        "success",
-      );
-    } catch (error) {
-      showToast(
-        "部分任务取消失败",
-        "error",
-        error instanceof Error ? error.message : "请稍后重试",
-      );
-    }
-  }
-  canvasSaveBlocked = true;
-  window.clearTimeout(saveTimer);
-  canvasSaveQueued = false;
-  canvasSaveAbort?.abort();
-  await canvasSavePromise?.catch(() => {});
-  const requestedVersion = canvasServerVersion + 1;
-  let result: Awaited<ReturnType<typeof clearCanvasDocument>>;
-  try {
-    result = await clearCanvasDocument(currentProjectId, requestedVersion);
-  } catch (error) {
-    showToast(
-      error instanceof Error
-        ? error.message
-        : "清除画布失败，请重新载入后再试",
-      "error",
-    );
-    await loadCanvas();
-    return;
-  }
-  canvasServerVersion = result.version;
-  canvasServerUpdatedAt = result.updatedAt || canvasServerUpdatedAt;
-  nodes.splice(0, nodes.length, ...result.nodes);
-  links.splice(0, links.length, ...normalizeCanvasLinks(result.links));
-  if (result.camera) Object.assign(camera, result.camera);
-  canvasBaseline = captureCanvasSnapshot(
-    canvasServerVersion,
-    canvasServerUpdatedAt,
-  );
-  selection.selectedId = 0;
-  resetCanvasHistory(false);
-  updateEditor();
-  setSaveState("saved", "已自动保存");
-  canvasSaveBlocked = false;
-  draw();
-  showToast(`已清除画布内容，保留 ${nodes.length} 个标签`, "success");
+new CanvasClearController({
+  button: document.querySelector<HTMLElement>("#dock-clear")!,
+  getNodeCount: () => nodes.length,
+  getProjectId: () => currentProjectId,
+  getServerVersion: () => canvasServerVersion,
+  prepareForClear: async () => {
+    canvasSaveBlocked = true;
+    window.clearTimeout(saveTimer);
+    canvasSaveQueued = false;
+    canvasSaveAbort?.abort();
+    await canvasSavePromise?.catch(() => {});
+  },
+  applyResult: (result) => {
+    canvasServerVersion = result.version;
+    canvasServerUpdatedAt = result.updatedAt || canvasServerUpdatedAt;
+    nodes.splice(0, nodes.length, ...result.nodes);
+    links.splice(0, links.length, ...normalizeCanvasLinks(result.links));
+    if (result.camera) Object.assign(camera, result.camera);
+    canvasBaseline = captureCanvasSnapshot(canvasServerVersion, canvasServerUpdatedAt);
+    selection.selectedId = 0;
+    resetCanvasHistory(false);
+    updateEditor();
+    setSaveState("saved", "已自动保存");
+    canvasSaveBlocked = false;
+    draw();
+    showToast(`已清除画布内容，保留 ${nodes.length} 个标签`, "success");
+  },
+  recoverCanvas: () => loadCanvas(),
+  toast: (message, tone, detail) => showToast(message, tone, detail),
 });
+
 const panelBackdrop = document.querySelector<HTMLElement>("#panel-backdrop")!;
 const workspacePanels =
   document.querySelectorAll<HTMLElement>(".workspace-panel");
