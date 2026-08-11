@@ -14,6 +14,19 @@ type SyncResponse = {
   error?: string; message?: string;
 };
 
+export async function fetchCanvasDocument(projectId: string) {
+  const response = await apiFetch(`/api/projects/${projectId}/canvas`);
+  if (response.status === 404) return { kind: "missing" as const };
+  if (!response.ok) throw new Error("load failed");
+  return { kind: "loaded" as const, document: await response.json() as {
+    nodes: FlowNode[];
+    links: Array<FlowLink | [number, number]>;
+    camera?: CanvasSyncSnapshot["camera"];
+    version?: number;
+    updatedAt?: string;
+  } };
+}
+
 export async function submitCanvasChanges(options: {
   projectId: string;
   clientId: string;

@@ -92,3 +92,16 @@ export async function runGenerationJob(options: {
     return { ok: false as const, error, node: liveNode };
   }
 }
+
+export async function hydrateGenerationPrompts(nodes: FlowNode[]) {
+  await Promise.all(nodes
+    .filter((node) => node.jobId && (!node.generationPrompt || node.body === "生成完成 · 结果已回写"))
+    .map(async (node) => {
+      try {
+        const job = await fetchGenerationJob(node.jobId!);
+        if (!job.prompt) return;
+        node.generationPrompt = job.prompt;
+        if (node.body === "生成完成 · 结果已回写" || node.body === job.prompt) node.body = "";
+      } catch { /* 保留现有内容，等待用户手动修正 */ }
+    }));
+}

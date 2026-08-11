@@ -18,11 +18,12 @@ import { CanvasPointerLifecycle } from "../canvas/canvas-pointer-lifecycle";
 import { TouchPinchController } from "../canvas/touch-pinch-controller";
 import { CameraViewportController } from "../canvas/camera-viewport-controller";
 import { normalizeCanvasDocument } from "../canvas/document-normalizer";
-import { submitCanvasChanges } from "../canvas/sync-client";
+import { fetchCanvasDocument, submitCanvasChanges } from "../canvas/sync-client";
 import { repairRestoredCanvas } from "../canvas/restoration";
 import { LinkInteractionView } from "../canvas/link-interaction-view";
 import { GenerationPoller } from "../services/generation-poller";
 import { GenerationWorkflow } from "../services/generation-workflow";
+import { requestNodeIdLease } from "../services/node-id-lease";
 import {
   appendRevisionNode,
   findOutputPosition,
@@ -48,7 +49,7 @@ import {
 } from "../services/tts";
 import { apiFetch } from "../services/api";
 import {
-  fetchGenerationJob,
+  hydrateGenerationPrompts,
   missingGenerationInputs,
   runGenerationJob,
   type GenerationJob,
@@ -349,31 +350,10 @@ async function reserveCanvasNodeIds(projectId = currentProjectId) {
   if (canvasNodeIdLeasePromise) return canvasNodeIdLeasePromise;
   canvasNodeIdLeasePromise = (async () => {
     try {
-      const response = await apiFetch(
-          `/api/projects/${projectId}/canvas/id-block`,
-          {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ count: 10000 }),
-          },
-        ),
-        result = (await response.json().catch(() => ({}))) as {
-          projectId?: string;
-          start?: number;
-          end?: number;
-        };
-      if (
-        !response.ok ||
-        result.projectId !== projectId ||
-        !Number.isSafeInteger(result.start) ||
-        !Number.isSafeInteger(result.end) ||
-        Number(result.start) < 1 ||
-        Number(result.end) < Number(result.start)
-      )
-        throw new Error("invalid canvas id lease");
+      const result = await requestNodeIdLease(projectId);
       if (projectId !== currentProjectId) return false;
-      nextId = Number(result.start);
-      canvasNodeIdBlockEnd = Number(result.end);
+      nextId = result.start;
+      canvasNodeIdBlockEnd = result.end;
       return true;
     } catch {
       return false;
@@ -4355,26 +4335,19 @@ async function loadCanvas(keepLoadingStatus = false) {
       leasedEnd = canvasNodeIdBlockEnd;
     setWorkspaceBootStatus("正在读取画布与生成任务");
     generationPoller.cancelAll();
-    const response = await apiFetch(`/api/projects/${loadingProjectId}/canvas`);
+    const canvasResult = await fetchCanvasDocument(loadingProjectId);
     if (
       loadingProjectId !== currentProjectId ||
       loadSequence !== canvasLoadSequence
     )
       return;
-    if (response.status === 404) {
+    if (canvasResult.kind === "missing") {
       canvasLoadedProjectId = loadingProjectId;
       await saveCanvas();
       resetCanvasHistory(false);
       return;
     }
-    if (!response.ok) throw new Error("load failed");
-    const document = (await response.json()) as {
-      nodes: FlowNode[];
-      links: Array<FlowLink | [number, number]>;
-      camera?: typeof camera;
-      version?: number;
-      updatedAt?: string;
-    };
+    const document = canvasResult.document;
     const normalizedDocument = normalizeCanvasDocument(document, camera, normalizePromptText),
       receivedBaseline = normalizedDocument.baseline;
     document.nodes = normalizedDocument.nodes;
@@ -4383,29 +4356,7 @@ async function loadCanvas(keepLoadingStatus = false) {
     pixiDetachedNodeCache.clear();
     pixiEditorWarmScheduled = false;
     nodes.splice(0, nodes.length, ...normalizedDocument.nodes);
-    await Promise.all(
-      nodes
-        .filter(
-          (node) =>
-            node.jobId &&
-            (!node.generationPrompt || node.body === "生成完成 · 结果已回写"),
-        )
-        .map(async (node) => {
-          try {
-            const job = await fetchGenerationJob(node.jobId!);
-            if (job.prompt) {
-              node.generationPrompt = job.prompt;
-              if (
-                node.body === "生成完成 · 结果已回写" ||
-                node.body === job.prompt
-              )
-                node.body = "";
-            }
-          } catch {
-            /* 保留现有内容，等待用户手动修正 */
-          }
-        }),
-    );
+    await hydrateGenerationPrompts(nodes);
     const migrated = normalizeCanvasLinks(document.links ?? []);
     links.splice(0, links.length, ...migrated);
     if (leasedNextId <= leasedEnd) {
