@@ -78,6 +78,7 @@ import {
   createProjectDialog,
 } from "../ui/dialogs/project-dialog";
 import { renderProjectList } from "../ui/project-panel";
+import { ComicSidePanelController } from "../ui/comic-side-panel";
 import { ContextMenuController } from "../ui/context-menu";
 import { createDefaultGenerationCapabilities } from "./state";
 import {
@@ -8311,69 +8312,6 @@ const comicPlanSidePanel = comicPlanElement.cloneNode(true) as HTMLElement;
 comicPlanSidePanel.classList.remove("comic-plan-source");
 comicPlanSidePanel.classList.add("comic-plan-side");
 document.body.append(comicPlanSidePanel);
-function prepareComicPlanSideSections() {
-  comicPlanSidePanel
-    .querySelectorAll<HTMLElement>(".comic-plan-scroll > article")
-    .forEach((article, index) => {
-      if (index > 1) return;
-      article.classList.add("comic-plan-collapsible", "collapsed");
-      const heading = article.querySelector<HTMLElement>("h4");
-      if (!heading) return;
-      heading.tabIndex = 0;
-      heading.setAttribute("role", "button");
-      heading.setAttribute("aria-expanded", "false");
-      const toggle = () => {
-        const collapsed = article.classList.toggle("collapsed");
-        heading.setAttribute("aria-expanded", String(!collapsed));
-      };
-      heading.addEventListener("click", toggle);
-      heading.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          toggle();
-        }
-      });
-    });
-}
-function syncComicPlanSide() {
-  const mobileOpen = comicPlanSidePanel.classList.contains("mobile-open");
-  comicPlanSidePanel.innerHTML = comicPlanElement.innerHTML;
-  comicPlanSidePanel.insertAdjacentHTML("afterbegin", comicMobileTabs);
-  comicPlanSidePanel.hidden = comicPlanElement.hidden;
-  comicPlanSidePanel.classList.toggle("mobile-open", mobileOpen);
-  const saveLabel = comicPlanSidePanel.querySelector<HTMLElement>(
-    "[data-comic-label] span",
-  );
-  if (saveLabel)
-    saveLabel.textContent = comicLinkedLabelId ? "保存当前标签" : "保存为标签";
-  comicPlanSidePanel
-    .querySelectorAll<HTMLButtonElement>("[data-comic-tab]")
-    .forEach((button) =>
-      button.addEventListener("click", () =>
-        showComicMobilePanel(button.dataset.comicTab as "brief" | "plan"),
-      ),
-    );
-  comicPlanSidePanel
-    .querySelectorAll<HTMLButtonElement>(
-      "[data-comic-label],[data-comic-label-copy],[data-comic-canvas]",
-    )
-    .forEach((button) =>
-      button.addEventListener("click", () =>
-        comicPlanElement
-          .querySelector<HTMLButtonElement>(
-            `[${button.hasAttribute("data-comic-label-copy") ? "data-comic-label-copy" : button.hasAttribute("data-comic-canvas") ? "data-comic-canvas" : "data-comic-label"}]`,
-          )
-          ?.click(),
-      ),
-    );
-  prepareComicPlanSideSections();
-}
-new MutationObserver(syncComicPlanSide).observe(comicPlanElement, {
-  childList: true,
-  subtree: true,
-  attributes: true,
-  attributeFilter: ["hidden"],
-});
 const comicHeaderNav = comicStudio.querySelector<HTMLElement>(
     ":scope > header nav",
   )!,
@@ -8384,41 +8322,40 @@ comicLabelControl.insertAdjacentHTML(
   "beforebegin",
   '<button type="button" data-comic-desktop-side="brief" aria-label="显示或隐藏当前方案"><span>当前方案</span></button><button type="button" data-comic-desktop-side="plan" aria-label="显示或隐藏完整方案"><span>完整方案</span></button><button type="button" data-comic-scheme aria-label="查看创作方案"><span>方案</span></button>',
 );
-const comicMobileTabs =
-  '<nav class="comic-mobile-tabs"><button type="button" data-comic-tab="brief">当前方案</button><button type="button" data-comic-tab="plan">完整方案</button></nav>';
+const comicThinkingStatus = comicStudio.querySelector<HTMLOutputElement>(
+    "[data-comic-status]",
+  )!,
+  comicComposer = comicStudio.querySelector<HTMLElement>(".comic-composer")!,
+  comicMessageField = comicComposer.querySelector<HTMLTextAreaElement>(
+    "[data-comic-message]",
+  )!;
+comicThinkingStatus.setAttribute("aria-live", "polite");
+comicComposer.insertBefore(comicThinkingStatus, comicMessageField);
+const comicBriefPanel =
+  comicStudio.querySelector<HTMLElement>("[data-comic-brief]")!;
+comicBriefPanel.classList.add("comic-brief-side", "expanded");
+document.body.append(comicBriefPanel);
+const comicSidePanel = new ComicSidePanelController({
+  studio: comicStudio,
+  briefPanel: comicBriefPanel,
+  sourcePlan: comicPlanElement,
+  planPanel: comicPlanSidePanel,
+  headerNav: comicHeaderNav,
+  getState: () => ({
+    linkedLabelId: comicLinkedLabelId,
+    sessionId: comicSessionId,
+    hasPlan: Boolean(comicPlan),
+    pendingRevision: comicPendingRevision,
+    ready: comicReady,
+    submitting: comicSubmitting,
+  }),
+  showWarning: (message) => showToast(message, "warning"),
+});
 function showComicMobilePanel(kind: "brief" | "plan" | null) {
-  if (kind === "plan" && comicPlanSidePanel.hidden) {
-    showToast("完整方案尚未生成", "warning");
-    return;
-  }
-  comicBriefPanel.classList.toggle("mobile-open", kind === "brief");
-  comicPlanSidePanel.classList.toggle("mobile-open", kind === "plan");
-  comicHeaderNav
-    .querySelector<HTMLButtonElement>("[data-comic-scheme]")
-    ?.classList.toggle("active", kind !== null);
-  for (const panel of [comicBriefPanel, comicPlanSidePanel])
-    panel
-      .querySelectorAll<HTMLButtonElement>("[data-comic-tab]")
-      .forEach((button) =>
-        button.classList.toggle("active", button.dataset.comicTab === kind),
-      );
-  const confirm = comicBriefPanel.querySelector<HTMLButtonElement>(
-    "[data-comic-confirm]",
-  );
-  if (confirm && kind === "brief" && comicSessionId) {
-    const available = Boolean(comicPlan ? comicPendingRevision : comicReady);
-    confirm.hidden = false;
-    confirm.disabled = comicSubmitting || !available;
-    if (!available) {
-      confirm.querySelector("span")!.textContent = comicPlan
-        ? "等待新的修改"
-        : "继续完善方案";
-      confirm.querySelector("small")!.textContent = comicPlan
-        ? "先在对话中说明需要调整的内容"
-        : "回答待确认问题后即可生成";
-    }
-  }
-  positionComicBriefPanel();
+  comicSidePanel.showMobile(kind);
+}
+function positionComicBriefPanel() {
+  comicSidePanel.position();
 }
 comicHeaderNav
   .querySelector<HTMLButtonElement>("[data-comic-scheme]")!
@@ -8436,95 +8373,13 @@ comicHeaderNav
 comicHeaderNav
   .querySelectorAll<HTMLButtonElement>("[data-comic-desktop-side]")
   .forEach((button) =>
-    button.addEventListener("click", () => {
-      const panel =
-        button.dataset.comicDesktopSide === "brief"
-          ? comicBriefPanel
-          : comicPlanSidePanel;
-      panel.classList.toggle("desktop-collapsed");
-      button.classList.toggle(
-        "active",
-        !panel.classList.contains("desktop-collapsed"),
-      );
-      positionComicBriefPanel();
-    }),
-  );
-const comicThinkingStatus = comicStudio.querySelector<HTMLOutputElement>(
-    "[data-comic-status]",
-  )!,
-  comicComposer = comicStudio.querySelector<HTMLElement>(".comic-composer")!,
-  comicMessageField = comicComposer.querySelector<HTMLTextAreaElement>(
-    "[data-comic-message]",
-  )!;
-comicThinkingStatus.setAttribute("aria-live", "polite");
-comicComposer.insertBefore(comicThinkingStatus, comicMessageField);
-const comicBriefPanel =
-  comicStudio.querySelector<HTMLElement>("[data-comic-brief]")!;
-comicBriefPanel.classList.add("comic-brief-side", "expanded");
-document.body.append(comicBriefPanel);
-comicHeaderNav
-  .querySelectorAll<HTMLButtonElement>("[data-comic-desktop-side]")
-  .forEach((button) => button.classList.add("active"));
-comicBriefPanel.insertAdjacentHTML("afterbegin", comicMobileTabs);
-comicPlanSidePanel.insertAdjacentHTML("afterbegin", comicMobileTabs);
-for (const panel of [comicBriefPanel, comicPlanSidePanel])
-  panel
-    .querySelectorAll<HTMLButtonElement>("[data-comic-tab]")
-    .forEach((button) =>
-      button.addEventListener("click", () =>
-        showComicMobilePanel(button.dataset.comicTab as "brief" | "plan"),
+    button.addEventListener("click", () =>
+      comicSidePanel.toggleDesktop(
+        button.dataset.comicDesktopSide as "brief" | "plan",
+        button,
       ),
-    );
-prepareComicPlanSideSections();
-function positionComicBriefPanel() {
-  if (!comicStudio.classList.contains("open")) return;
-  const studio = comicStudio.getBoundingClientRect(),
-    mobile = innerWidth <= 780;
-  if (mobile) {
-    const left = Math.max(14, studio.left + 14),
-      top = studio.top + 70,
-      width = Math.max(220, studio.width - 28),
-      height = Math.min(430, Math.max(260, studio.height * 0.62));
-    for (const panel of [comicBriefPanel, comicPlanSidePanel]) {
-      panel.style.left = `${left}px`;
-      panel.style.top = `${top}px`;
-      panel.style.width = `${width}px`;
-      panel.style.height = `${height}px`;
-    }
-    return;
-  }
-  const computed = getComputedStyle(comicStudio),
-    finalRight = Number.parseFloat(computed.right) || 22,
-    finalBottom = Number.parseFloat(computed.bottom),
-    studioHeight = comicStudio.offsetHeight,
-    finalLeft = innerWidth - finalRight - comicStudio.offsetWidth,
-    finalTop = Number.isFinite(finalBottom)
-      ? innerHeight - finalBottom - studioHeight
-      : Number.parseFloat(computed.top) || studio.top,
-    width = Math.min(300, Math.max(238, finalLeft - 30)),
-    left = Math.max(10, finalLeft - width - 12),
-    studioBottom = finalTop + studioHeight,
-    briefTop = finalTop + 18,
-    briefHeight = Math.min(265, Math.max(205, studioHeight * 0.34)),
-    briefVisible =
-      !comicBriefPanel.classList.contains("desktop-collapsed") &&
-      !comicBriefPanel.hidden,
-    planTop = briefVisible ? briefTop + briefHeight + 9 : briefTop,
-    planHeight = Math.max(230, studioBottom - planTop);
-  comicBriefPanel.style.width = `${width}px`;
-  comicBriefPanel.style.left = `${left}px`;
-  comicBriefPanel.style.top = `${briefTop}px`;
-  comicBriefPanel.style.height = `${briefHeight}px`;
-  comicPlanSidePanel.style.width = `${width}px`;
-  comicPlanSidePanel.style.left = `${left}px`;
-  comicPlanSidePanel.style.top = `${planTop}px`;
-  comicPlanSidePanel.style.height = `${planHeight}px`;
-}
-window.addEventListener("resize", positionComicBriefPanel);
-comicStudio.addEventListener("transitionend", (event) => {
-  if (event.target === comicStudio && comicStudio.classList.contains("open"))
-    positionComicBriefPanel();
-});
+    ),
+  );
 const promptAgentModelSelect = document.createElement("select");
 promptAgentModelSelect.hidden = true;
 promptAgentModelSelect.innerHTML =
