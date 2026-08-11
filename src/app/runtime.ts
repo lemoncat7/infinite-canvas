@@ -19,7 +19,8 @@ import { TouchPinchController } from "../canvas/touch-pinch-controller";
 import { CameraViewportController } from "../canvas/camera-viewport-controller";
 import { normalizeCanvasDocument } from "../canvas/document-normalizer";
 import { CanvasClearController } from "../canvas/clear-controller";
-import { fetchCanvasDocument, submitCanvasChanges } from "../canvas/sync-client";
+import { fetchCanvasDocument } from "../canvas/sync-client";
+import { CanvasSaveCoordinator } from "../canvas/save-coordinator";
 import { repairRestoredCanvas } from "../canvas/restoration";
 import { LinkInteractionView } from "../canvas/link-interaction-view";
 import { GenerationPoller } from "../services/generation-poller";
@@ -262,15 +263,6 @@ const connection = new CanvasConnectionController();
 let connectionAutoPanFrame = 0,
   connectionAutoPanPointer: Point | null = null;
 let currentProjectId = localStorage.getItem("flow-project-id") ?? "default";
-let canvasLoadedProjectId = "";
-let canvasServerVersion = 0,
-  canvasServerUpdatedAt = "",
-  canvasSavePromise: Promise<void> | null = null,
-  canvasSaveQueued = false,
-  canvasSaveBlocked = true,
-  canvasSaveAbort: AbortController | null = null,
-  canvasLoadSequence = 0;
-let canvasBaseline: CanvasSyncSnapshot | null = null;
 const canvasSyncClientId = (() => {
   const existing = sessionStorage.getItem("flow-canvas-client-id");
   if (existing) return existing;
@@ -279,15 +271,15 @@ const canvasSyncClientId = (() => {
   return id;
 })();
 function captureCanvasSnapshot(
-  version = canvasServerVersion,
-  updatedAt = canvasServerUpdatedAt,
+  version?: number,
+  updatedAt?: string,
 ): CanvasSyncSnapshot {
   return {
     nodes: structuredClone(nodes),
     links: structuredClone(links),
     camera: { ...camera },
-    version,
-    updatedAt,
+    version: version ?? canvasSaveCoordinator.serverVersion,
+    updatedAt: updatedAt ?? canvasSaveCoordinator.serverUpdatedAt,
   };
 }
 function applySynchronizedCanvas(
@@ -1141,7 +1133,6 @@ new CanvasPointerLifecycle({
   closeQuickMenu: closeQuickNodeMenu,
   smoothZoom: cameraViewport.smoothBy,
 });
-let saveTimer: number | undefined;
 let drawFrame: number | null = null;
 let drawNeedsDomSync = true;
 const nodeDomStates = new Map<number, unknown[]>();
@@ -1834,23 +1825,16 @@ async function synchronizeCanvasAfterAuthentication(force = false) {
   )
     return ensureCurrentUserProject();
   await ensurePixiRenderer();
-  canvasSaveBlocked = true;
-  window.clearTimeout(saveTimer);
-  canvasSaveQueued = false;
-  canvasSaveAbort?.abort();
-  canvasLoadedProjectId = "";
-  canvasBaseline = null;
-  canvasServerVersion = 0;
-  canvasServerUpdatedAt = "";
+  await canvasSaveCoordinator.stopAndReset();
   canvasNodeIdBlockEnd = 0;
   setWorkspaceBootStatus("正在同步账号与项目");
   if (!(await ensureCurrentUserProject())) return false;
   setWorkspaceBootStatus("正在恢复画布与任务");
   await loadCanvas(true);
   return (
-    canvasLoadedProjectId === currentProjectId &&
-    !canvasSaveBlocked &&
-    canvasServerVersion > 0
+    canvasSaveCoordinator.loadedProjectId === currentProjectId &&
+    !canvasSaveCoordinator.blocked &&
+    canvasSaveCoordinator.serverVersion > 0
   );
 }
 async function enterWorkspace() {
@@ -1862,9 +1846,9 @@ async function enterWorkspace() {
   );
   setWorkspaceBootStatus("正在同步账号与项目");
   const ready =
-    canvasLoadedProjectId === currentProjectId &&
-    !canvasSaveBlocked &&
-    canvasServerVersion > 0;
+    canvasSaveCoordinator.loadedProjectId === currentProjectId &&
+    !canvasSaveCoordinator.blocked &&
+    canvasSaveCoordinator.serverVersion > 0;
   let finalStatus = workspaceBootStatusVersion,
     completed = false;
   try {
@@ -2096,15 +2080,7 @@ const workspaceUserMenu = document.querySelector<HTMLElement>(
   "#workspace-user-menu",
 )!;
 async function logoutToHome(message?: string) {
-  window.clearTimeout(saveTimer);
-  canvasSaveQueued = false;
-  canvasSaveBlocked = true;
-  canvasSaveAbort?.abort();
-  await canvasSavePromise?.catch(() => {});
-  canvasLoadedProjectId = "";
-  canvasBaseline = null;
-  canvasServerVersion = 0;
-  canvasServerUpdatedAt = "";
+  await canvasSaveCoordinator.stopAndReset(true);
   await apiFetch("/api/auth/logout", { method: "POST" }).catch(() => {});
   authUser = null;
   userMenuController.clearToken();
@@ -3289,63 +3265,10 @@ function updateNodeJobProgressUi(node: FlowNode) {
 }
 
 function scheduleSave(recordHistory = true) {
-  setSaveState("editing", "编辑中…");
-  if (recordHistory) queueCanvasHistory();
-  window.clearTimeout(saveTimer);
-  saveTimer = window.setTimeout(saveCanvas, 500);
+  canvasSaveCoordinator.schedule(queueCanvasHistory, recordHistory);
 }
 
-async function saveCanvas() {
-  if (!authUser || canvasSaveBlocked || canvasLoadedProjectId !== currentProjectId || !canvasBaseline || canvasBaseline.version !== canvasServerVersion) return;
-  if (canvasSavePromise) { canvasSaveQueued = true; return canvasSavePromise; }
-  const savingProjectId = currentProjectId, controller = new AbortController();
-  const sentSnapshot = captureCanvasSnapshot();
-  canvasSaveAbort = controller;
-  canvasSavePromise = (async () => {
-    try {
-      setSaveState("saving", "正在自动保存…");
-      const result = await submitCanvasChanges({
-        projectId: savingProjectId,
-        clientId: canvasSyncClientId,
-        baseline: canvasBaseline!,
-        sentSnapshot,
-        captureLive: captureCanvasSnapshot,
-        signal: controller.signal,
-      });
-      if (result.kind === "unchanged") { setSaveState("saved", "已自动保存"); return; }
-      if (result.kind === "conflict") {
-        canvasSaveQueued = false; canvasSaveBlocked = true;
-        const emptyGuard = result.error === "canvas_empty_guard";
-        setSaveState("error", emptyGuard ? "已阻止空画布覆盖" : "版本需要同步");
-        showCanvasGuide({
-          key: "canvas-save-conflict",
-          title: emptyGuard ? "已保护服务器画布" : "服务器画布已有新版本",
-          detail: "正在停止本地保存并强制载入服务器上的完整版本。",
-          tone: "offline", priority: 110,
-        });
-        await loadCanvas();
-        return;
-      }
-      if (savingProjectId === currentProjectId) {
-        canvasBaseline = structuredClone(result.serverSnapshot);
-        canvasServerUpdatedAt = result.serverSnapshot.updatedAt;
-        canvasServerVersion = result.serverSnapshot.version;
-        applySynchronizedCanvas(result.mergedSnapshot);
-        if (result.hasPostSubmitOperations) canvasSaveQueued = true;
-      }
-      setSaveState("saved", "已自动保存");
-    } catch (error) {
-      if (!(error instanceof DOMException && error.name === "AbortError")) setSaveState("error", "自动保存失败");
-    } finally {
-      if (canvasSaveAbort === controller) canvasSaveAbort = null;
-      canvasSavePromise = null;
-      if (canvasSaveQueued && !canvasSaveBlocked && canvasLoadedProjectId === currentProjectId) {
-        canvasSaveQueued = false; void saveCanvas();
-      }
-    }
-  })();
-  return canvasSavePromise;
-}
+function saveCanvas() { return canvasSaveCoordinator.save(); }
 function setSaveState(
   state: "editing" | "saving" | "saved" | "error",
   label: string,
@@ -3354,11 +3277,25 @@ function setSaveState(
   saveState.textContent = label;
 }
 
+const canvasSaveCoordinator: CanvasSaveCoordinator = new CanvasSaveCoordinator({
+  clientId: canvasSyncClientId,
+  authenticated: () => Boolean(authUser),
+  projectId: () => currentProjectId,
+  capture: captureCanvasSnapshot,
+  applyMerged: applySynchronizedCanvas,
+  setState: setSaveState,
+  showConflict: (emptyGuard) => showCanvasGuide({
+    key: "canvas-save-conflict",
+    title: emptyGuard ? "已保护服务器画布" : "服务器画布已有新版本",
+    detail: "正在停止本地保存并强制载入服务器上的完整版本。",
+    tone: "offline",
+    priority: 110,
+  }),
+  reload: () => loadCanvas(),
+});
+
 async function loadCanvas(keepLoadingStatus = false) {
-  const loadSequence = ++canvasLoadSequence;
-  canvasSaveBlocked = true;
-  window.clearTimeout(saveTimer);
-  canvasSaveQueued = false;
+  const loadSequence = canvasSaveCoordinator.beginLoad();
   try {
     const loadingProjectId = currentProjectId,
       leasedNextId = nextId,
@@ -3368,11 +3305,11 @@ async function loadCanvas(keepLoadingStatus = false) {
     const canvasResult = await fetchCanvasDocument(loadingProjectId);
     if (
       loadingProjectId !== currentProjectId ||
-      loadSequence !== canvasLoadSequence
+      !canvasSaveCoordinator.isCurrentLoad(loadSequence, loadingProjectId)
     )
       return;
     if (canvasResult.kind === "missing") {
-      canvasLoadedProjectId = loadingProjectId;
+      canvasSaveCoordinator.loadedProjectId = loadingProjectId;
       await saveCanvas();
       resetCanvasHistory(false);
       return;
@@ -3402,8 +3339,7 @@ async function loadCanvas(keepLoadingStatus = false) {
       cameraViewport.syncTarget();
     }
     if (
-      loadSequence !== canvasLoadSequence ||
-      loadingProjectId !== currentProjectId
+      !canvasSaveCoordinator.isCurrentLoad(loadSequence, loadingProjectId)
     )
       return;
     if (nextId > canvasNodeIdBlockEnd) {
@@ -3412,15 +3348,10 @@ async function loadCanvas(keepLoadingStatus = false) {
         throw new Error("canvas id lease failed");
     } else setWorkspaceBootStatus("正在校验节点编号空间");
     if (
-      loadSequence !== canvasLoadSequence ||
-      loadingProjectId !== currentProjectId
+      !canvasSaveCoordinator.isCurrentLoad(loadSequence, loadingProjectId)
     )
       return;
-    canvasLoadedProjectId = loadingProjectId;
-    canvasBaseline = receivedBaseline;
-    canvasServerVersion = Number(document.version);
-    canvasServerUpdatedAt = document.updatedAt || "";
-    canvasSaveBlocked = false;
+    canvasSaveCoordinator.completeLoad(loadingProjectId, receivedBaseline);
     hideCanvasGuide("canvas-save-conflict");
     selection.selectedId = 0;
     setSaveState("saved", "已自动保存");
@@ -4435,26 +4366,22 @@ new CanvasClearController({
   button: document.querySelector<HTMLElement>("#dock-clear")!,
   getNodeCount: () => nodes.length,
   getProjectId: () => currentProjectId,
-  getServerVersion: () => canvasServerVersion,
-  prepareForClear: async () => {
-    canvasSaveBlocked = true;
-    window.clearTimeout(saveTimer);
-    canvasSaveQueued = false;
-    canvasSaveAbort?.abort();
-    await canvasSavePromise?.catch(() => {});
-  },
+  getServerVersion: () => canvasSaveCoordinator.serverVersion,
+  prepareForClear: () => canvasSaveCoordinator.prepareExclusiveMutation(),
   applyResult: (result) => {
-    canvasServerVersion = result.version;
-    canvasServerUpdatedAt = result.updatedAt || canvasServerUpdatedAt;
     nodes.splice(0, nodes.length, ...result.nodes);
     links.splice(0, links.length, ...normalizeCanvasLinks(result.links));
     if (result.camera) Object.assign(camera, result.camera);
-    canvasBaseline = captureCanvasSnapshot(canvasServerVersion, canvasServerUpdatedAt);
+    canvasSaveCoordinator.applyAuthoritativeSnapshot(
+      captureCanvasSnapshot(
+        result.version,
+        result.updatedAt || canvasSaveCoordinator.serverUpdatedAt,
+      ),
+    );
     selection.selectedId = 0;
     resetCanvasHistory(false);
     updateEditor();
     setSaveState("saved", "已自动保存");
-    canvasSaveBlocked = false;
     draw();
     showToast(`已清除画布内容，保留 ${nodes.length} 个标签`, "success");
   },
@@ -4730,13 +4657,9 @@ async function switchProject(projectId: string) {
     closeWorkspacePanels();
     return;
   }
-  if (canvasLoadedProjectId === currentProjectId) await saveCanvas();
+  if (canvasSaveCoordinator.loadedProjectId === currentProjectId) await saveCanvas();
   closeComicStudio();
-  canvasSaveBlocked = true;
-  canvasLoadedProjectId = "";
-  canvasBaseline = null;
-  canvasServerVersion = 0;
-  canvasServerUpdatedAt = "";
+  await canvasSaveCoordinator.stopAndReset();
   canvasNodeIdBlockEnd = 0;
   currentProjectId = projectId;
   localStorage.setItem("flow-project-id", projectId);
