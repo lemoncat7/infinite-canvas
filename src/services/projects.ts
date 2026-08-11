@@ -26,3 +26,23 @@ export async function createProject(name: string) {
   if (!response.ok) throw new Error("项目创建失败");
   return (await response.json()) as ProjectSummary;
 }
+
+export function renameProject(id: string, name: string) {
+  return apiFetch(`/api/projects/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function duplicateProject(id: string) {
+  return apiFetch(`/api/projects/${encodeURIComponent(id)}/duplicate`, {
+    method: "POST",
+  });
+}
+
+export function removeProject(id: string) {
+  return apiFetch(`/api/projects/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
