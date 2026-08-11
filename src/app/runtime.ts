@@ -46,6 +46,7 @@ import type {
 } from "../nodes/node-types";
 import { makeNodePublicId } from "../nodes/node-service";
 import { NodeLifecycleController } from "../nodes/node-lifecycle-controller";
+import { ImageAssetController } from "../nodes/image-asset-controller";
 import { decodePromptClipboardText, normalizePromptText } from "../nodes/prompt-text";
 import { downloadNodeImage as downloadNodeImageFile } from "../nodes/node-download";
 import { PromptNodeController } from "../nodes/prompt-node";
@@ -2810,50 +2811,15 @@ imageNodeUpload.type = "file";
 imageNodeUpload.accept = "image/*";
 imageNodeUpload.hidden = true;
 document.body.append(imageNodeUpload);
+let imageAssetController: ImageAssetController;
 function attachAssetToImageNode(
   nodeId: number,
   asset: { url: string; name: string },
 ) {
-  const node = nodes.find(
-    (item) => item.id === nodeId && item.kind === "image",
-  );
-  if (!node) {
-    showToast("目标图片节点已不存在", "warning");
-    return;
-  }
-  if (
-    node.status === "queued" ||
-    node.status === "running" ||
-    (node.agentAuto && node.status === "waiting")
-  ) {
-    showToast("节点已经进入生成队列，未替换素材", "warning");
-    return;
-  }
-  node.mediaUrl = asset.url;
-  node.title = asset.name || node.title;
-  node.generationPrompt = undefined;
-  node.status = "idle";
-  node.progress = 0;
-  selection.selectedId = node.id;
-  scheduleSave();
-  updateEditor();
-  draw();
-  showToast("图片已放入当前节点", "success");
+  imageAssetController.attach(nodeId, asset);
 }
 function imageNodeAllowsSourceChange(nodeId: number) {
-  const node = nodes.find(
-    (item) => item.id === nodeId && item.kind === "image",
-  );
-  if (!node) return false;
-  if (
-    node.status === "queued" ||
-    node.status === "running" ||
-    (node.agentAuto && node.status === "waiting")
-  ) {
-    showToast("生成期间不可更换素材", "warning");
-    return false;
-  }
-  return true;
+  return imageAssetController.allowsSourceChange(nodeId);
 }
 const assetUploadController = new AssetUploadController({
   input: assetUpload,
@@ -2871,22 +2837,32 @@ const assetUploadController = new AssetUploadController({
   onReload: () => loadAssets(),
   onToast: (message, tone, detail) => showToast(message, tone, detail),
 });
+imageAssetController = new ImageAssetController({
+  nodes,
+  select: (id) => { selection.selectedId = id; },
+  save: scheduleSave,
+  updateEditor,
+  draw,
+  notify: (message, tone) => showToast(message, tone),
+  clearLibraryTarget: () => assetLibraryController.setImageTarget(null),
+  openUpload: (nodeId) => assetUploadController.openForNode(nodeId),
+  openLibraryPanel: () => openWorkspacePanel("#assets-panel", "#open-assets"),
+  setLibraryTarget: (nodeId) => assetLibraryController.setImageTarget(nodeId),
+  selectImageFilter: () => {
+    assetTypeFilter.value = "image";
+    assetProjectFilter.value = "current";
+  },
+  loadAssets: () => loadAssets(),
+  renderAssets,
+});
 function openAssetUploadAt(position: Point | null = null) {
   assetUploadController.open(position);
 }
 function beginImageNodeUpload(nodeId: number) {
-  if (!imageNodeAllowsSourceChange(nodeId)) return;
-  assetLibraryController.setImageTarget(null);
-  assetUploadController.openForNode(nodeId);
+  imageAssetController.beginUpload(nodeId);
 }
 async function beginImageNodeLibrary(nodeId: number) {
-  if (!imageNodeAllowsSourceChange(nodeId)) return;
-  openWorkspacePanel("#assets-panel", "#open-assets");
-  assetLibraryController.setImageTarget(nodeId);
-  assetTypeFilter.value = "image";
-  assetProjectFilter.value = "current";
-  await loadAssets();
-  renderAssets();
+  await imageAssetController.beginLibrary(nodeId);
 }
 const projectDialog = document.querySelector<HTMLElement>("#project-dialog")!;
 const askProjectDialog = createProjectDialog(projectDialog);
