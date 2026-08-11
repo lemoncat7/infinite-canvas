@@ -29,6 +29,7 @@ import { GenerationPoller } from "../services/generation-poller";
 import { GenerationWorkflow } from "../services/generation-workflow";
 import { requestNodeIdLease } from "../services/node-id-lease";
 import { NotificationStreamController } from "../services/notification-stream";
+import { SessionActivityController } from "../services/session-activity";
 import { requestPromptAgent } from "../services/prompt-agent";
 import {
   appendRevisionNode,
@@ -1800,13 +1801,16 @@ let authUser: AuthUser | null = null;
 let customApiModels: CustomApiModel[] = [];
 let authReady = false;
 let showcaseLoaded = false;
+const sessionActivity = new SessionActivityController({
+  isAuthenticated: () => Boolean(authUser),
+  logout: (message) => logoutToHome(message),
+});
 const authModalController = new AuthModalController({
   modal: homeLoginModal,
   onAuthenticated: async (user, completedMode) => {
     authUser = user;
     authReady = true;
-    lastUserActivity = Date.now();
-    scheduleIdleLogout();
+    sessionActivity.touch();
     renderAuthenticatedUser();
     if (!(await synchronizeCanvasAfterAuthentication()))
       throw new Error("登录成功，但画布未能完整同步，请重试");
@@ -6796,8 +6800,7 @@ async function bootstrapApplication() {
   localStorage.removeItem("flow-authenticated");
   renderAuthenticatedUser();
   if (authUser) {
-    lastUserActivity = Date.now();
-    scheduleIdleLogout();
+    sessionActivity.touch();
   }
   const capabilities = loadGenerationCapabilities();
   if (authUser && location.hash === "#/canvas") {
@@ -6826,43 +6829,3 @@ window.addEventListener("resize", resize);
 resize();
 updateEditor();
 void bootstrapApplication();
-
-const idleLogoutMs = 30 * 60 * 1000;
-let lastUserActivity = Date.now(),
-  activityHeartbeatDue = false,
-  idleLogoutTimer = 0;
-function scheduleIdleLogout() {
-  window.clearTimeout(idleLogoutTimer);
-  if (!authUser) return;
-  const remaining = Math.max(0, idleLogoutMs - (Date.now() - lastUserActivity));
-  idleLogoutTimer = window.setTimeout(
-    () => void logoutToHome("长时间未操作，已安全退出登录"),
-    remaining,
-  );
-}
-function recordUserActivity() {
-  lastUserActivity = Date.now();
-  activityHeartbeatDue = true;
-  scheduleIdleLogout();
-}
-for (const eventName of [
-  "pointerdown",
-  "keydown",
-  "wheel",
-  "touchstart",
-] as const)
-  window.addEventListener(eventName, recordUserActivity, { passive: true });
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState !== "visible" || !authUser) return;
-  if (Date.now() - lastUserActivity >= idleLogoutMs)
-    void logoutToHome("长时间未操作，已安全退出登录");
-  else scheduleIdleLogout();
-});
-window.setInterval(async () => {
-  if (!authUser || !activityHeartbeatDue) return;
-  activityHeartbeatDue = false;
-  const response = await apiFetch("/api/auth/activity", { method: "POST" }).catch(
-    () => null,
-  );
-  if (response?.status === 401) void logoutToHome("登录状态已过期，请重新登录");
-}, 60_000);
