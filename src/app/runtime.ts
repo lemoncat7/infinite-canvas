@@ -48,7 +48,6 @@ import type {
   Point,
   PortSide,
 } from "../nodes/node-types";
-import { makeNodePublicId } from "../nodes/node-service";
 import { NodeLifecycleController } from "../nodes/node-lifecycle-controller";
 import { GenerationGraph } from "../nodes/generation-graph";
 import { ConnectionRules } from "../nodes/connection-rules";
@@ -84,6 +83,7 @@ import { bindNodeConfigPanel } from "../ui/node-editor";
 import { AssetPreviewController } from "../ui/asset-preview";
 import { AssetLibraryFeature } from "../ui/asset-library-feature";
 import { CanvasToolbarController } from "../ui/canvas-toolbar-controller";
+import { NodeInfoController } from "../ui/node-info-controller";
 import { SquarePanelView } from "../ui/square-panel";
 import { WorkspacePanelController } from "../ui/toolbar";
 import { WorkspaceNavigationCoordinator } from "../ui/workspace-navigation-coordinator";
@@ -1234,71 +1234,13 @@ function enterTextEdit(node: FlowNode, element: HTMLElement) {
 }
 
 const nodeInfoModal = document.querySelector<HTMLElement>("#node-info-modal")!;
-const nodeInfoDetails =
-  document.querySelector<HTMLElement>("#node-info-details")!;
-const nodeInfoJson = document.querySelector<HTMLElement>("#node-info-json")!;
-function nodeInfoData(node: FlowNode) {
-  node.publicId ||= makeNodePublicId(node.kind);
-  return {
-    id: node.publicId,
-    type: node.kind === "prompt" ? "label" : node.kind,
-    title: node.title,
-    position: { x: node.x, y: node.y },
-    width: node.width,
-    height: node.height,
-    metadata: {
-      content: node.body,
-      status: node.status ?? "idle",
-      fontSize: Math.round(12 * (node.fontScale ?? 1)),
-    },
-  };
-}
+const nodeInfoController = new NodeInfoController(nodeInfoModal, scheduleSave);
 function openNodeInfo(node: FlowNode) {
-  const info = nodeInfoData(node);
-  const typeLabel =
-    node.kind === "prompt"
-      ? "标签"
-      : node.kind === "image"
-        ? "图片"
-        : node.kind === "video"
-          ? "视频"
-          : "便签";
-  nodeInfoDetails.innerHTML = `<dl><div><dt>ID</dt><dd>${escapeHtml(info.id)}</dd></div><div><dt>名称</dt><dd>${escapeHtml(info.title)}</dd></div><div><dt>类型</dt><dd>${typeLabel}</dd></div><div><dt>尺寸</dt><dd>${Math.round(info.width)} × ${Math.round(info.height)}</dd></div><div><dt>位置</dt><dd>${Math.round(info.position.x)}, ${Math.round(info.position.y)}</dd></div><div><dt>状态</dt><dd><i></i>${escapeHtml(info.metadata.status)}</dd></div></dl>`;
-  nodeInfoJson.textContent = JSON.stringify(info, null, 2);
-  nodeInfoDetails.hidden = false;
-  nodeInfoJson.hidden = true;
-  nodeInfoModal
-    .querySelectorAll("[data-info-tab]")
-    .forEach((button) =>
-      button.classList.toggle(
-        "active",
-        (button as HTMLElement).dataset.infoTab === "details",
-      ),
-    );
-  nodeInfoModal.classList.add("open");
-  scheduleSave();
+  nodeInfoController.open(node);
 }
 function closeNodeInfo() {
-  nodeInfoModal.classList.remove("open");
+  nodeInfoController.close();
 }
-document
-  .querySelector("#close-node-info")!
-  .addEventListener("click", closeNodeInfo);
-nodeInfoModal.addEventListener("click", (event) => {
-  if (event.target === nodeInfoModal) closeNodeInfo();
-});
-nodeInfoModal
-  .querySelectorAll<HTMLElement>("[data-info-tab]")
-  .forEach((button) =>
-    button.addEventListener("click", () => {
-      const json = button.dataset.infoTab === "json";
-      nodeInfoDetails.hidden = json;
-      nodeInfoJson.hidden = !json;
-      nodeInfoModal
-        .querySelectorAll("[data-info-tab]")
-        .forEach((item) => item.classList.toggle("active", item === button));
-    }),
-  );
 
 function defaultNodeCopy(kind: NodeKind) {
   return kind === "prompt"
