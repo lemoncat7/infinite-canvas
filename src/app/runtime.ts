@@ -17,7 +17,10 @@ import { CanvasNodeRuntimeFeature } from "../nodes/canvas-node-runtime-feature";
 import { TtsFeature } from "../services/tts-feature";
 import { apiFetch } from "../services/api";
 import { AppUpdateController } from "../services/app-update-controller";
-import { CanvasGenerationRuntimeFeature } from "../services/canvas-generation-runtime-feature";
+import {
+  createCanvasGenerationRuntime,
+  type CanvasGenerationRuntime,
+} from "../services/canvas-generation-composition";
 import { RuntimeDiagnosticsFeature } from "./runtime-diagnostics-feature";
 import {
   clipVideoPrompt,
@@ -48,7 +51,7 @@ let renderingRuntime: CanvasRenderingRuntimeFeature;
 
 let generationCapabilities: GenerationCapabilities =
   createDefaultGenerationCapabilities();
-let generationRuntime: CanvasGenerationRuntimeFeature;
+let generationRuntime: CanvasGenerationRuntime;
 let nodeRuntime: CanvasNodeRuntimeFeature;
 let assetRuntime: WorkspaceAssetsRuntimeFeature;
 const foundation = new RuntimeFoundation(() =>
@@ -503,10 +506,6 @@ function updateEditor() {
   nodeRuntime.editor.update();
 }
 
-function updateNodeJobProgressUi(node: FlowNode) {
-  nodeRuntime.editor.updateProgress(node);
-}
-
 function scheduleSave(recordHistory = true) {
   canvasPersistence.schedule(recordHistory);
 }
@@ -559,49 +558,20 @@ function loadCanvas(keepLoadingStatus = false) {
   return canvasPersistence.load(keepLoadingStatus);
 }
 
-generationRuntime = new CanvasGenerationRuntimeFeature({
-  generation: {
-    nodes,
-    links,
-    imageCache,
-    jobLabel,
-    getSelectedId: () => selection.selectedId,
-    setSelectedId: (id) => { selection.selectedId = id; },
-    selectedNode: () => nodeRuntime.editor.selected(),
-    blockedReason: (node) => nodeRuntime.editor.blockedReason(node),
-    normalizePrompt: normalizePromptText,
-    getProjectId: () => foundation.projectId,
-    allocateNodeId: () => canvasNodeIds.allocate(),
-    clearSelection: () => {
-      selection.selectedId = 0;
-      updateEditor();
-      draw();
-    },
-    updateEditor,
-    draw,
-    save: scheduleSave,
-    focusPrompt: () => promptInput.focus(),
-    generateTts: (node) => ttsFeature.generate(node),
-    getUser: () => authWorkspace.user,
-    setUser: (user) => authWorkspace.setUser(user),
-    renderUser: () => authWorkspace.renderUser(),
-    refreshModelMenus: refreshNodeModelMenus,
-    loadAssets: () => assetRuntime.load(false),
-    renderAssets: () => assetRuntime.render(),
-    isAssetPanelOpen: () => Boolean(
-      document.querySelector("#assets-panel")?.classList.contains("open"),
-    ),
-    toast: (message, tone, detail) => showToast(message, tone, detail),
-  },
-  canGenerate: (node) => nodeRuntime.editor.canGenerate(node),
-  onProgress: (node, _job, changed) => {
-    if (changed) updateNodeJobProgressUi(node);
-  },
-  onRetry: () => showToast("首次生成请求超时，正在自动重试一次", "warning"),
-  onSyncFailure: (_failures, notify) => {
-    jobLabel.textContent = "状态同步中断，正在重试…";
-    if (notify) showToast("任务状态暂时无法同步，服务恢复后将自动重试", "error");
-  },
+generationRuntime = createCanvasGenerationRuntime({
+  foundation,
+  nodeRuntime,
+  tts: ttsFeature,
+  assets: () => assetRuntime,
+  imageCache,
+  user: () => authWorkspace.user,
+  setUser: (user) => authWorkspace.setUser(user),
+  renderUser: () => authWorkspace.renderUser(),
+  updateEditor,
+  draw,
+  save: scheduleSave,
+  refreshModelMenus: refreshNodeModelMenus,
+  toast: (message, tone, detail) => showToast(message, tone, detail),
 });
 function generate(sourceOverride?: FlowNode) {
   return generationRuntime.generate(sourceOverride);
