@@ -4,14 +4,12 @@ import { CanvasRenderingRuntimeFeature } from "../canvas/canvas-rendering-runtim
 import { CanvasInputFeature } from "../canvas/canvas-input-feature";
 import { CanvasBatchFeature } from "../canvas/canvas-batch-feature";
 import { CanvasHistoryFeature } from "../canvas/canvas-history-feature";
-import { CanvasMediaFeature } from "../canvas/canvas-media-feature";
 import type {
   FlowNode,
   GenerationCapabilities,
   NodeKind,
   Point,
 } from "../nodes/node-types";
-import { defaultNodeCopy } from "../nodes/node-lifecycle-controller";
 import { decodePromptClipboardText, normalizePromptText } from "../nodes/prompt-text";
 import { CanvasNodeRuntimeFeature } from "../nodes/canvas-node-runtime-feature";
 import { TtsFeature } from "../services/tts-feature";
@@ -40,7 +38,7 @@ import type { ToastType } from "../ui/toast-controller";
 import { CanvasFeedbackFeature } from "../ui/canvas-feedback-feature";
 import type { AuthUser } from "../ui/user-menu-controller";
 import { CanvasCreationSuiteFeature } from "../ui/canvas-creation-suite-feature";
-import { CanvasNodeViewFeature } from "../nodes/canvas-node-view-feature";
+import { CanvasNodePresentationRuntime } from "../nodes/canvas-node-presentation-runtime";
 import { createDefaultGenerationCapabilities } from "./state";
 import { WorkspaceRuntimeFeature } from "./workspace-runtime-feature";
 import { AccountSessionFeature } from "./account-session-feature";
@@ -156,13 +154,13 @@ const ttsFeature = new TtsFeature({
   invalidateProviders: () => {
     nodes
       .filter((node) => node.kind === "voice")
-      .forEach((node) => nodeViews.invalidateState(node.id));
+      .forEach((node) => nodePresentation.views.invalidateState(node.id));
     draw();
   },
   invalidateVoices: (providerId) => {
     nodes
       .filter((node) => node.kind === "voice" && node.voiceSettings?.providerId === providerId)
-      .forEach((node) => nodeViews.invalidateState(node.id));
+      .forEach((node) => nodePresentation.views.invalidateState(node.id));
     draw();
   },
   updateEditor,
@@ -184,7 +182,7 @@ const canvasInput = new CanvasInputFeature({
   save: scheduleSave,
   setEditing: () => canvasPersistence.setEditing(),
   updateEditor,
-  syncDraggedElements: (ids) => nodeViews.syncDraggedElements(ids, nodes),
+  syncDraggedElements: (ids) => nodePresentation.views.syncDraggedElements(ids, nodes),
   refreshBatchSelection: () => canvasBatch.refresh(),
   clearBatchSelection: () => canvasBatch.clear(),
   toggleBatchNode: (id) => canvasBatch.toggle(id),
@@ -215,86 +213,32 @@ const cameraViewport = canvasInput.cameraViewport;
 const domPointer = canvasInput.domPointer;
 const touchPinch = canvasInput.touchPinch;
 const marqueeController = canvasInput.marquee;
-const nodeViews = new CanvasNodeViewFeature({
-  viewport: nodeViewport,
-  layer: nodeLayer,
-  nodes,
-  links,
-  camera,
-  world: (point) => world(point),
-  getSelectedId: () => selection.selectedId,
-  setSelectedId: (id) => { selection.selectedId = id; },
-  getBatchIds: () => selection.batchIds,
-  getEditingId: () => promptNodeEditor.editingId,
-  getDraggingId: () => domPointer.drag?.id ?? 0,
-  isMultiSelectMode: () => selection.multiSelectMode,
-  getDrag: () => domPointer.drag,
-  setDrag: (drag) => { domPointer.drag = drag; },
-  beginResize: (value) => domPointer.beginResize(value),
-  isReleaseSuppressed: domPointer.isReleaseSuppressed,
-  isAgentSelecting: () => creationSuite.prompt.selecting,
-  isAgentCreateMode: () => creationSuite.prompt.controls.mode === "create",
-  getAgentIds: () => creationSuite.prompt.selectedIds,
-  getColorTheme: () => colorTheme,
-  getSwap: () => foundation.videoReferenceSwapSelection,
-  setSwap: (value) => { foundation.videoReferenceSwapSelection = value; },
+const nodePresentation = new CanvasNodePresentationRuntime({
+  foundation,
+  input: canvasInput,
+  nodeRuntime: () => nodeRuntime,
+  rendering: () => renderingRuntime,
+  generation: () => generationRuntime,
+  assets: () => assetRuntime,
+  tts: ttsFeature,
+  agent: () => creationSuite.prompt,
   getAuthUser: () => authWorkspace.user,
   getCustomModels: () => accountTools.models,
   getCapabilities: () => generationCapabilities,
-  isGenerating: (node) => nodeRuntime.lifecycle.isActive(node),
-  defaultCopy: defaultNodeCopy,
-  getProviders: () => ttsFeature.catalog.providers,
-  getVoices: () => ttsFeature.catalog.voicesByProvider,
-  ensureProviders: () => ttsFeature.loadProviders(),
-  ensureVoices: (providerId) => ttsFeature.loadVoices(providerId),
-  escapeHtml: escapeRuntimeHtml,
-  normalizePrompt: normalizePromptText,
+  getColorTheme: () => colorTheme,
   displayModelName: modelDisplayName,
-  decodePrompt: (value = "") => decodePromptClipboardText(value),
-  canGenerate: (node) => nodeRuntime.editor.canGenerate(node),
   updateEditor,
   draw,
-  scheduleSave,
-  commitHistory: () => canvasHistory.queue(),
-  setEditingState: () => canvasPersistence.setEditing(),
-  editPrompt: enterTextEdit,
-  previewMedia: (node) =>
-    assetRuntime.openPreview(node.mediaUrl!, node.title, node.kind as "image" | "video"),
-  beginConnection: (nodeId, point) => connection.begin(nodeId, "right", point),
-  showInfo: openNodeInfo,
-  focusEditor: () => promptInput.focus(),
-  generate,
-  downloadImage: (node) => assetRuntime.downloadNodeImage(node),
-  deleteNode: () => { void nodeRuntime.lifecycle.deleteSelected(); },
-  confirmClearImage: async () => Boolean(await assetRuntime.ask({
-    title: "清除当前卡片的图片？",
-    description: "资产库中的原图不会删除。原提示词、当前描述、模型、图像设置和参考连线都会保留。",
-    confirm: "清除图片",
-  })),
-  removeCachedImage: (url) => imageCache.delete(url),
-  notifyImageCleared: (message) => showToast(message, "success"),
-  beginImageUpload: (nodeId) => assetRuntime.beginNodeUpload(nodeId),
-  beginImageLibrary: (nodeId) => assetRuntime.beginNodeLibrary(nodeId),
-  previewVoice: (node) => ttsFeature.preview(node),
-  generateTts: (node) => ttsFeature.generate(node),
-  copyPrompt: copyOriginalPrompt,
-  paintImage: (target, url) => canvasMedia.paint(target, url),
-  paintVideo: (target, url) => canvasMedia.paint(target, url),
-  notify: (message, type, detail) => showToast(message, type, detail),
-});
-const canvasMedia = new CanvasMediaFeature({
-  mobile: innerWidth <= 780,
-  nodes,
-  nodeLayer,
-  theme: () => colorTheme,
-  suspendRenderer: () => renderingRuntime.render.suspend(),
-  resumeRenderer: () => renderingRuntime.render.resume(),
-  clearNodeStates: () => nodeViews.clearStates(),
-  invalidateNode: (id) => nodeViews.invalidateState(id),
   resize,
-  draw,
+  save: scheduleSave,
+  commitHistory: () => canvasHistory.queue(),
+  setEditing: () => canvasPersistence.setEditing(),
+  copyPrompt: copyOriginalPrompt,
   refreshAppearance: () => canvasControls.refreshAppearance(),
+  toast: (message, type, detail) => showToast(message, type, detail),
 });
+const nodeViews = nodePresentation.views;
+const canvasMedia = nodePresentation.media;
 const pendingMediaLoads = canvasMedia.pendingLoads;
 const imageCache = canvasMedia.cache;
 function modelDisplayName(value?: string) {
