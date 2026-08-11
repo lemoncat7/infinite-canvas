@@ -9,7 +9,6 @@ import { CanvasInteractionController } from "../canvas/interaction-controller";
 import { CanvasInputFeature } from "../canvas/canvas-input-feature";
 import { CanvasBatchFeature } from "../canvas/canvas-batch-feature";
 import { CanvasHistoryFeature } from "../canvas/canvas-history-feature";
-import { LinkInteractionView } from "../canvas/link-interaction-view";
 import { GenerationPoller } from "../services/generation-poller";
 import { GenerationWorkflow } from "../services/generation-workflow";
 import { CanvasNodeIdAllocator } from "../services/canvas-node-id-allocator";
@@ -43,13 +42,11 @@ import {
 import { inferVoiceConfig } from "../nodes/voice-node";
 import { bindNodeConfigPanel } from "../ui/node-editor";
 import { WorkspaceAssetsFeature } from "../ui/workspace-assets-feature";
-import { CanvasToolbarController } from "../ui/canvas-toolbar-controller";
 import { WorkspaceOverlayController } from "../ui/workspace-overlay-controller";
 import { WorkspaceKeyboardController } from "../ui/workspace-keyboard-controller";
 import { CanvasTaskFeature } from "../ui/canvas-task-feature";
 import { TopbarMenuCoordinator } from "../ui/topbar-menu-coordinator";
-import { QuickNodeMenuController } from "../ui/quick-node-menu-controller";
-import { AppearanceController } from "../ui/appearance-controller";
+import { CanvasControlsFeature } from "../ui/canvas-controls-feature";
 import { CanvasGuideController, type CanvasGuideMessage } from "../ui/canvas-guide-controller";
 import { ToastController, type ToastType } from "../ui/toast-controller";
 import {
@@ -903,72 +900,65 @@ function cascadeSelectionIds(seed: Set<number>) {
   return canvasBatch.cascade(seed);
 }
 
-const linkHoverHint = document.querySelector<HTMLElement>("#link-hover-hint")!;
-const touchLinkAction = document.querySelector<HTMLButtonElement>("#touch-link-action")!;
-new LinkInteractionView({
-  canvas, hint: linkHoverHint, touchAction: touchLinkAction, links, connection,
-  pointerDown: () => pointer.down, multiSelect: () => selection.multiSelectMode,
-  hitLink, generationActive: canvasHasActiveGeneration,
-  contextSuppressed: marqueeController.isContextSuppressed,
-  save: scheduleSave, draw,
-  notify: (message, type) => showToast(message, type),
-});
-new CanvasToolbarController({
-  zoomSlider,
-  viewportCenter: () => ({ x: innerWidth / 2, y: innerHeight / 2 }),
-  fit: cameraViewport.fit,
-  setZoom: (zoom, anchor) => cameraViewport.setImmediate(zoom, anchor),
-  zoomBy: cameraViewport.smoothBy,
-  addNode: (kind) => addNode(kind),
-  generate: () => { void generate(); },
-  deleteSelected: () => { void deleteSelectedNode(); },
-}).bind();
-const quickNodeMenu = document.querySelector<HTMLElement>("#quick-node-menu")!;
-function closeQuickNodeMenu() {
-  quickNodeMenuController.close();
-}
-const quickNodeMenuController = new QuickNodeMenuController({
-  canvas,
-  menu: quickNodeMenu,
-  connectionActive: () => Boolean(connection.active),
-  hitNode,
-  selectNode: (node) => {
-    selection.selectedId = node.id;
-    updateEditor();
-    draw();
+const canvasControls: CanvasControlsFeature = new CanvasControlsFeature({
+  link: {
+    canvas, links, connection,
+    pointerDown: () => pointer.down,
+    multiSelect: () => selection.multiSelectMode,
+    hitLink,
+    generationActive: canvasHasActiveGeneration,
+    contextSuppressed: marqueeController.isContextSuppressed,
+    save: scheduleSave,
+    draw,
+    notify: (message, type) => showToast(message, type),
   },
-  previewNode: (node) =>
-    openAssetPreview(node.mediaUrl!, node.title, node.kind as "image" | "video"),
-  editPromptNode: (node) => {
-    const element = nodeLayer.querySelector<HTMLElement>(
-      `.flow-node[data-id="${node.id}"]`,
-    );
-    if (element) enterTextEdit(node, element);
+  toolbar: {
+    zoomSlider,
+    viewportCenter: () => ({ x: innerWidth / 2, y: innerHeight / 2 }),
+    fit: cameraViewport.fit,
+    setZoom: (zoom, anchor) => cameraViewport.setImmediate(zoom, anchor),
+    zoomBy: cameraViewport.smoothBy,
+    addNode: (kind) => addNode(kind),
+    generate: () => { void generate(); },
+    deleteSelected: () => { void deleteSelectedNode(); },
   },
-  multiSelectActive: () => selection.multiSelectMode,
-  exitMultiSelect: exitMultiSelectMode,
-  enterMultiSelect: enterMultiSelectMode,
-  toWorld: world,
-  addNode: (kind, position) => addNode(kind, position),
-  uploadAt: openAssetUploadAt,
-});
-const appearanceButton =
-  document.querySelector<HTMLButtonElement>("#dock-appearance")!;
-const appearanceController = new AppearanceController({
-  button: appearanceButton,
-  pendingMedia: () => pendingMediaLoads.size,
-  currentTheme: () => colorTheme,
-  applyTheme: (theme) => {
-    colorTheme = theme;
-    document.body.dataset.theme = colorTheme;
-    localStorage.setItem("flow-theme", colorTheme);
+  quickMenu: {
+    canvas,
+    connectionActive: () => Boolean(connection.active),
+    hitNode,
+    selectNode: (node) => {
+      selection.selectedId = node.id;
+      updateEditor();
+      draw();
+    },
+    previewNode: (node) =>
+      openAssetPreview(node.mediaUrl!, node.title, node.kind as "image" | "video"),
+    editPromptNode: (node) => {
+      const element = nodeLayer.querySelector<HTMLElement>(`.flow-node[data-id="${node.id}"]`);
+      if (element) enterTextEdit(node, element);
+    },
+    multiSelectActive: () => selection.multiSelectMode,
+    exitMultiSelect: exitMultiSelectMode,
+    enterMultiSelect: enterMultiSelectMode,
+    toWorld: world,
+    addNode: (kind, position) => addNode(kind, position),
+    uploadAt: openAssetUploadAt,
   },
-  repaintMedia: canvasMedia.repaintAll,
-  paint,
+  appearance: {
+    pendingMedia: () => pendingMediaLoads.size,
+    currentTheme: () => colorTheme,
+    applyTheme: (theme) => {
+      colorTheme = theme;
+      document.body.dataset.theme = colorTheme;
+      localStorage.setItem("flow-theme", colorTheme);
+    },
+    repaintMedia: canvasMedia.repaintAll,
+    paint,
+  },
 });
-function refreshAppearanceButton() {
-  appearanceController.refresh();
-}
+const quickNodeMenu = canvasControls.quickMenu;
+function closeQuickNodeMenu() { canvasControls.closeQuickMenu(); }
+function refreshAppearanceButton() { canvasControls.refreshAppearance(); }
 promptAgentFeature = new PromptAgentFeature({
   nodes,
   links,
