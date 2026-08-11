@@ -17,6 +17,7 @@ import { MarqueeController } from "../canvas/marquee-controller";
 import { CanvasPointerLifecycle } from "../canvas/canvas-pointer-lifecycle";
 import { TouchPinchController } from "../canvas/touch-pinch-controller";
 import { CameraViewportController } from "../canvas/camera-viewport-controller";
+import { LinkInteractionView } from "../canvas/link-interaction-view";
 import { MediaLruCache } from "../canvas/media-cache";
 import type {
   FlowLink,
@@ -279,12 +280,6 @@ let contextPosition: Point = { x: 0, y: 0 };
 const connection = new CanvasConnectionController();
 let connectionAutoPanFrame = 0,
   connectionAutoPanPointer: Point | null = null;
-let touchLinkGesture: {
-  pointerId: number;
-  start: Point;
-  index: number;
-  moved: boolean;
-} | null = null;
 let currentProjectId = localStorage.getItem("flow-project-id") ?? "default";
 let canvasLoadedProjectId = "";
 let canvasServerVersion = 0,
@@ -5443,148 +5438,14 @@ batchToolbar
   .addEventListener("click", exitMultiSelectMode);
 
 const linkHoverHint = document.querySelector<HTMLElement>("#link-hover-hint")!;
-const touchLinkAction =
-  document.querySelector<HTMLButtonElement>("#touch-link-action")!;
-function closeTouchLinkAction() {
-  connection.touchSelectedLinkIndex = -1;
-  touchLinkGesture = null;
-  touchLinkAction.classList.remove("open", "locked");
-  draw();
-}
-function openTouchLinkAction(index: number, x: number, y: number) {
-  if (index < 0 || !links[index]) return closeTouchLinkAction();
-  connection.touchSelectedLinkIndex = index;
-  const locked = canvasHasActiveGeneration();
-  touchLinkAction.classList.toggle("locked", locked);
-  touchLinkAction.disabled = locked;
-  touchLinkAction.querySelector("span")!.textContent = locked
-    ? "生成中不可删除"
-    : "删除连线";
-  touchLinkAction.querySelector("small")!.textContent = locked
-    ? "任务完成后即可操作"
-    : "";
-  touchLinkAction.classList.add("open");
-  touchLinkAction.style.left = `${Math.max(10, Math.min(innerWidth - touchLinkAction.offsetWidth - 10, x + 12))}px`;
-  touchLinkAction.style.top = `${Math.max(68, Math.min(innerHeight - touchLinkAction.offsetHeight - 12, y - 18))}px`;
-  draw();
-}
-document.addEventListener(
-  "pointerdown",
-  (event) => {
-    if (
-      connection.touchSelectedLinkIndex >= 0 &&
-      !touchLinkAction.contains(event.target as Node)
-    )
-      closeTouchLinkAction();
-  },
-  true,
-);
-canvas.addEventListener(
-  "pointerdown",
-  (event) => {
-    if (event.pointerType !== "touch" || event.button !== 0 || selection.multiSelectMode)
-      return;
-    const index = hitLink(event.clientX, event.clientY, 18);
-    touchLinkGesture = {
-      pointerId: event.pointerId,
-      start: { x: event.clientX, y: event.clientY },
-      index,
-      moved: false,
-    };
-  },
-  true,
-);
-canvas.addEventListener(
-  "pointermove",
-  (event) => {
-    if (!touchLinkGesture || touchLinkGesture.pointerId !== event.pointerId)
-      return;
-    if (
-      Math.hypot(
-        event.clientX - touchLinkGesture.start.x,
-        event.clientY - touchLinkGesture.start.y,
-      ) > 9
-    )
-      touchLinkGesture.moved = true;
-  },
-  true,
-);
-canvas.addEventListener(
-  "pointerup",
-  (event) => {
-    if (!touchLinkGesture || touchLinkGesture.pointerId !== event.pointerId)
-      return;
-    const gesture = touchLinkGesture;
-    touchLinkGesture = null;
-    if (gesture.moved) return;
-    if (gesture.index >= 0) {
-      openTouchLinkAction(gesture.index, event.clientX, event.clientY);
-      if (navigator.vibrate) navigator.vibrate(10);
-    } else closeTouchLinkAction();
-  },
-  true,
-);
-canvas.addEventListener(
-  "pointercancel",
-  () => {
-    touchLinkGesture = null;
-  },
-  true,
-);
-touchLinkAction.addEventListener("click", () => {
-  if (connection.touchSelectedLinkIndex < 0 || !links[connection.touchSelectedLinkIndex])
-    return closeTouchLinkAction();
-  if (canvasHasActiveGeneration()) {
-    showToast("画布正在生成，任务完成后即可删除连线", "warning");
-    return;
-  }
-  links.splice(connection.touchSelectedLinkIndex, 1);
-  if (navigator.vibrate) navigator.vibrate(18);
-  closeTouchLinkAction();
-  scheduleSave();
-  showToast("连线已删除", "success");
-});
-canvas.addEventListener("pointermove", (event) => {
-  if (pointer.down || connection.active) return;
-  const index = hitLink(event.clientX, event.clientY);
-  if (index !== connection.hoveredLinkIndex) {
-    connection.hoveredLinkIndex = index;
-    draw();
-  }
-  linkHoverHint.classList.toggle("open", index >= 0);
-  if (index >= 0) {
-    const generating = canvasHasActiveGeneration();
-    linkHoverHint.classList.toggle("locked", generating);
-    linkHoverHint.textContent = generating
-      ? "画布生成中 · 连线已锁定"
-      : "右键 · 删除连线";
-    linkHoverHint.style.left = `${event.clientX + 14}px`;
-    linkHoverHint.style.top = `${event.clientY + 14}px`;
-    canvas.style.cursor = "pointer";
-  } else canvas.style.removeProperty("cursor");
-});
-canvas.addEventListener("pointerleave", () => {
-  if (connection.hoveredLinkIndex >= 0) {
-    connection.hoveredLinkIndex = -1;
-    draw();
-  }
-  linkHoverHint.classList.remove("open");
-  canvas.style.removeProperty("cursor");
-});
-canvas.addEventListener("contextmenu", (event) => {
-  event.preventDefault();
-  if (marqueeController.isContextSuppressed()) return;
-  const index = hitLink(event.clientX, event.clientY);
-  if (index < 0) return;
-  if (canvasHasActiveGeneration()) {
-    showToast("画布正在生成，任务完成后即可删除连线", "warning");
-    return;
-  }
-  links.splice(index, 1);
-  connection.hoveredLinkIndex = -1;
-  linkHoverHint.classList.remove("open");
-  scheduleSave();
-  draw();
+const touchLinkAction = document.querySelector<HTMLButtonElement>("#touch-link-action")!;
+new LinkInteractionView({
+  canvas, hint: linkHoverHint, touchAction: touchLinkAction, links, connection,
+  pointerDown: () => pointer.down, multiSelect: () => selection.multiSelectMode,
+  hitLink, generationActive: canvasHasActiveGeneration,
+  contextSuppressed: marqueeController.isContextSuppressed,
+  save: scheduleSave, draw,
+  notify: (message, type) => showToast(message, type),
 });
 document.querySelector("#reset")!.addEventListener("click", cameraViewport.fit);
 document
