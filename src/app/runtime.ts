@@ -111,6 +111,7 @@ import { AppearanceController } from "../ui/appearance-controller";
 import { NodeEditorStateController } from "../ui/node-editor-state-controller";
 import { CanvasGuideController, type CanvasGuideMessage } from "../ui/canvas-guide-controller";
 import { ToastController, type ToastType } from "../ui/toast-controller";
+import { ServiceStatusController } from "../ui/service-status-controller";
 import {
   createProjectDialog,
 } from "../ui/dialogs/project-dialog";
@@ -687,7 +688,6 @@ async function copyOriginalPrompt(prompt?: string) {
   }
 }
 
-let serviceKnownOffline = false;
 function hideCanvasGuide(key?: string) {
   canvasGuideController.hide(key);
 }
@@ -897,26 +897,9 @@ const renderOnlineStatus = (
   count = onlinePresenceView.current(),
   reconnecting = false,
 ) => onlinePresenceView.render(count, reconnecting);
+const serviceStatus = new ServiceStatusController(showCanvasGuide);
 function showServiceStatusNotice(mode: "offline" | "online") {
-  serviceKnownOffline = mode === "offline";
-  showCanvasGuide(
-    mode === "offline"
-      ? {
-          key: "service-status",
-          title: "服务器暂时离线",
-          detail: "正在后台尝试重新连接，恢复后会自动同步。",
-          tone: "offline",
-          priority: 100,
-        }
-      : {
-          key: "service-status",
-          title: "已重新连接",
-          detail: "通知和创作状态已恢复同步。",
-          tone: "online",
-          priority: 100,
-          duration: 2600,
-        },
-  );
+  serviceStatus.show(mode);
 }
 function showCanvasModeNotice(title: string, detail: string) {
   showCanvasGuide({
@@ -930,7 +913,7 @@ function showCanvasModeNotice(title: string, detail: string) {
 }
 const notificationStreamController = new NotificationStreamController({
   isAuthenticated: () => Boolean(authUser),
-  isServiceKnownOffline: () => serviceKnownOffline,
+  isServiceKnownOffline: () => serviceStatus.offline,
   isServiceGuideVisible: () => canvasGuideController.isVisible("service-status"),
   renderPresence: renderOnlineStatus,
   currentPresence: () => onlinePresenceView.current(),
