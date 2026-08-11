@@ -45,8 +45,9 @@ import { WorkspaceKeyboardController } from "../ui/workspace-keyboard-controller
 import { CanvasTaskFeature } from "../ui/canvas-task-feature";
 import { TopbarMenuCoordinator } from "../ui/topbar-menu-coordinator";
 import { CanvasControlsFeature } from "../ui/canvas-controls-feature";
-import { CanvasGuideController, type CanvasGuideMessage } from "../ui/canvas-guide-controller";
-import { ToastController, type ToastType } from "../ui/toast-controller";
+import type { CanvasGuideMessage } from "../ui/canvas-guide-controller";
+import type { ToastType } from "../ui/toast-controller";
+import { CanvasFeedbackFeature } from "../ui/canvas-feedback-feature";
 import {
   createProjectDialog,
 } from "../ui/dialogs/project-dialog";
@@ -393,40 +394,28 @@ function modelDisplayName(value?: string) {
     "自定义模型"
   );
 }
-const toastStack = document.querySelector<HTMLElement>("#toast-stack")!;
-const canvasGuideController = new CanvasGuideController(escapeHtml);
-const toastController = new ToastController(
-  toastStack,
+const canvasFeedback = new CanvasFeedbackFeature({
   escapeHtml,
-  (message) => canvasGuideController.show(message),
-);
+  normalizePrompt: normalizePromptText,
+  decodePrompt: decodePromptClipboardText,
+});
 function showToast(
   message: string,
   type: ToastType = "error",
   detail = "",
 ) {
-  toastController.show(message, type, detail);
+  canvasFeedback.showToast(message, type, detail);
 }
 
-async function copyOriginalPrompt(prompt?: string) {
-  const value = normalizePromptText(prompt);
-  if (!value) {
-    showToast("暂无可复制的原提示词", "warning");
-    return;
-  }
-  try {
-    await navigator.clipboard.writeText(decodePromptClipboardText(value));
-    showToast("原提示词已复制", "success");
-  } catch {
-    showToast("复制失败，请手动选择提示词", "error");
-  }
+function copyOriginalPrompt(prompt?: string) {
+  return canvasFeedback.copyOriginalPrompt(prompt);
 }
 
 function hideCanvasGuide(key?: string) {
-  canvasGuideController.hide(key);
+  canvasFeedback.hideGuide(key);
 }
 function showCanvasGuide(message: CanvasGuideMessage) {
-  return canvasGuideController.show(message);
+  return canvasFeedback.showGuide(message);
 }
 const appUpdateController = new AppUpdateController({
   authenticated: () => Boolean(authWorkspace.user),
@@ -484,20 +473,13 @@ notificationFeature = new NotificationFeature({
     closeTopbarMenus(opening ? "presence" : undefined),
   showGuide: showCanvasGuide,
   hideGuide: hideCanvasGuide,
-  isGuideVisible: (key) => canvasGuideController.isVisible(key),
+  isGuideVisible: (key) => canvasFeedback.isGuideVisible(key),
   checkAppUpdate: () => void appUpdateController.checkNow(),
   restoreAfterReconnect: () => void comicStudioFeature.restoreAfterReconnect(),
   toast: (message, type) => showToast(message, type),
 });
 function showCanvasModeNotice(title: string, detail: string) {
-  showCanvasGuide({
-    key: "canvas-mode",
-    title,
-    detail,
-    tone: "online",
-    priority: 20,
-    duration: 2100,
-  });
+  canvasFeedback.showModeNotice(title, detail);
 }
 accountTools = new AccountToolsFeature({
   getUser: () => authWorkspace.user,
