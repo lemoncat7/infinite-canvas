@@ -8,7 +8,14 @@ export class PromptAgentLifecycleController {
     clearContext: () => void;
     setSelecting: (value: boolean) => void;
     draw: () => void;
+    disperseDirect: () => void;
+    position: () => void;
   }) {}
+
+  bindWindow() {
+    window.addEventListener("contextmenu", this.handleContextMenu, true);
+    window.addEventListener("resize", this.handleResize);
+  }
 
   close() {
     this.options.cancelFormation();
@@ -25,4 +32,16 @@ export class PromptAgentLifecycleController {
   cancelRequest() {
     this.options.cancelRequest();
   }
+
+  private handleContextMenu = (event: MouseEvent) => {
+    if (!this.options.panel.classList.contains("open")) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    this.options.cancelRequest();
+    this.options.disperseDirect();
+  };
+
+  private handleResize = () => {
+    if (this.options.panel.classList.contains("open")) this.options.position();
+  };
 }
