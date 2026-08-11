@@ -8,7 +8,6 @@ import type { GenerationCapabilities, Point } from "../nodes/node-types";
 import { normalizePromptText } from "../nodes/prompt-text";
 import { CanvasNodeRuntimeFeature } from "../nodes/canvas-node-runtime-feature";
 import { TtsFeature } from "../services/tts-feature";
-import { apiFetch } from "../services/api";
 import {
   createCanvasGenerationRuntime,
   type CanvasGenerationRuntime,
@@ -32,9 +31,9 @@ import type { AuthUser } from "../ui/user-menu-controller";
 import { CanvasWorkspaceContentRuntime } from "../ui/canvas-workspace-content-runtime";
 import { CanvasNodePresentationRuntime } from "../nodes/canvas-node-presentation-runtime";
 import { createDefaultGenerationCapabilities } from "./state";
-import { WorkspaceRuntimeFeature } from "./workspace-runtime-feature";
 import { RuntimeFoundation } from "./runtime-foundation";
 import { AccountRuntimeComposition } from "./account-runtime-composition";
+import { createWorkspaceShell, type WorkspaceShell } from "./workspace-shell-composition";
 import { screenToWorld, worldToScreen } from "../canvas/camera-controller";
 
 let renderingRuntime: CanvasRenderingRuntimeFeature;
@@ -58,6 +57,7 @@ const {
 let canvasPersistence: CanvasPersistenceRuntimeFeature;
 const canvasNodeIds = foundation.nodeIds;
 let controlsRuntime: CanvasControlsRuntime;
+let workspaceRuntime: WorkspaceShell;
 const clientLog = new RuntimeDiagnosticsFeature().log;
 const canvasTasks = new CanvasTaskFeature<AuthUser>({
   nodes,
@@ -349,10 +349,6 @@ nodeRuntime = new CanvasNodeRuntimeFeature({
   hideGuide: hideCanvasGuide,
   undo: () => canvasHistory.undo(),
 });
-function closeNodeInfo() {
-  nodeRuntime.editor.closeInfo();
-}
-
 function updateEditor() {
   nodeRuntime.editor.update();
 }
@@ -437,7 +433,6 @@ controlsRuntime = new CanvasControlsRuntime({
   save: scheduleSave,
   toast: (message, tone, detail) => showToast(message, tone, detail),
 });
-const quickNodeMenu = controlsRuntime.quickMenu;
 contentRuntime = new CanvasWorkspaceContentRuntime({
   foundation,
   rendering: renderingRuntime,
@@ -463,60 +458,17 @@ contentRuntime = new CanvasWorkspaceContentRuntime({
   registerWorkspaceMenu: (close) => topbarMenus.register("workspace", close),
   toast: (message, tone, detail) => showToast(message, tone, detail),
 });
-function refreshLocalImageAvailabilityUI() {
-  /* 本地 Provider 暂不在模型列表展示 */
-}
 function loadGenerationCapabilities(redraw = false): Promise<void> {
   return workspaceRuntime.loadCapabilities(redraw);
 }
-const workspaceRuntime: WorkspaceRuntimeFeature<AuthUser> = new WorkspaceRuntimeFeature<AuthUser>({
-  capabilities: {
-    current: () => generationCapabilities,
-    apply: (capabilities) => { generationCapabilities = capabilities; },
-    availabilityChanged: () => {
-      refreshLocalImageAvailabilityUI();
-      draw();
-    },
-  },
-  bootstrap: {
-    apiFetch,
-    setUser: (user) => authWorkspace.setUser(user),
-    user: () => authWorkspace.user,
-    setReady: () => authWorkspace.markReady(),
-    renderUser: () => authWorkspace.renderUser(),
-    touchSession: () => authWorkspace.touch(),
-    loadCapabilities: () => Promise.resolve(),
-    synchronizeCanvas: () => authWorkspace.synchronize(true),
-    loadAssets: () => contentRuntime.assets.load(false),
-    status: (message, visible) => authWorkspace.status(message, visible),
-    randomizeTheme: authWorkspace.randomizeTheme,
-    applyRoute: () => authWorkspace.applyRoute(),
-    notifyError: (message) => showToast(message, "error"),
-  },
-  overlay: {
-    quickMenu: quickNodeMenu,
-    closeQuickMenu: () => controlsRuntime.closeQuickMenu(),
-    closeAssetContextIfOutside: (target) => contentRuntime.assets.closeContextIfOutside(target),
-  },
-  keyboard: {
-    closeQuickMenu: () => {
-      if (!quickNodeMenu.classList.contains("open")) return false;
-      controlsRuntime.closeQuickMenu();
-      return true;
-    },
-    closeNodeInfo: () => {
-      if (!document.querySelector<HTMLElement>("#node-info-modal")!.classList.contains("open")) return false;
-      closeNodeInfo();
-      return true;
-    },
-    closeAssetPreview: () => {
-      if (!contentRuntime.assets.isPreviewOpen) return false;
-      contentRuntime.assets.closePreview();
-      return true;
-    },
-    undo: () => { void canvasHistory.undo(); },
-    redo: () => { void canvasHistory.redo(); },
-    deleteSelected: () => { void nodeRuntime.lifecycle.deleteSelected(); },
-  },
+workspaceRuntime = createWorkspaceShell({
+  account: accountRuntime,
+  content: contentRuntime,
+  controls: controlsRuntime,
+  nodeRuntime,
+  rendering: renderingRuntime,
+  history: canvasHistory,
+  capabilities: () => generationCapabilities,
+  applyCapabilities: (capabilities) => { generationCapabilities = capabilities; },
 });
 workspaceRuntime.start(resize, updateEditor);
