@@ -118,6 +118,10 @@ import {
 } from "../ui/notification-center";
 import { FeedbackController } from "../ui/feedback-controller";
 import { CreditLabController } from "../ui/credit-lab-controller";
+import {
+  CustomApiController,
+  type CustomApiModel,
+} from "../ui/custom-api-controller";
 import { ComicSidePanelController } from "../ui/comic-side-panel";
 import { ComicStudioView } from "../ui/comic-studio";
 import { ComicLabelController } from "../ui/comic-labels";
@@ -1792,15 +1796,6 @@ const homeGallery = document.querySelector<HTMLElement>("#home-gallery")!;
 const homeLoginModal =
   document.querySelector<HTMLElement>("#home-login-modal")!;
 const homePreview = document.querySelector<HTMLElement>("#home-preview")!;
-type CustomApiModel = {
-  id: string;
-  kind: "image" | "video";
-  name: string;
-  model: string;
-  baseUrl: string;
-  hasKey: boolean;
-  hasProxy: boolean;
-};
 let authUser: AuthUser | null = null;
 let customApiModels: CustomApiModel[] = [];
 let authReady = false;
@@ -2308,97 +2303,19 @@ function refreshNodeModelMenus() {
     .forEach((element) => element.remove());
   draw();
 }
-async function loadCustomApiModels() {
-  const response = await apiFetch("/api/user-api-models");
-  if (response.ok) {
-    customApiModels = (await response.json()) as CustomApiModel[];
-    renderCustomApiModels();
-    refreshNodeModelMenus();
-  }
-}
-function renderCustomApiModels() {
-  customApiList.innerHTML = customApiModels.length
-    ? customApiModels
-        .map(
-          (item) =>
-            `<article class="custom-api-entry" data-custom-id="${item.id}"><b>${escapeHtml(item.name)}</b><small>${item.kind === "image" ? "图像" : "视频"} · ${escapeHtml(item.model)} · ${escapeHtml(item.baseUrl)}</small><button type="button">删除</button></article>`,
-        )
-        .join("")
-    : '<article class="custom-api-entry"><b>还没有自定义模型</b><small>添加后会出现在对应节点的模型列表中</small></article>';
-  customApiList
-    .querySelectorAll<HTMLButtonElement>("[data-custom-id] button")
-    .forEach((button) =>
-      button.addEventListener("click", async () => {
-        const id =
-          button.closest<HTMLElement>("[data-custom-id]")!.dataset.customId!;
-        if (
-          (await apiFetch(`/api/user-api-models/${id}`, { method: "DELETE" })).ok
-        ) {
-          customApiModels = customApiModels.filter((item) => item.id !== id);
-          renderCustomApiModels();
-          refreshNodeModelMenus();
-        }
-      }),
-    );
-}
-document
-  .querySelector<HTMLButtonElement>("#open-custom-api")!
-  .addEventListener("click", (event) => {
-    const button = event.currentTarget as HTMLButtonElement;
-    if (button.disabled) return;
-    workspaceUserMenu.classList.remove("open");
-    customApiModal.classList.add("open");
-    void loadCustomApiModels();
-  });
-customApiModal
-  .querySelector("[data-custom-close]")!
-  .addEventListener("click", () => customApiModal.classList.remove("open"));
-customApiModal.addEventListener("pointerdown", (event) => {
-  if (event.target === customApiModal) customApiModal.classList.remove("open");
+const customApiController = new CustomApiController({
+  modal: customApiModal,
+  form: customApiForm,
+  list: customApiList,
+  openButton: document.querySelector<HTMLButtonElement>("#open-custom-api")!,
+  getModels: () => customApiModels,
+  setModels: (models) => {
+    customApiModels = models;
+  },
+  closeUserMenu: () => userMenuController.close(),
+  refreshNodeModels: refreshNodeModelMenus,
 });
-document
-  .querySelector("#custom-api-test")!
-  .addEventListener("click", async () => {
-    const data = new FormData(customApiForm),
-      output = customApiForm.querySelector<HTMLOutputElement>("output")!;
-    output.textContent = "正在测试连接…";
-    const response = await apiFetch("/api/user-api-models/test", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        baseUrl: data.get("baseUrl"),
-        apiKey: data.get("apiKey"),
-      }),
-    });
-    const result = (await response.json().catch(() => ({}))) as {
-      error?: string;
-    };
-    output.textContent = response.ok
-      ? "连接成功"
-      : `连接失败：${result.error || "未知错误"}`;
-  });
-customApiForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const data = Object.fromEntries(new FormData(customApiForm)),
-    output = customApiForm.querySelector<HTMLOutputElement>("output")!;
-  const response = await apiFetch("/api/user-api-models", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(data),
-  });
-  const result = (await response.json().catch(() => ({}))) as CustomApiModel & {
-    error?: string;
-  };
-  if (!response.ok) {
-    output.textContent = result.error || "添加失败";
-    return;
-  }
-  customApiModels.push(result);
-  customApiForm.reset();
-  output.textContent = "已添加，可在模型列表中选择";
-  renderCustomApiModels();
-  refreshNodeModelMenus();
-});
+const loadCustomApiModels = () => customApiController.load();
 window.addEventListener("hashchange", applyAppRoute);
 applyAppRoute();
 
