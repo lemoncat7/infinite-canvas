@@ -1,6 +1,7 @@
 import "../style.css";
 import { CanvasPerformanceMonitor } from "../canvas/performance-monitor";
 import { CanvasPaintCoordinator } from "../canvas/canvas-paint-coordinator";
+import { CanvasSnapshotController } from "../canvas/canvas-snapshot-controller";
 import { CanvasSpatialIndex } from "../canvas/spatial-index";
 import { CanvasGeometryController } from "../canvas/canvas-geometry-controller";
 import { ConnectionAutoPanController } from "../canvas/connection-auto-pan-controller";
@@ -254,39 +255,13 @@ function captureCanvasSnapshot(
   version?: number,
   updatedAt?: string,
 ): CanvasSyncSnapshot {
-  return {
-    nodes: structuredClone(nodes),
-    links: structuredClone(links),
-    camera: { ...camera },
-    version: version ?? canvasSaveCoordinator.serverVersion,
-    updatedAt: updatedAt ?? canvasSaveCoordinator.serverUpdatedAt,
-  };
+  return canvasSnapshots.capture(version, updatedAt);
 }
 function applySynchronizedCanvas(
   snapshot: CanvasSyncSnapshot,
   preserveSelection = true,
 ) {
-  const selected = preserveSelection ? selection.selectedId : 0,
-    currentNodes = new Map(nodes.map((node) => [String(node.id), node])),
-    mergedNodes = snapshot.nodes.map((source) => {
-      const current = currentNodes.get(String(source.id));
-      if (!current) return structuredClone(source);
-      const mutable = current as unknown as Record<string, unknown>;
-      for (const key of Object.keys(mutable))
-        if (!(key in source)) delete mutable[key];
-      Object.assign(current, structuredClone(source));
-      return current;
-    });
-  nodes.splice(0, nodes.length, ...mergedNodes);
-  links.splice(0, links.length, ...structuredClone(snapshot.links));
-  Object.assign(camera, snapshot.camera);
-  cameraViewport.syncTarget();
-  canvasNodeIds.ensureAtLeast(
-    nodes.length ? Math.max(...nodes.map((node) => node.id)) + 1 : 1,
-  );
-  selection.selectedId = nodes.some((node) => node.id === selected) ? selected : 0;
-  updateEditor();
-  draw();
+  canvasSnapshots.apply(snapshot, preserveSelection);
 }
 async function reserveCanvasNodeIds(projectId = currentProjectId) {
   return canvasNodeIds.reserve(projectId);
@@ -1453,6 +1428,20 @@ function setSaveState(
   saveState.dataset.state = state;
   saveState.textContent = label;
 }
+
+const canvasSnapshots = new CanvasSnapshotController({
+  nodes,
+  links,
+  camera,
+  selectedId: () => selection.selectedId,
+  setSelectedId: (id) => { selection.selectedId = id; },
+  serverVersion: () => canvasSaveCoordinator.serverVersion,
+  serverUpdatedAt: () => canvasSaveCoordinator.serverUpdatedAt,
+  syncCameraTarget: () => cameraViewport.syncTarget(),
+  ensureNodeIdAtLeast: (value) => canvasNodeIds.ensureAtLeast(value),
+  updateEditor,
+  draw,
+});
 
 const canvasSaveCoordinator: CanvasSaveCoordinator = new CanvasSaveCoordinator({
   clientId: canvasSyncClientId,
