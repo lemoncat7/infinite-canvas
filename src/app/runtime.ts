@@ -6,7 +6,6 @@ import { CanvasConnectionFeature } from "../canvas/canvas-connection-feature";
 import { CanvasInputFeature } from "../canvas/canvas-input-feature";
 import { CanvasBatchFeature } from "../canvas/canvas-batch-feature";
 import { CanvasHistoryFeature } from "../canvas/canvas-history-feature";
-import { CanvasNodeIdAllocator } from "../services/canvas-node-id-allocator";
 import { CanvasMediaFeature } from "../canvas/canvas-media-feature";
 import type {
   FlowLink,
@@ -62,7 +61,9 @@ let generationRuntime: CanvasGenerationRuntimeFeature;
 let nodeEditorFeature: CanvasNodeEditorFeature;
 let nodeLifecycleFeature: CanvasNodeLifecycleFeature;
 let assetRuntime: WorkspaceAssetsRuntimeFeature;
-const foundation = new RuntimeFoundation();
+const foundation = new RuntimeFoundation(() =>
+  showToast("正在扩展节点编号空间，请稍后重试", "warning"),
+);
 const {
   canvas, nodeViewport, nodeLayer, zoomSlider, zoomPercent, nodeCount,
   titleInput, promptInput, modelInput, saveState, resetButton, jobLabel,
@@ -74,24 +75,7 @@ const {
 } = foundation;
 let connectionFeature: CanvasConnectionFeature;
 let canvasPersistence: CanvasPersistenceFeature;
-let currentProjectId = foundation.projectId;
-const canvasNodeIds = new CanvasNodeIdAllocator({
-  projectId: () => currentProjectId,
-  notifyExhausted: () => showToast("正在扩展节点编号空间，请稍后重试", "warning"),
-});
-const canvasSyncClientId = (() => {
-  const existing = sessionStorage.getItem("flow-canvas-client-id");
-  if (existing) return existing;
-  const id = `client_${crypto.randomUUID().replaceAll("-", "")}`;
-  sessionStorage.setItem("flow-canvas-client-id", id);
-  return id;
-})();
-async function reserveCanvasNodeIds(projectId = currentProjectId) {
-  return canvasNodeIds.reserve(projectId);
-}
-function allocateCanvasNodeId() {
-  return canvasNodeIds.allocate();
-}
+const canvasNodeIds = foundation.nodeIds;
 let backgroundMode = foundation.backgroundMode;
 let colorTheme = foundation.colorTheme;
 const clientLog = new RuntimeDiagnosticsFeature().log;
@@ -101,7 +85,7 @@ const canvasTasks = new CanvasTaskFeature<AuthUser>({
   resetButton,
   canGenerate: (node) => nodeEditorFeature.canGenerate(node),
   modelName: modelDisplayName,
-  projectId: () => currentProjectId,
+  projectId: () => foundation.projectId,
   cancelPoll: (jobId) => generationRuntime.cancel(jobId),
   getUser: () => authWorkspace.user,
   setUser: (user) => authWorkspace.setUser(user),
@@ -130,7 +114,7 @@ topbarMenus.register("presence", () =>
 const canvasHistory = new CanvasHistoryFeature({
   nodes,
   links,
-  getProjectId: () => currentProjectId,
+  getProjectId: () => foundation.projectId,
   getNextId: () => canvasNodeIds.nextId,
   setNextId: (value) => { canvasNodeIds.nextId = value; },
   getSelectedId: () => selection.selectedId,
@@ -175,8 +159,8 @@ let creationSuite: CanvasCreationSuiteFeature;
 const ttsFeature = new TtsFeature({
   nodes,
   links,
-  getProjectId: () => currentProjectId,
-  allocateNodeId: allocateCanvasNodeId,
+  getProjectId: () => foundation.projectId,
+  allocateNodeId: () => canvasNodeIds.allocate(),
   invalidateProviders: () => {
     nodes
       .filter((node) => node.kind === "voice")
@@ -372,8 +356,8 @@ const accountSession = new AccountSessionFeature({
   auth: {
     nodes,
     links,
-    getProjectId: () => currentProjectId,
-    setProjectId: (id) => { currentProjectId = id; },
+    getProjectId: () => foundation.projectId,
+    setProjectId: (id) => { foundation.projectId = id; },
     getLoadedProjectId: () => canvasPersistence.loadedProjectId,
     isSaveBlocked: () => canvasPersistence.blocked,
     getServerVersion: () => canvasPersistence.serverVersion,
@@ -403,7 +387,7 @@ const accountSession = new AccountSessionFeature({
     toast: (message, type) => showToast(message, type),
   },
   account: {
-    getProjectId: () => currentProjectId,
+    getProjectId: () => foundation.projectId,
     refreshNodeModels: refreshNodeModelMenus,
     toast: (message, type) => showToast(message, type),
   },
@@ -523,7 +507,7 @@ function resize() {
 nodeLifecycleFeature = new CanvasNodeLifecycleFeature({
   nodes,
   links,
-  allocateId: allocateCanvasNodeId,
+  allocateId: () => canvasNodeIds.allocate(),
   capabilities: () => generationCapabilities,
   center: () => world({ x: innerWidth / 2, y: innerHeight / 2 }),
   selectedId: () => selection.selectedId,
@@ -610,12 +594,12 @@ function setSaveState(
 }
 
 canvasPersistence = new CanvasPersistenceFeature({
-  clientId: canvasSyncClientId,
+  clientId: foundation.syncClientId,
   nodes,
   links,
   camera,
   authenticated: () => Boolean(authWorkspace.user),
-  getProjectId: () => currentProjectId,
+  getProjectId: () => foundation.projectId,
   getSelectedId: () => selection.selectedId,
   setSelectedId: (id) => { selection.selectedId = id; },
   normalizePrompt: normalizePromptText,
@@ -630,7 +614,7 @@ canvasPersistence = new CanvasPersistenceFeature({
   restoreLease: (nextId, end) => canvasNodeIds.restore(nextId, end),
   resetLease: (value) => canvasNodeIds.reset(value),
   needsLease: () => canvasNodeIds.needsLease(),
-  reserveIds: (projectId) => reserveCanvasNodeIds(projectId),
+  reserveIds: (projectId) => canvasNodeIds.reserve(projectId),
   setBootStatus: (message) => authWorkspace.status(message),
   hideBootStatus: (version, delay) => authWorkspace.hideStatus(version, delay),
   hideConflictGuide: () => hideCanvasGuide("canvas-save-conflict"),
@@ -667,8 +651,8 @@ generationRuntime = new CanvasGenerationRuntimeFeature({
     selectedNode: () => nodeEditorFeature.selected(),
     blockedReason: (node) => nodeEditorFeature.blockedReason(node),
     normalizePrompt: normalizePromptText,
-    getProjectId: () => currentProjectId,
-    allocateNodeId: allocateCanvasNodeId,
+    getProjectId: () => foundation.projectId,
+    allocateNodeId: () => canvasNodeIds.allocate(),
     clearSelection: () => {
       selection.selectedId = 0;
       updateEditor();
@@ -781,9 +765,9 @@ creationSuite = new CanvasCreationSuiteFeature({
   },
   comic: {
     nodes,
-    getProjectId: () => currentProjectId,
+    getProjectId: () => foundation.projectId,
     getUserId: () => authWorkspace.user?.id,
-    hasAuthenticatedContext: () => Boolean(authWorkspace.user && currentProjectId),
+    hasAuthenticatedContext: () => Boolean(authWorkspace.user && foundation.projectId),
     ensureProject: () => authWorkspace.ensureCurrentProject(),
     isMultiSelect: () => selection.multiSelectMode,
     exitMultiSelect: () => marqueeController.exit(),
@@ -807,8 +791,8 @@ creationSuite = new CanvasCreationSuiteFeature({
 });
 assetRuntime = new WorkspaceAssetsRuntimeFeature({
   nodes,
-  getProjectId: () => currentProjectId,
-  setProjectId: (id) => { currentProjectId = id; },
+  getProjectId: () => foundation.projectId,
+  setProjectId: (id) => { foundation.projectId = id; },
   getLoadedProjectId: () => canvasPersistence.loadedProjectId,
   center: () => world({ x: innerWidth / 2, y: innerHeight / 2 }),
   addMedia: addMediaNode,

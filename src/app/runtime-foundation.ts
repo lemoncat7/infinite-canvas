@@ -4,6 +4,7 @@ import { CanvasSelectionController } from "../canvas/selection-controller";
 import { CanvasStore } from "../canvas/store";
 import type { FlowLink, FlowNode, Point } from "../nodes/node-types";
 import { PromptNodeController } from "../nodes/prompt-node";
+import { CanvasNodeIdAllocator } from "../services/canvas-node-id-allocator";
 
 function requiredElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -42,13 +43,23 @@ export class RuntimeFoundation {
   videoReferenceSwapSelection: { videoId: number; sourceId: number } | null = null;
   contextPosition: Point = { x: 0, y: 0 };
   projectId = localStorage.getItem("flow-project-id") ?? "default";
+  readonly nodeIds: CanvasNodeIdAllocator;
+  readonly syncClientId: string;
   backgroundMode: "dots" | "lines" | "blank" = "lines";
   colorTheme: "light" | "dark" =
     localStorage.getItem("flow-theme") === "light" ? "light" : "dark";
 
-  constructor() {
+  constructor(notifyNodeIdExhausted: () => void) {
     requiredElement<HTMLElement>(".brand").append(this.dom.saveState);
     document.body.dataset.theme = this.colorTheme;
+    this.nodeIds = new CanvasNodeIdAllocator({
+      projectId: () => this.projectId,
+      notifyExhausted: notifyNodeIdExhausted,
+    });
+    const existingClientId = sessionStorage.getItem("flow-canvas-client-id");
+    this.syncClientId = existingClientId ?? `client_${crypto.randomUUID().replaceAll("-", "")}`;
+    if (!existingClientId)
+      sessionStorage.setItem("flow-canvas-client-id", this.syncClientId);
   }
 }
 
