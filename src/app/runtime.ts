@@ -136,6 +136,7 @@ import { ComicStudioView } from "../ui/comic-studio";
 import { ComicSessionRecoveryView } from "../ui/comic-session-recovery";
 import { ComicDialogueController } from "../ui/comic-dialogue-controller";
 import { ComicNewSessionController } from "../ui/comic-new-session-controller";
+import { ComicStudioInteractionController } from "../ui/comic-studio-interaction-controller";
 import { ComicPlanController } from "../ui/comic-plan-controller";
 import { ComicOutputController } from "../ui/comic-output-controller";
 import { ComicLabelController } from "../ui/comic-labels";
@@ -2458,9 +2459,6 @@ function applyComicToCanvas() {
 function saveComicAsLabel(copy = false) {
   comicOutputController.saveAsLabel(copy);
 }
-comicStudio
-  .querySelector("[data-comic-close]")!
-  .addEventListener("click", closeComicStudio);
 const comicNewSession = new ComicNewSessionController({
   studio: comicStudio,
   state: comicState,
@@ -2469,81 +2467,21 @@ const comicNewSession = new ComicNewSessionController({
   renderLabelState: renderComicLabelState,
   notify: (message, tone) => showToast(message, tone),
 });
-comicStudio.querySelector("[data-comic-new]")!.addEventListener("click", () =>
-  comicNewSession.start(),
-);
-const comicMessage = comicStudio.querySelector<HTMLTextAreaElement>(
-  "[data-comic-message]",
-)!;
-function sendComicMessage() {
-  if (comicState.submitting) return;
-  const message = comicMessage.value.trim();
-  if (!message) return;
-  comicMessage.value = "";
-  void requestComicDialogue(message);
-}
-comicStudio
-  .querySelector("[data-comic-send]")!
-  .addEventListener("click", sendComicMessage);
-comicBriefPanel
-  .querySelector("[data-comic-confirm]")!
-  .addEventListener("click", () => void requestComicPlan());
-comicMessage.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
-    event.preventDefault();
-    if (!comicState.submitting) sendComicMessage();
-  }
-});
-comicStudio
-  .querySelector("[data-comic-canvas]")!
-  .addEventListener("click", applyComicToCanvas);
-comicStudio
-  .querySelector("[data-comic-label-picker]")!
-  .addEventListener("click", (event) => {
-    event.stopPropagation();
-    const menu = comicStudio.querySelector<HTMLElement>(
-      "[data-comic-label-menu]",
-    )!;
-    if (menu.classList.contains("open")) {
-      menu.classList.remove("open");
-      return;
-    }
-    showComicMobilePanel(null);
-    renderComicLabelMenu();
-    menu.classList.add("open");
-  });
-comicStudio
-  .querySelector("[data-comic-label]")!
-  .addEventListener("click", () => saveComicAsLabel(false));
-comicStudio
-  .querySelector("[data-comic-label-copy]")!
-  .addEventListener("click", () => saveComicAsLabel(true));
-comicStudio.addEventListener("click", (event) => {
-  if (!(event.target as HTMLElement).closest(".comic-label-control"))
-    comicStudio
-      .querySelector("[data-comic-label-menu]")
-      ?.classList.remove("open");
-});
-document.addEventListener(
-  "pointerdown",
-  (event) => {
-    if (innerWidth > 780) return;
-    const target = event.target as Node,
-      scheme = comicHeaderNav.querySelector<HTMLElement>("[data-comic-scheme]"),
-      labelControl = comicStudio.querySelector<HTMLElement>(
-        ".comic-label-control",
-      ),
-      insideSchemePanel =
-        comicBriefPanel.contains(target) || comicPlanSidePanel.contains(target);
-    if (!insideSchemePanel && !scheme?.contains(target))
-      showComicMobilePanel(null);
-    if (!labelControl?.contains(target))
-      comicStudio
-        .querySelector<HTMLElement>("[data-comic-label-menu]")
-        ?.classList.remove("open");
-  },
-  true,
-);
+new ComicStudioInteractionController({
+  studio: comicStudio,
+  briefPanel: comicBriefPanel,
+  planPanel: comicPlanSidePanel,
+  headerNav: comicHeaderNav,
+  submitting: () => comicState.submitting,
+  close: closeComicStudio,
+  newSession: () => comicNewSession.start(),
+  send: (message) => { void requestComicDialogue(message); },
+  requestPlan: () => { void requestComicPlan(); },
+  applyCanvas: applyComicToCanvas,
+  saveLabel: saveComicAsLabel,
+  closeMobilePanel: () => showComicMobilePanel(null),
+  renderLabelMenu: renderComicLabelMenu,
+}).bind();
 const promptAgentApplication = new PromptAgentApplicationController({
   nodes,
   links,
