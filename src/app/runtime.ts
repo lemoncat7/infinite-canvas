@@ -89,6 +89,7 @@ import { WorkspaceKeyboardController } from "../ui/workspace-keyboard-controller
 import { TaskMonitorController } from "../ui/task-monitor-controller";
 import { TopbarMenuCoordinator } from "../ui/topbar-menu-coordinator";
 import { QuickNodeMenuController } from "../ui/quick-node-menu-controller";
+import { HomeSceneController } from "../ui/home-scene-controller";
 import {
   createProjectDialog,
 } from "../ui/dialogs/project-dialog";
@@ -1793,116 +1794,7 @@ const showcaseObserver = new IntersectionObserver(
   { threshold: 0.12 },
 );
 showcaseObserver.observe(showcaseSection);
-let homeSceneProgress = 0,
-  homeSceneTarget = 0,
-  homeSceneFrame = 0,
-  homeSceneStart = 0,
-  homeSceneStartedAt = 0,
-  homeTouchY = 0,
-  homeWheelDelta = 0,
-  homeWheelResetTimer = 0,
-  homeWheelLockedUntil = 0;
-function setHomeSceneTarget(value: number) {
-  const next = Math.max(0, Math.min(3, Math.round(value)));
-  if (next === homeSceneTarget && homeSceneFrame) return;
-  homeSceneStart = homeSceneProgress;
-  homeSceneTarget = next;
-  homeSceneStartedAt = performance.now();
-  if (!homeSceneFrame) homeSceneFrame = requestAnimationFrame(animateHomeScene);
-}
-function animateHomeScene(now: number) {
-  const duration = 700;
-  const elapsed = Math.min(
-    1,
-    Math.max(0, (now - homeSceneStartedAt) / duration),
-  );
-  const eased = 1 - Math.pow(1 - elapsed, 3);
-  homeSceneProgress =
-    homeSceneStart + (homeSceneTarget - homeSceneStart) * eased;
-  if (elapsed >= 1) homeSceneProgress = homeSceneTarget;
-  homePage.style.setProperty("--home-progress", homeSceneProgress.toFixed(4));
-  homePage
-    .querySelectorAll<HTMLElement>(".home-scene")
-    .forEach((element, index) => {
-      const distance = index - homeSceneProgress;
-      element.style.setProperty("--scene-distance", distance.toFixed(4));
-      element.style.setProperty(
-        "--scene-presence",
-        Math.max(0, 1 - Math.abs(distance)).toFixed(4),
-      );
-    });
-  const scene = Math.max(0, Math.min(3, Math.round(homeSceneProgress)));
-  homePage.dataset.scene = String(scene);
-  homePage
-    .querySelectorAll<HTMLElement>("[data-home-scene]")
-    .forEach((button) =>
-      button.classList.toggle(
-        "active",
-        Number(button.dataset.homeScene) === scene,
-      ),
-    );
-  if (elapsed < 1) homeSceneFrame = requestAnimationFrame(animateHomeScene);
-  else homeSceneFrame = 0;
-}
-homePage.addEventListener(
-  "wheel",
-  (event) => {
-    if (
-      innerWidth <= 800 ||
-      homeLoginModal.classList.contains("open") ||
-      homePreview.classList.contains("open") ||
-      (event.target as HTMLElement).closest(".home-gallery-card")
-    )
-      return;
-    event.preventDefault();
-    if (performance.now() < homeWheelLockedUntil) return;
-    homeWheelDelta += event.deltaY;
-    window.clearTimeout(homeWheelResetTimer);
-    homeWheelResetTimer = window.setTimeout(() => {
-      homeWheelDelta = 0;
-    }, 180);
-    if (Math.abs(homeWheelDelta) < 54) return;
-    setHomeSceneTarget(Math.round(homeSceneTarget) + Math.sign(homeWheelDelta));
-    homeWheelDelta = 0;
-    homeWheelLockedUntil = performance.now() + 760;
-  },
-  { passive: false },
-);
-homePage
-  .querySelectorAll<HTMLElement>("[data-home-scene]")
-  .forEach((button) =>
-    button.addEventListener("click", () =>
-      setHomeSceneTarget(Number(button.dataset.homeScene)),
-    ),
-  );
-homePage
-  .querySelectorAll<HTMLAnchorElement>('a[href="#showcase"]')
-  .forEach((link) =>
-    link.addEventListener("click", (event) => {
-      if (innerWidth <= 800) return;
-      event.preventDefault();
-      setHomeSceneTarget(3);
-    }),
-  );
-homePage.addEventListener(
-  "touchstart",
-  (event) => {
-    homeTouchY = event.touches[0]?.clientY ?? 0;
-  },
-  { passive: true },
-);
-homePage.addEventListener(
-  "touchend",
-  (event) => {
-    if (innerWidth <= 800) return;
-    const distance =
-      homeTouchY - (event.changedTouches[0]?.clientY ?? homeTouchY);
-    if (Math.abs(distance) > 45)
-      setHomeSceneTarget(Math.round(homeSceneTarget) + (distance > 0 ? 1 : -1));
-  },
-  { passive: true },
-);
-setHomeSceneTarget(0);
+new HomeSceneController(homePage, homeLoginModal, homePreview);
 homePreview
   .querySelector(":scope > button")!
   .addEventListener("click", closeHomePreview);
