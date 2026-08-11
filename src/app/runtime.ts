@@ -106,7 +106,8 @@ import {
   renderComposerSubmit,
   renderNodeToolbar,
 } from "../ui/node-editor";
-import { filterAssets, formatFileSize } from "../ui/asset-panel";
+import { filterAssets } from "../ui/asset-panel";
+import { AssetLibraryView } from "../ui/asset-library-view";
 import { SquarePanelView } from "../ui/square-panel";
 import { WorkspacePanelController } from "../ui/toolbar";
 import {
@@ -7035,9 +7036,7 @@ let selectedAsset: {
   kind: "image" | "video";
   isPublic: boolean;
 } | null = null;
-let libraryAssets: LibraryAsset[] = [],
-  assetView: "grid" | "list" = "grid",
-  assetPage = 0;
+let libraryAssets: LibraryAsset[] = [];
 const ASSET_PAGE_SIZE = 36;
 const selectedAssetIds = new Set<string>(),
   assetSearch = document.querySelector<HTMLInputElement>("#asset-search")!,
@@ -7113,6 +7112,28 @@ function playLibraryAudio(asset: LibraryAsset) {
 function assetForRenderedItem(item: HTMLElement) {
   return libraryAssets.find((asset) => asset.id === item.dataset.assetId);
 }
+const assetLibraryView = new AssetLibraryView({
+  grid: assetGrid,
+  count: assetCount,
+  pageSize: ASSET_PAGE_SIZE,
+  selectedIds: selectedAssetIds,
+  bulkDelete: document.querySelector<HTMLButtonElement>(
+    "#asset-bulk-delete",
+  )!,
+  bulkDownload: document.querySelector<HTMLButtonElement>(
+    "#asset-bulk-download",
+  )!,
+  isTouchContextBlocked: () => performance.now() < assetTouchContextUntil,
+  onOpen: (asset, kind) => openAssetPreview(asset.url, asset.name, kind),
+  onAudio: playLibraryAudio,
+  onPickImage: (asset) => {
+    const targetId = imageNodeAssetTargetId;
+    imageNodeAssetTargetId = null;
+    if (targetId) attachAssetToImageNode(targetId, asset);
+    closeWorkspacePanels();
+  },
+  onContext: openAssetContextAt,
+});
 assetGrid.addEventListener(
   "pointerdown",
   (event) => {
@@ -7250,7 +7271,7 @@ document
 [assetSearch, assetProjectFilter, assetTypeFilter, assetSort].forEach(
   (control) =>
     control.addEventListener("input", () => {
-      assetPage = 0;
+      assetLibraryView.resetPage();
       renderAssets();
     }),
 );
@@ -7258,7 +7279,9 @@ document
   .querySelectorAll<HTMLButtonElement>("[data-asset-view]")
   .forEach((button) =>
     button.addEventListener("click", () => {
-      assetView = button.dataset.assetView as "grid" | "list";
+      assetLibraryView.setView(
+        button.dataset.assetView as "grid" | "list",
+      );
       document
         .querySelectorAll("[data-asset-view]")
         .forEach((item) => item.classList.toggle("active", item === button));
@@ -7500,88 +7523,11 @@ async function loadAssets(render = true) {
 }
 function renderAssets() {
   const assets = visibleLibraryAssets();
-  const pageCount = Math.max(1, Math.ceil(assets.length / ASSET_PAGE_SIZE));
-  assetPage = Math.min(assetPage, pageCount - 1);
-  const pageAssets = assets.slice(
-    assetPage * ASSET_PAGE_SIZE,
-    (assetPage + 1) * ASSET_PAGE_SIZE,
-  );
-  assetCount.textContent = imageNodeAssetTargetId
-    ? `${assets.length} 张图片 · 点击复用到节点`
-    : `${assets.length} 项${selectedAssetIds.size ? ` · 已选 ${selectedAssetIds.size}` : ""}`;
-  assetGrid.className = `asset-grid ${assetView === "list" ? "is-list" : ""}${imageNodeAssetTargetId ? " is-picking" : ""}`;
-  assetGrid.innerHTML = assets.length
-    ? ""
-    : '<div class="asset-empty"><b>◇</b><span>没有匹配的素材</span><small>尝试调整项目范围、类型或关键词</small></div>';
-  for (const asset of pageAssets) {
-    const item = document.createElement("article"),
-      kind = asset.mimeType.startsWith("video/")
-        ? ("video" as const)
-        : asset.mimeType.startsWith("audio/")
-          ? ("audio" as const)
-          : ("image" as const);
-    item.className = `asset-item${asset.isPublic ? " is-public" : ""}${selectedAssetIds.has(asset.id) ? " selected" : ""}`;
-    item.dataset.assetId = asset.id;
-    item.innerHTML =
-      kind === "audio"
-        ? `<div class="asset-audio-cover"><span>${libraryAudioAssetId === asset.id && !libraryAudio?.paused ? "Ⅱ" : "♪"}</span><small>音频预览</small></div><i class="asset-kind-indicator">AUDIO</i><button class="asset-select" type="button" aria-label="选择资产">${selectedAssetIds.has(asset.id) ? "✓" : ""}</button><footer><strong>${escapeHtml(asset.name)}</strong><small>${escapeHtml(asset.projectName || "当前项目")} · ${formatFileSize(asset.size)}</small></footer>`
-        : `<img src="${asset.thumbnailUrl || mediaThumbnailUrl(asset.url)}" alt="" draggable="false" loading="lazy" decoding="async"><i class="asset-kind-indicator">${kind === "video" ? "▶" : ""}</i><button class="asset-select" type="button" aria-label="选择资产">${selectedAssetIds.has(asset.id) ? "✓" : ""}</button><footer><strong>${escapeHtml(asset.name)}</strong><small>${escapeHtml(asset.projectName || "当前项目")} · ${formatFileSize(asset.size)}</small></footer>`;
-    item.draggable = false;
-    item.title = imageNodeAssetTargetId
-      ? "单击复用到当前图片节点"
-      : "单击查看 · 长按或右击更多操作";
-    item
-      .querySelector<HTMLButtonElement>(".asset-select")!
-      .addEventListener("click", (event) => {
-        event.stopPropagation();
-        if (selectedAssetIds.has(asset.id)) selectedAssetIds.delete(asset.id);
-        else selectedAssetIds.add(asset.id);
-        renderAssets();
-      });
-    item.addEventListener("click", () => {
-      if (performance.now() < assetTouchContextUntil) return;
-      if (kind === "audio") {
-        playLibraryAudio(asset);
-        return;
-      }
-      if (imageNodeAssetTargetId && kind === "image") {
-        const targetId = imageNodeAssetTargetId;
-        imageNodeAssetTargetId = null;
-        attachAssetToImageNode(targetId, asset);
-        closeWorkspacePanels();
-        return;
-      }
-      openAssetPreview(asset.url, asset.name, kind);
-    });
-    item.addEventListener("contextmenu", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (kind === "audio") {
-        playLibraryAudio(asset);
-        return;
-      }
-      openAssetContextAt(asset, event.clientX, event.clientY);
-    });
-    assetGrid.append(item);
-  }
-  if (assets.length > ASSET_PAGE_SIZE) {
-    const pager = document.createElement("nav");
-    pager.className = "asset-pager";
-    pager.innerHTML = `<button type="button" data-asset-page="prev" ${assetPage === 0 ? "disabled" : ""}>上一页</button><span>${assetPage + 1} / ${pageCount}</span><button type="button" data-asset-page="next" ${assetPage >= pageCount - 1 ? "disabled" : ""}>下一页</button>`;
-    pager.querySelectorAll<HTMLButtonElement>("button").forEach((button) =>
-      button.addEventListener("click", () => {
-        assetPage += button.dataset.assetPage === "next" ? 1 : -1;
-        assetGrid.scrollTop = 0;
-        renderAssets();
-      }),
-    );
-    assetGrid.append(pager);
-  }
-  const disabled = selectedAssetIds.size === 0;
-  document.querySelector<HTMLButtonElement>("#asset-bulk-delete")!.disabled =
-    disabled;
-  document.querySelector<HTMLButtonElement>("#asset-bulk-download")!.disabled =
-    disabled;
+  assetLibraryView.render(assets, {
+    picking: Boolean(imageNodeAssetTargetId),
+    playingAudioId:
+      libraryAudio && !libraryAudio.paused ? libraryAudioAssetId : "",
+  });
 }
 const squareGrid = document.querySelector<HTMLElement>("#square-grid")!,
   squareSearch = document.querySelector<HTMLInputElement>("#square-search")!;
