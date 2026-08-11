@@ -40,17 +40,12 @@ import type {
   NodeKind,
   Point,
   PortSide,
-  TtsProviderOption,
-  TtsVoiceOption,
 } from "../nodes/node-types";
 import { createNode, makeNodePublicId } from "../nodes/node-service";
 import { downloadNodeImage as downloadNodeImageFile } from "../nodes/node-download";
 import { PromptNodeController } from "../nodes/prompt-node";
-import {
-  fetchTtsProviders,
-  fetchTtsVoices,
-  synthesizeTts,
-} from "../services/tts";
+import { synthesizeTts } from "../services/tts";
+import { TtsCatalogController } from "../services/tts-catalog";
 import { apiFetch } from "../services/api";
 import {
   hydrateGenerationPrompts,
@@ -174,55 +169,30 @@ function ensurePixiRenderer() {
 
 let generationCapabilities: GenerationCapabilities =
   createDefaultGenerationCapabilities();
-let ttsProviders: TtsProviderOption[] = [];
-const ttsVoicesByProvider = new Map<string, TtsVoiceOption[]>(),
-  ttsVoiceLoads = new Map<string, Promise<void>>();
-let ttsProvidersLoading: Promise<void> | null = null;
+const ttsCatalog = new TtsCatalogController({
+  invalidateProviders: () => {
+    nodes
+      .filter((node) => node.kind === "voice")
+      .forEach((node) => nodeDomStates.delete(node.id));
+    draw();
+  },
+  invalidateVoices: (providerId) => {
+    nodes
+      .filter(
+        (node) =>
+          node.kind === "voice" &&
+          node.voiceSettings?.providerId === providerId,
+      )
+      .forEach((node) => nodeDomStates.delete(node.id));
+    draw();
+  },
+});
 function loadTtsProviders() {
-  if (ttsProviders.length) return Promise.resolve();
-  if (ttsProvidersLoading) return ttsProvidersLoading;
-  ttsProvidersLoading = (async () => {
-    try {
-      const result = await fetchTtsProviders();
-      ttsProviders = Array.isArray(result) ? result : [];
-      nodes
-        .filter((node) => node.kind === "voice")
-        .forEach((node) => nodeDomStates.delete(node.id));
-      draw();
-    } catch {
-      /* 保留本地默认项，重绘时继续检测 */
-    } finally {
-      ttsProvidersLoading = null;
-    }
-  })();
-  return ttsProvidersLoading;
+  return ttsCatalog.loadProviders();
 }
 function loadTtsVoices(providerId = "easyvoice-local") {
-  if (ttsVoicesByProvider.has(providerId)) return Promise.resolve();
-  const pending = ttsVoiceLoads.get(providerId);
-  if (pending) return pending;
-  const task = (async () => {
-    try {
-      const voices = await fetchTtsVoices(providerId);
-      ttsVoicesByProvider.set(providerId, voices);
-      nodes
-        .filter(
-          (node) =>
-            node.kind === "voice" &&
-            node.voiceSettings?.providerId === providerId,
-        )
-        .forEach((node) => nodeDomStates.delete(node.id));
-      draw();
-    } catch {
-      /* 服务恢复或重新选择时可再次读取 */
-    } finally {
-      ttsVoiceLoads.delete(providerId);
-    }
-  })();
-  ttsVoiceLoads.set(providerId, task);
-  return task;
+  return ttsCatalog.loadVoices(providerId);
 }
-
 const canvas = document.querySelector<HTMLElement>("#canvas")!;
 const nodeViewport = document.querySelector<HTMLElement>("#node-viewport")!;
 const nodeLayer = document.querySelector<HTMLElement>("#node-layer")!;
@@ -2815,8 +2785,8 @@ const boundNodeDomSynchronizer = new BoundNodeDomSynchronizer({
   createElement: createDomNode,
   isGenerating: nodeIsActivelyGenerating,
   defaultNodeCopy,
-  getProviders: () => ttsProviders,
-  getVoices: () => ttsVoicesByProvider,
+  getProviders: () => ttsCatalog.providers,
+  getVoices: () => ttsCatalog.voicesByProvider,
   ensureProviders: loadTtsProviders,
   ensureVoices: loadTtsVoices,
   escapeHtml,
