@@ -1,6 +1,7 @@
 import "../style.css";
 import { CanvasPerformanceMonitor } from "../canvas/performance-monitor";
 import { CanvasSpatialIndex } from "../canvas/spatial-index";
+import { CanvasGeometryController } from "../canvas/canvas-geometry-controller";
 import { CanvasStore } from "../canvas/store";
 import {
   applyCanvasOperations,
@@ -1297,19 +1298,16 @@ function orderedTargetLinks(targetId: number) {
     })
     .map((item) => item.link);
 }
-let paintNodeIndex = new Map<number, FlowNode>();
-let paintTargetLinkIndex = new Map<number, FlowLink[]>();
 const canvasSpatialIndex = new CanvasSpatialIndex();
-const linkGeometryCache = new WeakMap<
-  FlowLink,
-  {
-    key: string;
-    a: Point;
-    b: Point;
-    ca: Point;
-    cb: Point;
-  }
->();
+const canvasGeometry = new CanvasGeometryController(
+  nodes,
+  links,
+  camera,
+  canvasSpatialIndex,
+  world,
+  screen,
+  portWorld,
+);
 canvasStore.subscribe((change) => {
   if (change.type === "node-position")
     change.nodeIds.forEach((id) => {
@@ -1319,149 +1317,19 @@ canvasStore.subscribe((change) => {
   else if (change.type === "structure") canvasSpatialIndex.rebuild(nodes);
 });
 function rebuildPaintIndexes() {
-  paintNodeIndex = new Map(nodes.map((node) => [node.id, node]));
-  canvasSpatialIndex.rebuild(nodes);
-  paintTargetLinkIndex = new Map();
-  const grouped = new Map<number, FlowLink[]>(),
-    linkOrder = new Map(links.map((link, index) => [link, index]));
-  for (const link of links) {
-    const targetLinks = grouped.get(link.to);
-    if (targetLinks) targetLinks.push(link);
-    else grouped.set(link.to, [link]);
-  }
-  for (const [targetId, targetLinks] of grouped) {
-    targetLinks.sort((left, right) => {
-      const leftOrder = left.inputOrder ?? Number.MAX_SAFE_INTEGER,
-        rightOrder = right.inputOrder ?? Number.MAX_SAFE_INTEGER;
-      const leftSource = paintNodeIndex.get(left.from),
-        rightSource = paintNodeIndex.get(right.from);
-      return (
-        leftOrder - rightOrder ||
-        (leftSource?.y ?? 0) - (rightSource?.y ?? 0) ||
-        (leftSource?.x ?? 0) - (rightSource?.x ?? 0) ||
-        (linkOrder.get(left) ?? 0) - (linkOrder.get(right) ?? 0)
-      );
-    });
-    paintTargetLinkIndex.set(targetId, targetLinks);
-  }
+  canvasGeometry.rebuild();
 }
 function linkPathGeometry(link: FlowLink) {
-  const from =
-      paintNodeIndex.get(link.from) ??
-      nodes.find((node) => node.id === link.from),
-    to =
-      paintNodeIndex.get(link.to) ?? nodes.find((node) => node.id === link.to);
-  if (!from || !to) return null;
-  const siblings =
-    paintTargetLinkIndex.get(link.to) ?? orderedTargetLinks(link.to);
-  const rank = siblings.indexOf(link),
-    cacheKey = [
-      from.x,
-      from.y,
-      from.width,
-      from.height,
-      to.x,
-      to.y,
-      to.width,
-      to.height,
-      link.fromSide,
-      link.toSide,
-      rank,
-      siblings.length,
-      camera.zoom,
-    ].join(":"),
-    cached = linkGeometryCache.get(link);
-  let relative: { a: Point; b: Point; ca: Point; cb: Point };
-  if (cached?.key === cacheKey) relative = cached;
-  else {
-    const fromPort = portWorld(from, link.fromSide),
-      toPort = portWorld(to, link.toSide),
-      a = { x: fromPort.x * camera.zoom, y: fromPort.y * camera.zoom },
-      b = { x: toPort.x * camera.zoom, y: toPort.y * camera.zoom },
-      curve = Math.max(55, Math.hypot(b.x - a.x, b.y - a.y) * 0.35),
-      ca = controlPoint(a, link.fromSide, curve),
-      cb = controlPoint(b, link.toSide, curve);
-    relative = { a, b, ca, cb };
-    if (rank >= 0 && siblings.length > 1) {
-    // Connections that share a target can otherwise overlap perfectly. Fan their
-    // curves out while keeping the real port position unchanged.
-      const spread =
-        (rank - (siblings.length - 1) / 2) *
-        Math.min(34, 18 + siblings.length * 4) *
-        camera.zoom;
-      relative.ca.y += spread * 0.72;
-      relative.cb.y += spread;
-    }
-    linkGeometryCache.set(link, { key: cacheKey, ...relative });
-  }
-  const offsetX = innerWidth / 2 + camera.x,
-    offsetY = innerHeight / 2 + camera.y,
-    translate = (point: Point) => ({
-      x: point.x + offsetX,
-      y: point.y + offsetY,
-    });
-  return {
-    a: translate(relative.a),
-    b: translate(relative.b),
-    ca: translate(relative.ca),
-    cb: translate(relative.cb),
-  };
+  return canvasGeometry.linkPath(link);
 }
 function canvasInteractionActive() {
   return Boolean(pointer.down || domPointer.drag || interaction.marquee?.active || touchPinch.active);
 }
 function hitNode(sx: number, sy: number) {
-  const p = world({ x: sx, y: sy }),
-    candidates = new Set(
-      canvasSpatialIndex.search({
-        minX: p.x,
-        minY: p.y,
-        maxX: p.x,
-        maxY: p.y,
-      }),
-    );
-  for (let index = nodes.length - 1; index >= 0; index--) {
-    const node = nodes[index];
-    if (!candidates.has(node.id)) continue;
-    if (
-      p.x >= node.x &&
-      p.x <= node.x + node.width &&
-      p.y >= node.y &&
-      p.y <= node.y + node.height
-    )
-      return node;
-  }
-  return undefined;
+  return canvasGeometry.hitNode(sx, sy);
 }
 function hitPort(sx: number, sy: number, radius = 12, excludeNodeId?: number) {
-  const sides: PortSide[] = ["top", "right", "bottom", "left"];
-  const center = world({ x: sx, y: sy }),
-    worldRadius = radius / camera.zoom,
-    candidates = new Set(
-      canvasSpatialIndex.search({
-        minX: center.x - worldRadius,
-        minY: center.y - worldRadius,
-        maxX: center.x + worldRadius,
-        maxY: center.y + worldRadius,
-      }),
-    );
-  let closest: { node: FlowNode; side: PortSide; distance: number } | undefined;
-  for (let index = nodes.length - 1; index >= 0; index--) {
-    const node = nodes[index];
-    if (
-      !candidates.has(node.id) ||
-      node.id === excludeNodeId ||
-      (node.kind === "video" && node.role === "result")
-    )
-      continue;
-    for (const side of sides) {
-      const p = screen(portWorld(node, side)),
-        distance = Math.hypot(sx - p.x, sy - p.y);
-      if (distance <= radius && (!closest || distance < closest.distance))
-        closest = { node, side, distance };
-    }
-  }
-  return closest && { node: closest.node, side: closest.side };
+  return canvasGeometry.hitPort(sx, sy, radius, excludeNodeId);
 }
 function directedLink(
   firstId: number,
@@ -1557,53 +1425,7 @@ function startConnectionAutoPan(sx: number, sy: number) {
   connectionAutoPanFrame = requestAnimationFrame(tick);
 }
 function hitLink(sx: number, sy: number, tolerance = 9) {
-  for (let index = links.length - 1; index >= 0; index--) {
-    const geometry = linkPathGeometry(links[index]);
-    if (!geometry) continue;
-    const { a, b, ca, cb } = geometry;
-    if (
-      sx < Math.min(a.x, b.x, ca.x, cb.x) - tolerance ||
-      sx > Math.max(a.x, b.x, ca.x, cb.x) + tolerance ||
-      sy < Math.min(a.y, b.y, ca.y, cb.y) - tolerance ||
-      sy > Math.max(a.y, b.y, ca.y, cb.y) + tolerance
-    )
-      continue;
-    let previous = a;
-    for (let step = 1; step <= 32; step++) {
-      const t = step / 32,
-        inverse = 1 - t,
-        point = {
-          x:
-            inverse ** 3 * a.x +
-            3 * inverse ** 2 * t * ca.x +
-            3 * inverse * t ** 2 * cb.x +
-            t ** 3 * b.x,
-          y:
-            inverse ** 3 * a.y +
-            3 * inverse ** 2 * t * ca.y +
-            3 * inverse * t ** 2 * cb.y +
-            t ** 3 * b.y,
-        };
-      const length =
-          Math.hypot(point.x - previous.x, point.y - previous.y) || 1,
-        projection = Math.max(
-          0,
-          Math.min(
-            1,
-            ((sx - previous.x) * (point.x - previous.x) +
-              (sy - previous.y) * (point.y - previous.y)) /
-              (length * length),
-          ),
-        ),
-        distance = Math.hypot(
-          sx - (previous.x + projection * (point.x - previous.x)),
-          sy - (previous.y + projection * (point.y - previous.y)),
-        );
-      if (distance <= tolerance) return index;
-      previous = point;
-    }
-  }
-  return -1;
+  return canvasGeometry.hitLink(sx, sy, tolerance);
 }
 function positionCardLayerForFrame() {
   nodeViewport.style.transform = `translate3d(${innerWidth / 2 + camera.x}px, ${innerHeight / 2 + camera.y}px,0) scale(${camera.zoom})`;
@@ -1615,7 +1437,8 @@ function paint() {
   const interacting = canvasInteractionActive(),
     syncUi = drawNeedsDomSync && !interacting;
   if (syncUi) drawNeedsDomSync = false;
-  if (syncUi || paintNodeIndex.size !== nodes.length) rebuildPaintIndexes();
+  if (syncUi || canvasGeometry.nodeIndex.size !== nodes.length)
+    rebuildPaintIndexes();
   positionCardLayerForFrame();
   if (syncUi) {
     syncDomNodes();
@@ -1628,7 +1451,7 @@ function paint() {
     nodeCount.textContent = String(nodes.length);
   }
   const pendingNode = connection.active
-    ? paintNodeIndex.get(connection.active.nodeId) ??
+    ? canvasGeometry.nodeIndex.get(connection.active.nodeId) ??
       nodes.find((node) => node.id === connection.active!.nodeId)
     : undefined;
   pixiRenderer?.render({
