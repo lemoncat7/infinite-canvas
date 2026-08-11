@@ -18,6 +18,10 @@ import { CanvasPointerLifecycle } from "../canvas/canvas-pointer-lifecycle";
 import { TouchPinchController } from "../canvas/touch-pinch-controller";
 import { CameraViewportController } from "../canvas/camera-viewport-controller";
 import { normalizeCanvasDocument } from "../canvas/document-normalizer";
+import {
+  cancelActiveProjectJobs,
+  clearCanvasDocument,
+} from "../canvas/clear-client";
 import { fetchCanvasDocument, submitCanvasChanges } from "../canvas/sync-client";
 import { repairRestoredCanvas } from "../canvas/restoration";
 import { LinkInteractionView } from "../canvas/link-interaction-view";
@@ -6884,18 +6888,10 @@ document.querySelector("#dock-clear")!.addEventListener("click", async () => {
   );
   if (cancelJobs) {
     try {
-      const response = await apiFetch(
-          `/api/projects/${currentProjectId}/jobs/cancel-active`,
-          { method: "POST" },
-        ),
-        result = (await response.json()) as {
-          canceled?: number;
-          error?: string;
-        };
-      if (!response.ok) throw new Error(result.error || "取消任务失败");
+      const canceled = await cancelActiveProjectJobs(currentProjectId);
       showToast(
-        result.canceled
-          ? `已取消 ${result.canceled} 个未完成任务`
+        canceled
+          ? `已取消 ${canceled} 个未完成任务`
           : "当前没有未完成任务",
         "success",
       );
@@ -6912,27 +6908,17 @@ document.querySelector("#dock-clear")!.addEventListener("click", async () => {
   canvasSaveQueued = false;
   canvasSaveAbort?.abort();
   await canvasSavePromise?.catch(() => {});
-  const requestedVersion = canvasServerVersion + 1,
-    response = await apiFetch(`/api/projects/${currentProjectId}/canvas/clear`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ version: requestedVersion, preserveLabels: true }),
-    }),
-    result = (await response.json().catch(() => ({}))) as {
-      version?: number;
-      updatedAt?: string;
-      message?: string;
-      nodes?: FlowNode[];
-      links?: FlowLink[];
-      camera?: typeof camera;
-    };
-  if (
-    !response.ok ||
-    result.version !== requestedVersion ||
-    !Array.isArray(result.nodes) ||
-    !Array.isArray(result.links)
-  ) {
-    showToast(result.message || "清除画布失败，请重新载入后再试", "error");
+  const requestedVersion = canvasServerVersion + 1;
+  let result: Awaited<ReturnType<typeof clearCanvasDocument>>;
+  try {
+    result = await clearCanvasDocument(currentProjectId, requestedVersion);
+  } catch (error) {
+    showToast(
+      error instanceof Error
+        ? error.message
+        : "清除画布失败，请重新载入后再试",
+      "error",
+    );
     await loadCanvas();
     return;
   }
