@@ -55,6 +55,7 @@ import { GenerationSubmitController } from "../nodes/generation-submit-controlle
 import { PendingTaskCancellationController } from "../nodes/pending-task-cancellation-controller";
 import { apiFetch } from "../services/api";
 import { friendlyGenerationError } from "../services/generation-error-presenter";
+import { AppUpdateController } from "../services/app-update-controller";
 import {
   type GenerationJob,
 } from "../services/generation";
@@ -824,24 +825,6 @@ async function copyOriginalPrompt(prompt?: string) {
   }
 }
 
-function appAssetFingerprint(root: Document) {
-  return [
-    ...root.querySelectorAll<HTMLScriptElement | HTMLLinkElement>(
-      'script[type="module"][src],link[rel="stylesheet"][href]',
-    ),
-  ]
-    .map(
-      (element) =>
-        element.getAttribute(
-          element instanceof HTMLScriptElement ? "src" : "href",
-        ) || "",
-    )
-    .filter(Boolean)
-    .sort()
-    .join("|");
-}
-const initialAppAssets = appAssetFingerprint(document);
-let updateNoticeShown = false;
 type CanvasGuideTone = "neutral" | "online" | "offline";
 type CanvasGuideAction = { label: string; primary?: boolean; run: () => void };
 type CanvasGuideMessage = {
@@ -983,54 +966,22 @@ function showCanvasGuide(message: CanvasGuideMessage) {
     );
   return true;
 }
-async function checkForAppUpdate() {
-  if (
-    updateNoticeShown ||
-    !initialAppAssets ||
-    document.visibilityState === "hidden"
-  )
-    return;
-  try {
-    const response = await apiFetch(`/?app-version=${Date.now()}`, {
-      cache: "no-store",
-      headers: { "cache-control": "no-cache" },
-    });
-    if (!response.ok) return;
-    const nextDocument = new DOMParser().parseFromString(
-      await response.text(),
-      "text/html",
-    );
-    const nextAssets = appAssetFingerprint(nextDocument);
-    if (!nextAssets || nextAssets === initialAppAssets) return;
-    updateNoticeShown = showCanvasGuide({
-      key: "app-update",
-      title: "检测到服务器版本更新",
-      detail: "刷新页面后即可使用最新版本。",
-      priority: 80,
-      actions: [
-        { label: "稍后", run: () => hideCanvasGuide("app-update") },
-        { label: "刷新生效", primary: true, run: () => location.reload() },
-      ],
-    });
-  } catch {
-    /* deployment may briefly reset the connection */
-  }
-}
-let backgroundMaintenanceTimer = 0;
-function runBackgroundMaintenance() {
-  if (document.hidden || !authUser) return;
-  void Promise.all([checkForAppUpdate(), loadGenerationCapabilities(true)]);
-}
-window.setTimeout(() => {
-  runBackgroundMaintenance();
-  backgroundMaintenanceTimer = window.setInterval(
-    runBackgroundMaintenance,
-    30_000,
-  );
-}, 20_000);
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") void checkForAppUpdate();
+const appUpdateController = new AppUpdateController({
+  authenticated: () => Boolean(authUser),
+  refreshCapabilities: () => loadGenerationCapabilities(true),
+  showNotice: ({ dismiss, reload }) => showCanvasGuide({
+    key: "app-update",
+    title: "检测到服务器版本更新",
+    detail: "刷新页面后即可使用最新版本。",
+    priority: 80,
+    actions: [
+      { label: "稍后", run: dismiss },
+      { label: "刷新生效", primary: true, run: reload },
+    ],
+  }),
+  hideNotice: () => hideCanvasGuide("app-update"),
 });
+appUpdateController.start();
 
 const homePage = document.querySelector<HTMLElement>("#home-page")!;
 const homeGallery = document.querySelector<HTMLElement>("#home-gallery")!;
@@ -1382,7 +1333,7 @@ const notificationStreamController = new NotificationStreamController({
   onNotifications: () => {
     void notificationCenter.load();
   },
-  onServerVersionChanged: () => void checkForAppUpdate(),
+  onServerVersionChanged: () => void appUpdateController.checkNow(),
   onServiceStatus: showServiceStatusNotice,
   onReconnect: () => void restoreComicAfterReconnect(),
 });
