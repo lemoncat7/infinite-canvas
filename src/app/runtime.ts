@@ -132,7 +132,7 @@ import { ComicLabelController } from "../ui/comic-labels";
 import {
   PromptAgentApplicationController,
 } from "../nodes/prompt-agent-application";
-import { createNodeView } from "../nodes/node-view-factory";
+import { BoundNodeViewFactory } from "../nodes/bound-node-view-factory";
 import { syncNodeMediaView } from "../nodes/node-media-view";
 import { syncImageNodePanel } from "../nodes/image-node-sync";
 import { syncVideoNodePanel } from "../nodes/video-node-sync";
@@ -142,18 +142,6 @@ import {
   syncBasicNodeContent,
 } from "../nodes/node-dom-state";
 import { synchronizeNodeDom } from "../nodes/node-dom-synchronizer";
-import { bindVoiceNodePanels } from "../nodes/voice-node-view";
-import { bindVideoNodePanel } from "../nodes/video-node-view";
-import {
-  bindClearImageAction,
-  bindImageNodePanel,
-} from "../nodes/image-node-view";
-import {
-  bindNodeLabelHeading,
-  bindNodePointerInteraction,
-  bindNodePorts,
-  bindNodeToolbarActions,
-} from "../nodes/node-interaction-view";
 import { createDefaultGenerationCapabilities } from "./state";
 import {
   connectionControlPoint,
@@ -2893,174 +2881,55 @@ function syncDomNodes() {
     },
   });
 }
+const boundNodeViewFactory = new BoundNodeViewFactory({
+  nodes,
+  batchIds: selection.batchIds,
+  authUser: () => authUser,
+  customApiModels: () => customApiModels,
+  generationCapabilities: () => generationCapabilities,
+  getSelectedId: () => selection.selectedId,
+  setSelectedId: (id) => { selection.selectedId = id; },
+  isMultiSelectMode: () => selection.multiSelectMode,
+  getDrag: () => domPointer.drag,
+  setDrag: (drag) => { domPointer.drag = drag; },
+  beginResize: (value) => domPointer.beginResize(value),
+  isReleaseSuppressed: domPointer.isReleaseSuppressed,
+  isAgentSelecting: () => promptAgentSelecting,
+  isAgentCreateMode: () => promptAgentControls.mode === "create",
+  updateEditor,
+  draw,
+  scheduleSave,
+  setEditingState: () => setSaveState("editing", "编辑中…"),
+  editPrompt: enterTextEdit,
+  previewMedia: (current) =>
+    openAssetPreview(current.mediaUrl!, current.title, current.kind as "image" | "video"),
+  beginConnection: (nodeId, point) => connection.begin(nodeId, "right", point),
+  showInfo: openNodeInfo,
+  focusEditor: () => promptInput.focus(),
+  generate,
+  downloadImage: downloadNodeImage,
+  deleteNode: () => { void deleteSelectedNode(); },
+  confirmClearImage: async () =>
+    Boolean(await askProjectDialog({
+      title: "清除当前卡片的图片？",
+      description:
+        "资产库中的原图不会删除。原提示词、当前描述、模型、图像设置和参考连线都会保留。",
+      confirm: "清除图片",
+    })),
+  removeCachedImage: (url) => imageCache.delete(url),
+  normalizePrompt: normalizePromptText,
+  notifyImageCleared: (message) => showToast(message, "success"),
+  beginImageUpload: beginImageNodeUpload,
+  beginImageLibrary: beginImageNodeLibrary,
+  decodePrompt: decodePromptClipboardText,
+  previewVoice,
+  generateTts,
+  escapeHtml,
+  copyPrompt: copyOriginalPrompt,
+});
 function createDomNode(node: FlowNode) {
-  // Always resolve the live object because authoritative canvas sync may
-  // replace node instances while retaining the DOM view.
-  const liveNode = () => nodes.find((item) => item.id === node.id);
-  const {
-    element,
-    resizeHandle,
-    voicePanel,
-    ttsPanel,
-    audioPanel,
-    videoPanel,
-  } = createNodeView({
-    node,
-    getNode: liveNode,
-    authUser,
-    customApiModels,
-    escapeHtml,
-    copyPrompt: copyOriginalPrompt,
-  });
-  resizeHandle.addEventListener("pointerdown", (event) => {
-    if (node.kind !== "prompt") return;
-    event.preventDefault();
-    event.stopPropagation();
-    selection.selectedId = node.id;
-    updateEditor();
-    domPointer.beginResize({
-      id: node.id,
-      startX: event.clientX,
-      startY: event.clientY,
-      width: node.width,
-      height: node.height,
-    });
-    resizeHandle.setPointerCapture(event.pointerId);
-  });
-  bindNodePointerInteraction({
-    element,
-    liveNode,
-    allNodes: nodes,
-    batchIds: selection.batchIds,
-    isMultiSelectMode: () => selection.multiSelectMode,
-    getDrag: () => domPointer.drag,
-    setDrag: (drag) => {
-      domPointer.drag = drag;
-    },
-    isAgentSelecting: () => promptAgentSelecting,
-    isAgentCreateMode: () => promptAgentControls.mode === "create",
-    isReleaseSuppressed: domPointer.isReleaseSuppressed,
-    selectNode: (id) => {
-      selection.selectedId = id;
-      updateEditor();
-    },
-    clearSelection: () => {
-      selection.selectedId = 0;
-      updateEditor();
-    },
-    draw,
-    editPrompt: enterTextEdit,
-    previewMedia: (current) =>
-      openAssetPreview(current.mediaUrl!, current.title, current.kind as "image" | "video"),
-  });
-  bindNodeLabelHeading({
-    element,
-    liveNode,
-    setEditingState: () => setSaveState("editing", "编辑中…"),
-    scheduleSave,
-    draw,
-  });
-  bindNodePorts(element, node.id, (nodeId, point) => {
-    selection.selectedId = 0;
-    updateEditor();
-    connection.begin(nodeId, "right", point);
-    draw();
-  });
-  bindNodeToolbarActions({
-    element,
-    liveNode,
-    selectNode: (id) => {
-      selection.selectedId = id;
-      updateEditor();
-    },
-    showInfo: openNodeInfo,
-    editPrompt: enterTextEdit,
-    focusEditor: () => promptInput.focus(),
-    scheduleSave,
-    draw,
-    generate,
-    previewMedia: (current) =>
-      openAssetPreview(current.mediaUrl!, current.title, current.kind as "image" | "video"),
-    downloadMedia: (current) => {
-      if (current.kind === "audio") {
-        audioPanel
-          .querySelector<HTMLButtonElement>("[data-audio-download]")!
-          .click();
-        return;
-      }
-      return downloadNodeImage(current);
-    },
-    deleteNode: (current) => {
-      selection.selectedId = current.id;
-      deleteSelectedNode();
-    },
-  });
-  bindClearImageAction({
-    element,
-    allNodes: nodes,
-    confirm: async () =>
-      Boolean(await askProjectDialog({
-        title: "清除当前卡片的图片？",
-        description:
-          "资产库中的原图不会删除。原提示词、当前描述、模型、图像设置和参考连线都会保留。",
-        confirm: "清除图片",
-      })),
-    removeCachedImage: (url) => imageCache.delete(url),
-    normalizePrompt: normalizePromptText,
-    selectNode: (id) => {
-      selection.selectedId = id;
-      updateEditor();
-    },
-    scheduleSave,
-    draw,
-    notify: (message) => showToast(message, "success"),
-  });
-  bindImageNodePanel({
-    element,
-    nodeId: node.id,
-    liveNode,
-    scheduleSave,
-    setEditingState: () => setSaveState("editing", "编辑中…"),
-    draw,
-    generate,
-    selectNode: (id) => {
-      selection.selectedId = id;
-      updateEditor();
-    },
-    beginImageUpload: beginImageNodeUpload,
-    beginImageLibrary: beginImageNodeLibrary,
-  });
-  bindVideoNodePanel({
-    videoPanel,
-    liveNode,
-    generationCapabilities,
-    decodePromptClipboardText,
-    scheduleSave,
-    draw,
-    generate,
-    selectNode: (id) => {
-      selection.selectedId = id;
-      updateEditor();
-    },
-  });
-  bindVoiceNodePanels({
-    element,
-    voicePanel,
-    ttsPanel,
-    audioPanel,
-    liveNode,
-    scheduleSave,
-    draw,
-    previewVoice,
-    generateTts,
-    selectNode: (id) => {
-      selection.selectedId = id;
-      updateEditor();
-    },
-  });
-  return element;
+  return boundNodeViewFactory.create(node);
 }
-
 function enterTextEdit(node: FlowNode, element: HTMLElement) {
   promptNodeEditor.beginEdit(node, element, {
     onInput: () => setSaveState("editing", "编辑中…"),
