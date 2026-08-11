@@ -61,6 +61,7 @@ import { GenerationSubmitController } from "../nodes/generation-submit-controlle
 import { PendingTaskCancellationController } from "../nodes/pending-task-cancellation-controller";
 import { apiFetch } from "../services/api";
 import { AppUpdateController } from "../services/app-update-controller";
+import { GenerationCapabilitiesController } from "../services/generation-capabilities-controller";
 import {
   type GenerationJob,
 } from "../services/generation";
@@ -2910,26 +2911,16 @@ new WorkspaceKeyboardController({
 function refreshLocalImageAvailabilityUI() {
   /* 本地 Provider 暂不在模型列表展示 */
 }
-async function loadGenerationCapabilities(redraw = false) {
-  try {
-    const response = await apiFetch("/api/generation/capabilities", {
-      cache: "no-store",
-    });
-    if (response.ok) {
-      const previous = generationCapabilities.image?.localFallback?.available;
-      generationCapabilities =
-        (await response.json()) as GenerationCapabilities;
-      if (
-        redraw &&
-        previous !== generationCapabilities.image?.localFallback?.available
-      ) {
-        refreshLocalImageAvailabilityUI();
-        draw();
-      }
-    }
-  } catch {
-    /* 使用通用默认配置 */
-  }
+const generationCapabilitiesController = new GenerationCapabilitiesController({
+  current: () => generationCapabilities,
+  apply: (capabilities) => { generationCapabilities = capabilities; },
+  availabilityChanged: () => {
+    refreshLocalImageAvailabilityUI();
+    draw();
+  },
+});
+function loadGenerationCapabilities(redraw = false) {
+  return generationCapabilitiesController.load(redraw);
 }
 const applicationBootstrap = new ApplicationBootstrapController<AuthUser>({
   apiFetch,
