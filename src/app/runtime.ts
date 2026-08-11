@@ -66,14 +66,6 @@ import {
   fetchShowcaseAssets,
   type LibraryAsset,
 } from "../services/assets";
-import {
-  createProject,
-  duplicateProject,
-  fetchProjects,
-  removeProject,
-  renameProject,
-  type ProjectSummary,
-} from "../services/projects";
 import { streamComicDialogue, streamComicPlan } from "../services/comic";
 import { ComicSessionController } from "../services/comic-session";
 import {
@@ -114,7 +106,7 @@ import { WorkspacePanelController } from "../ui/toolbar";
 import {
   createProjectDialog,
 } from "../ui/dialogs/project-dialog";
-import { renderProjectList } from "../ui/project-panel";
+import { ProjectController } from "../ui/project-controller";
 import { ComicSidePanelController } from "../ui/comic-side-panel";
 import { ComicStudioView } from "../ui/comic-studio";
 import { ComicLabelController } from "../ui/comic-labels";
@@ -6990,7 +6982,7 @@ workspacePanelController.bindNavigation({
   squarePanel: document.querySelector<HTMLElement>("#square-panel")!,
   mainNav: workspaceBrand.querySelector<HTMLElement>(".main-nav")!,
   closeButtons: document.querySelectorAll<HTMLElement>(".panel-close"),
-  onProjectsOpen: () => void loadProjects(),
+  onProjectsOpen: () => void projectController.load(),
   onAssetsOpen: () => {
     if (!libraryAssets.length)
       void loadAssets(false).then(renderAssetsAfterPanelOpen);
@@ -7237,113 +7229,24 @@ document
       renderAssets();
     }),
   );
-let projectSummaries: ProjectSummary[] = [];
-const projectSearch =
-    document.querySelector<HTMLInputElement>("#project-search")!,
-  projectSort = document.querySelector<HTMLSelectElement>("#project-sort")!,
-  projectDialog = document.querySelector<HTMLElement>("#project-dialog")!;
+const projectDialog = document.querySelector<HTMLElement>("#project-dialog")!;
 const askProjectDialog = createProjectDialog(projectDialog);
-projectSort.options[0].textContent = "最近进入";
-document.querySelector("#new-project")!.addEventListener("click", async () => {
-  const name = await askProjectDialog({
-    title: "新建项目",
-    description: "给新的创作空间取一个容易识别的名称。",
-    value: `未命名项目 ${projectSummaries.length + 1}`,
-    confirm: "创建项目",
-  });
-  if (!name) return;
-  try {
-    const project = await createProject(String(name));
-    await switchProject(project.id);
-  } catch {
-    showToast("项目创建失败", "error");
-  }
+const projectController = new ProjectController({
+  list: document.querySelector<HTMLElement>("#project-list")!,
+  count: document.querySelector<HTMLElement>("#project-count")!,
+  search: document.querySelector<HTMLInputElement>("#project-search")!,
+  sort: document.querySelector<HTMLSelectElement>("#project-sort")!,
+  newButton: document.querySelector<HTMLElement>("#new-project")!,
+  ask: askProjectDialog,
+  getCurrentProjectId: () => currentProjectId,
+  switchProject,
+  deleteCurrentProject: async (nextProjectId) => {
+    currentProjectId = nextProjectId;
+    localStorage.setItem("flow-project-id", nextProjectId);
+    await Promise.all([loadCanvas(), loadAssets()]);
+  },
+  toast: (message, type, detail) => showToast(message, type, detail),
 });
-projectSearch.addEventListener("input", renderProjects);
-projectSort.addEventListener("change", renderProjects);
-async function loadProjects() {
-  try {
-    projectSummaries = (await fetchProjects()).map((project) => ({
-      ...project,
-      updatedAt: project.lastOpenedAt || project.updatedAt,
-    }));
-    renderProjects();
-  } catch {
-    showToast("项目列表加载失败", "error");
-  }
-}
-function renderProjects() {
-  renderProjectList({
-    list: document.querySelector<HTMLElement>("#project-list")!,
-    count: document.querySelector<HTMLElement>("#project-count")!,
-    projects: projectSummaries,
-    currentProjectId,
-    query: projectSearch.value,
-    sort: projectSort.value,
-    onOpen: (project) => void switchProject(project.id),
-    onAction: (action, project) => void handleProjectAction(action, project),
-  });
-}
-async function handleProjectAction(action: string, project: ProjectSummary) {
-  if (action === "rename") {
-    const name = await askProjectDialog({
-      title: "重命名项目",
-      description: "项目中的画布和资产不会受到影响。",
-      value: project.name,
-      confirm: "保存名称",
-    });
-    if (!name || name === project.name) return;
-    const response = await renameProject(project.id, String(name));
-    if (!response.ok) {
-      showToast("项目重命名失败", "error");
-      return;
-    }
-    showToast("项目名称已更新", "success");
-  } else if (action === "duplicate") {
-    const confirmed = await askProjectDialog({
-      title: "创建项目副本",
-      description: `将复制“${project.name}”的画布和全部资产，公开状态不会复制。`,
-      confirm: "创建副本",
-    });
-    if (!confirmed) return;
-    const response = await duplicateProject(project.id);
-    if (!response.ok) {
-      showToast("项目复制失败", "error");
-      return;
-    }
-    showToast("项目副本已创建", "success");
-  } else if (action === "delete") {
-    const confirmed = await askProjectDialog({
-      title: "删除项目？",
-      description: `“${project.name}”中的画布和资产将被永久删除，此操作无法撤销。`,
-      confirm: "确认删除",
-      danger: true,
-    });
-    if (!confirmed) return;
-    const response = await removeProject(project.id);
-    if (!response.ok) {
-      const result = (await response.json().catch(() => ({}))) as {
-        error?: string;
-      };
-      showToast(
-        "项目删除失败",
-        "error",
-        result.error === "至少需要保留一个项目" ? result.error : "请稍后重试",
-      );
-      return;
-    }
-    if (project.id === currentProjectId) {
-      const next = projectSummaries.find((item) => item.id !== project.id);
-      if (next) {
-        currentProjectId = next.id;
-        localStorage.setItem("flow-project-id", next.id);
-        await Promise.all([loadCanvas(), loadAssets()]);
-      }
-    }
-    showToast("项目已删除", "success");
-  }
-  await loadProjects();
-}
 async function switchProject(projectId: string) {
   if (projectId === currentProjectId) {
     closeWorkspacePanels();
