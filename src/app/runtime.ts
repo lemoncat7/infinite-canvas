@@ -70,6 +70,11 @@ import {
   renderNodeToolbar,
 } from "../ui/node-editor";
 import { filterAssets, formatFileSize } from "../ui/asset-panel";
+import { WorkspacePanelController } from "../ui/toolbar";
+import {
+  createProjectDialog,
+  formatProjectTime,
+} from "../ui/dialogs/project-dialog";
 import { createDefaultGenerationCapabilities } from "./state";
 import {
   connectionControlPoint,
@@ -1068,7 +1073,7 @@ document.addEventListener("click", () => {
 });
 const marqueeBox = document.createElement("div"),
   batchToolbar = document.createElement("div");
-marqueeBox.className = "canvas-interaction.marquee";
+marqueeBox.className = "canvas-marquee";
 batchToolbar.className = "canvas-batch-toolbar";
 batchToolbar.innerHTML =
   '<span data-batch-count>已选 0 项</span><button type="button" data-batch-generate aria-label="生成所选卡片" title="生成">生成</button><button type="button" data-batch-delete aria-label="删除所选卡片" title="删除">删除</button><button type="button" data-batch-clear aria-label="退出多选模式" title="退出">退出</button>';
@@ -11378,24 +11383,26 @@ const workspacePanels =
 const workspaceBrand = document.querySelector<HTMLElement>(".topbar .brand")!,
   mobileNavToggle =
     document.querySelector<HTMLButtonElement>("#mobile-nav-toggle")!;
+const workspacePanelController = new WorkspacePanelController(
+  workspacePanels,
+  panelBackdrop,
+  workspaceBrand,
+  mobileNavToggle,
+  () => {
+    imageNodeAssetTargetId = null;
+  },
+);
 function closeMobileWorkspaceMenu() {
-  workspaceBrand.classList.remove("mobile-menu-open");
-  mobileNavToggle.setAttribute("aria-expanded", "false");
+  workspacePanelController.closeMobileMenu();
 }
 function closeWorkspacePanels() {
-  workspacePanels.forEach((panel) => panel.classList.remove("open"));
-  panelBackdrop.classList.remove("open");
-  document
-    .querySelectorAll(".main-nav button")
-    .forEach((button) => button.classList.remove("active"));
-  closeMobileWorkspaceMenu();
-  imageNodeAssetTargetId = null;
+  workspacePanelController.close();
 }
 function openWorkspacePanel(id: string, trigger: string) {
-  closeWorkspacePanels();
-  document.querySelector<HTMLElement>(id)!.classList.add("open");
-  panelBackdrop.classList.add("open");
-  document.querySelector<HTMLElement>(trigger)!.classList.add("active");
+  workspacePanelController.open(
+    document.querySelector<HTMLElement>(id)!,
+    document.querySelector<HTMLElement>(trigger)!,
+  );
 }
 document.querySelector("#open-projects")!.addEventListener("click", () => {
   openWorkspacePanel("#projects-panel", "#open-projects");
@@ -11732,6 +11739,7 @@ const projectSearch =
     document.querySelector<HTMLInputElement>("#project-search")!,
   projectSort = document.querySelector<HTMLSelectElement>("#project-sort")!,
   projectDialog = document.querySelector<HTMLElement>("#project-dialog")!;
+const askProjectDialog = createProjectDialog(projectDialog);
 projectSort.options[0].textContent = "最近进入";
 document.querySelector("#new-project")!.addEventListener("click", async () => {
   const name = await askProjectDialog({
@@ -11953,59 +11961,6 @@ async function handleProjectAction(action: string, project: ProjectSummary) {
     showToast("项目已删除", "success");
   }
   await loadProjects();
-}
-function askProjectDialog(options: {
-  title: string;
-  description: string;
-  value?: string;
-  confirm: string;
-  danger?: boolean;
-}) {
-  return new Promise<string | boolean>((resolve) => {
-    const form = projectDialog.querySelector<HTMLFormElement>("form")!,
-      label = form.querySelector<HTMLLabelElement>("label")!,
-      input = form.querySelector<HTMLInputElement>("input")!,
-      confirm = form.querySelector<HTMLButtonElement>("[data-dialog-confirm]")!;
-    form.querySelector("h2")!.textContent = options.title;
-    form.querySelector("p")!.textContent = options.description;
-    label.hidden = options.value === undefined;
-    input.value = options.value ?? "";
-    input.required = options.value !== undefined;
-    confirm.textContent = options.confirm;
-    confirm.classList.toggle("danger", Boolean(options.danger));
-    projectDialog.classList.add("open");
-    const finish = (result: string | boolean) => {
-      projectDialog.classList.remove("open");
-      form.onsubmit = null;
-      form.querySelector<HTMLButtonElement>("[data-dialog-cancel]")!.onclick =
-        null;
-      resolve(result);
-    };
-    form.onsubmit = (event) => {
-      event.preventDefault();
-      finish(options.value === undefined ? true : input.value.trim());
-    };
-    form.querySelector<HTMLButtonElement>("[data-dialog-cancel]")!.onclick =
-      () => finish(false);
-    if (!label.hidden)
-      requestAnimationFrame(() => {
-        input.focus();
-        input.select();
-      });
-  });
-}
-function formatProjectTime(value: string) {
-  const time = Date.parse(value),
-    delta = Date.now() - time;
-  if (!Number.isFinite(time)) return "最近进入";
-  if (delta < 60_000) return "刚刚进入";
-  if (delta < 3_600_000)
-    return `${Math.max(1, Math.floor(delta / 60_000))} 分钟前进入`;
-  if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)} 小时前进入`;
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "short",
-    day: "numeric",
-  }).format(new Date(time));
 }
 async function switchProject(projectId: string) {
   if (projectId === currentProjectId) {
