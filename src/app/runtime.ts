@@ -124,6 +124,7 @@ import {
   type CustomApiModel,
 } from "../ui/custom-api-controller";
 import { PromptAgentControls } from "../ui/prompt-agent-controls";
+import { PromptAgentContextController } from "../ui/prompt-agent-context";
 import { ComicSidePanelController } from "../ui/comic-side-panel";
 import { ComicStudioView } from "../ui/comic-studio";
 import { ComicLabelController } from "../ui/comic-labels";
@@ -4272,7 +4273,6 @@ const promptAgentControls = new PromptAgentControls({
       mode === "create" && promptAgentPanel.classList.contains("open");
     if (mode !== "create") {
       promptAgentContextSelection.clear();
-      promptAgentContextNodes = [];
       renderPromptAgentContext(false);
     }
     draw();
@@ -4413,7 +4413,6 @@ promptAgentBurst
     particle.style.setProperty("--duration", `${720 + (index % 7) * 34}ms`);
   });
 let promptAgentResult: PromptAgentResult | null = null,
-  promptAgentContextNodes: FlowNode[] = [],
   promptAgentAppliedNodeId = 0,
   promptAgentUndo: (() => void) | null = null;
 let promptAgentEffectFrame: number | null = null;
@@ -4597,7 +4596,6 @@ function closePromptAgent() {
   promptAgentTrigger.classList.remove("active");
   promptAgentSelecting = false;
   promptAgentContextSelection.clear();
-  promptAgentContextNodes = [];
   clearPromptAgentResult();
   if (promptAgentEffectFrame !== null)
     cancelAnimationFrame(promptAgentEffectFrame);
@@ -4788,82 +4786,23 @@ function playPromptAgentHover() {
   positionPromptAgentParticles();
   promptAgentBurst.classList.add("hover-active");
 }
-function collectPromptAgentContext() {
-  const selected = nodes.find((node) => node.id === selection.selectedId),
-    result: FlowNode[] = [],
-    seen = new Set<number>(),
-    visit = (node: FlowNode) => {
-      if (seen.has(node.id) || result.length >= 8) return;
-      seen.add(node.id);
-      result.push(node);
-      links
-        .filter((link) => link.to === node.id)
-        .map((link) => nodes.find((item) => item.id === link.from))
-        .filter((item): item is FlowNode => Boolean(item))
-        .sort((a, b) => a.y - b.y || a.x - b.x || a.id - b.id)
-        .forEach(visit);
-    };
-  for (const id of promptAgentContextSelection) {
-    const node = nodes.find((item) => item.id === id);
-    if (node) visit(node);
-  }
-  if (selected) visit(selected);
-  return result;
-}
+const promptAgentContextController = new PromptAgentContextController({
+  panel: promptAgentPanel,
+  selectedIds: promptAgentContextSelection,
+  getNodes: () => nodes,
+  getLinks: () => links,
+  getPrimarySelectedId: () => selection.selectedId,
+  onChanged: () => draw(),
+});
 function selectedPromptAgentNodes() {
-  return [...promptAgentContextSelection]
-    .map((id) => nodes.find((node) => node.id === id))
-    .filter((node): node is FlowNode => Boolean(node));
+  return promptAgentContextController.selectedNodes();
 }
 function renderPromptAgentContext(reset = false) {
-  promptAgentContextNodes = collectPromptAgentContext();
-  if (reset)
-    promptAgentContextSelection = new Set(
-      promptAgentContextNodes.map((node) => node.id),
-    );
-  else
-    promptAgentContextSelection = new Set(
-      [...promptAgentContextSelection].filter((id) =>
-        nodes.some((node) => node.id === id),
-      ),
-    );
-  const list = promptAgentPanel.querySelector<HTMLElement>(
-      "[data-agent-context-list]",
-    )!,
-    selectedNodes = selectedPromptAgentNodes(),
-    hint = promptAgentPanel.querySelector<HTMLElement>(
-      ".agent-selection-hint",
-    )!;
-  promptAgentPanel.classList.toggle("has-materials", selectedNodes.length > 0);
-  hint.querySelector("span")!.textContent = selectedNodes.length
-    ? `已选择 ${selectedNodes.length} 个素材 · 点击卡片可增减`
-    : "点击卡片选择素材";
-  if (!selectedNodes.length) {
-    list.innerHTML = "<small>点击卡片添加素材</small>";
-    return;
-  }
-  list.innerHTML = selectedNodes
-    .map(
-      (node, index) =>
-        `<button type="button" class="active" title="${escapeHtml(node.title)}" data-agent-context-node="${node.id}">${node.mediaUrl && node.kind === "image" ? `<img src="${escapeHtml(node.mediaUrl)}" alt="">` : `<i>${node.kind === "image" ? "▧" : node.kind === "video" ? "▶" : "T"}</i>`}<span><b>素材 ${index + 1}</b><small>${escapeHtml(node.title)}</small></span><em>✓</em></button>`,
-    )
-    .join("");
-  list
-    .querySelectorAll<HTMLButtonElement>("[data-agent-context-node]")
-    .forEach((button) =>
-      button.addEventListener("click", () => {
-        promptAgentContextSelection.delete(
-          Number(button.dataset.agentContextNode),
-        );
-        renderPromptAgentContext(false);
-        draw();
-      }),
-    );
+  promptAgentContextController.render(reset);
 }
 function formPromptAgent() {
   window.clearTimeout(promptAgentFormTimer);
   promptAgentContextSelection.clear();
-  promptAgentContextNodes = [];
   renderPromptAgentContext(false);
   positionPromptAgentCapsule();
   const trigger = promptAgentTrigger.getBoundingClientRect(),
