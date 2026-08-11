@@ -2,6 +2,8 @@ import "../style.css";
 import { CanvasPerformanceMonitor } from "../canvas/performance-monitor";
 import { CanvasSpatialIndex } from "../canvas/spatial-index";
 import { CanvasStore } from "../canvas/store";
+import { CanvasSelectionController } from "../canvas/selection-controller";
+import { CanvasConnectionController } from "../canvas/connection-controller";
 import { MediaLruCache } from "../canvas/media-cache";
 import type {
   FlowLink,
@@ -176,10 +178,9 @@ const pointer = {
   toggleBatchOnRelease: 0,
 };
 let canvasPanSelectedElement: HTMLElement | null = null;
-let selectedId = 0;
+const selection = new CanvasSelectionController();
 let videoReferenceSwapSelection: { videoId: number; sourceId: number } | null =
   null;
-const batchSelectedIds = new Set<number>();
 const activeVoicePreviews = new Map<number, HTMLAudioElement>();
 let marquee: {
     pointerId: number;
@@ -191,7 +192,6 @@ let marquee: {
   } | null = null,
   marqueeAutoPanFrame = 0,
   marqueeContextSuppressedUntil = 0,
-  multiSelectMode = false,
   marqueeMode = false,
   quickMarqueeMode = false,
   marqueeHoldTimer: number | undefined,
@@ -202,14 +202,9 @@ let nextId = 1;
 let canvasNodeIdBlockEnd = 0;
 let canvasNodeIdLeasePromise: Promise<boolean> | null = null;
 let contextPosition: Point = { x: 0, y: 0 };
-let connecting: { nodeId: number; side: PortSide; pointer: Point } | null =
-  null;
-const connectionSnapRadius = 48;
-let connectionSnap: { nodeId: number; side: PortSide } | null = null;
+const connection = new CanvasConnectionController();
 let connectionAutoPanFrame = 0,
   connectionAutoPanPointer: Point | null = null;
-let hoveredLinkIndex = -1;
-let touchSelectedLinkIndex = -1;
 let touchLinkGesture: {
   pointerId: number;
   start: Point;
@@ -383,7 +378,7 @@ function applySynchronizedCanvas(
   snapshot: CanvasSyncSnapshot,
   preserveSelection = true,
 ) {
-  const selected = preserveSelection ? selectedId : 0,
+  const selected = preserveSelection ? selection.selectedId : 0,
     currentNodes = new Map(nodes.map((node) => [String(node.id), node])),
     mergedNodes = snapshot.nodes.map((source) => {
       const current = currentNodes.get(String(source.id));
@@ -402,7 +397,7 @@ function applySynchronizedCanvas(
     nextId,
     nodes.length ? Math.max(...nodes.map((node) => node.id)) + 1 : 1,
   );
-  selectedId = nodes.some((node) => node.id === selected) ? selected : 0;
+  selection.selectedId = nodes.some((node) => node.id === selected) ? selected : 0;
   updateEditor();
   draw();
 }
@@ -736,7 +731,7 @@ function queueCanvasHistory() {
 }
 async function applyCanvasHistory(snapshot: CanvasHistorySnapshot) {
   historyRestoring = true;
-  const selectedBeforeRestore = selectedId,
+  const selectedBeforeRestore = selection.selectedId,
     currentNodes = structuredClone(nodes),
     currentLinks = structuredClone(links),
     currentById = new Map(currentNodes.map((node) => [node.id, node])),
@@ -791,8 +786,8 @@ async function applyCanvasHistory(snapshot: CanvasHistorySnapshot) {
     snapshot.nextId,
     nodes.length ? Math.max(...nodes.map((node) => node.id)) + 1 : 1,
   );
-  selectedId = finalIds.has(selectedBeforeRestore) ? selectedBeforeRestore : 0;
-  batchSelectedIds.clear();
+  selection.selectedId = finalIds.has(selectedBeforeRestore) ? selectedBeforeRestore : 0;
+  selection.batchIds.clear();
   editingTextNodeId = 0;
   updateEditor();
   draw();
@@ -1054,7 +1049,7 @@ async function cancelPendingProjectTasks() {
 function focusTaskNode(nodeId: number) {
   const node = nodes.find((item) => item.id === nodeId);
   if (!node) return;
-  selectedId = node.id;
+  selection.selectedId = node.id;
   camera.x = -(node.x + node.width / 2) * camera.zoom;
   camera.y = -(node.y + node.height / 2) * camera.zoom;
   taskMonitorPanel.classList.remove("open");
@@ -1223,7 +1218,7 @@ function schedulePixiEditorWarmup() {
             Math.hypot(right.x - center.x, right.y - center.y),
         );
     for (const node of candidates) {
-      if (pixiDetachedNodeCache.has(node.id) || node.id === selectedId) continue;
+      if (pixiDetachedNodeCache.has(node.id) || node.id === selection.selectedId) continue;
       cacheDetachedPixiNode(node.id, createDomNode(node));
       if (pixiDetachedNodeCache.size >= 2) break;
     }
@@ -2371,7 +2366,7 @@ async function logoutToHome(message?: string) {
   visibleUserApiToken = "";
   nodes.splice(0);
   links.splice(0);
-  selectedId = 0;
+  selection.selectedId = 0;
   workspaceUserMenu.classList.remove("open");
   renderAuthenticatedUser();
   location.hash = "#/";
@@ -3368,15 +3363,15 @@ function directedLink(
   return { from: firstId, to: secondId, fromSide: "right", toSide: "left" };
 }
 function updateConnectionPointer(sx: number, sy: number) {
-  if (!connecting) return;
-  const candidate = hitPort(sx, sy, connectionSnapRadius, connecting.nodeId),
+  if (!connection.active) return;
+  const candidate = hitPort(sx, sy, connection.snapRadius, connection.active.nodeId),
     target = candidate && candidate.side === "left" ? candidate : null;
-  connectionSnap = target
-    ? { nodeId: target.node.id, side: target.side }
-    : null;
-  connecting.pointer = target
-    ? screen(portWorld(target.node, target.side))
-    : { x: sx, y: sy };
+  connection.update(
+    target
+      ? screen(portWorld(target.node, target.side))
+      : { x: sx, y: sy },
+    target ? { nodeId: target.node.id, side: target.side } : null,
+  );
 }
 function stopConnectionAutoPan() {
   if (connectionAutoPanFrame) cancelAnimationFrame(connectionAutoPanFrame);
@@ -3388,7 +3383,7 @@ function startConnectionAutoPan(sx: number, sy: number) {
   if (connectionAutoPanFrame) return;
   let previous = performance.now();
   const tick = (now: number) => {
-    if (!connecting || !connectionAutoPanPointer) {
+    if (!connection.active || !connectionAutoPanPointer) {
       connectionAutoPanFrame = 0;
       return;
     }
@@ -3489,29 +3484,29 @@ function paint() {
     zoomPercent.value = `${Math.round(camera.zoom * 100)}%`;
     nodeCount.textContent = String(nodes.length);
   }
-  const pendingNode = connecting
-    ? paintNodeIndex.get(connecting.nodeId) ??
-      nodes.find((node) => node.id === connecting!.nodeId)
+  const pendingNode = connection.active
+    ? paintNodeIndex.get(connection.active.nodeId) ??
+      nodes.find((node) => node.id === connection.active!.nodeId)
     : undefined;
   pixiRenderer?.render({
     nodes,
     links,
     domNodeIds: [...mountedDomNodeIds],
     camera,
-    selectedId,
+    selectedId: selection.selectedId,
     selectedIds: [
-      ...new Set([...batchSelectedIds, ...promptAgentContextSelection]),
+      ...new Set([...selection.batchIds, ...promptAgentContextSelection]),
     ],
     dark: colorTheme === "dark",
     backgroundMode,
-    hoveredLinkIndex,
-    touchSelectedLinkIndex,
-    pendingConnection: connecting && pendingNode
+    hoveredLinkIndex: connection.hoveredLinkIndex,
+    touchSelectedLinkIndex: connection.touchSelectedLinkIndex,
+    pendingConnection: connection.active && pendingNode
       ? {
-          from: screen(portWorld(pendingNode, connecting.side)),
-          to: connecting.pointer,
-          fromSide: connecting.side,
-          snapped: Boolean(connectionSnap),
+          from: screen(portWorld(pendingNode, connection.active.side)),
+          to: connection.active.pointer,
+          fromSide: connection.active.side,
+          snapped: Boolean(connection.snap),
         }
       : undefined,
   });
@@ -3550,8 +3545,7 @@ function cancelSingleTouchActions() {
   pointer.down = false;
   pointer.draggingNode = null;
   canvas.classList.remove("dragging");
-  connecting = null;
-  connectionSnap = null;
+  connection.cancel();
   stopConnectionAutoPan();
   if (domDrag) {
     domDrag.element.classList.remove("dragging");
@@ -3812,7 +3806,7 @@ function addNode(
         ? { emotion: "中性", speed: 1, volume: 1, format: "mp3" }
         : undefined,
   });
-  selectedId = id;
+  selection.selectedId = id;
   if (!deferRender) {
     updateEditor();
     scheduleSave();
@@ -3849,7 +3843,7 @@ function addMediaNode(
         ? { seconds: "5", resolution: "720p", aspectRatio: "16:9" }
         : undefined,
   });
-  selectedId = id;
+  selection.selectedId = id;
   updateEditor();
   scheduleSave();
   draw();
@@ -3858,7 +3852,7 @@ function addMediaNode(
 function syncDomNodes() {
   nodeViewport.style.transform = `translate3d(${innerWidth / 2 + camera.x}px, ${innerHeight / 2 + camera.y}px,0) scale(${camera.zoom})`;
   const requiredPixiDomIds = new Set<number>([
-          ...(selectedId ? [selectedId] : []),
+          ...(selection.selectedId ? [selection.selectedId] : []),
           ...(editingTextNodeId ? [editingTextNodeId] : []),
           ...(domDrag ? [domDrag.id] : []),
         ]),
@@ -3944,7 +3938,7 @@ function syncDomNodes() {
     const locked =
       (nodeIsActivelyGenerating(node) || workflowWaiting) &&
       !(node.kind === "video" && node.role !== "result");
-    const className = `flow-node pixi-card-editor kind-${node.kind}${node.role === "result" || node.kind === "audio" ? " node-result" : " node-generator"}${node.id === selectedId ? " selected" : ""}${batchSelectedIds.has(node.id) ? " batch-selected" : ""}${promptAgentSelecting && promptAgentContextSelection.has(node.id) ? " agent-reference" : ""}${locked ? " generating" : ""}${workflowWaiting ? " workflow-waiting" : ""}`;
+    const className = `flow-node pixi-card-editor kind-${node.kind}${node.role === "result" || node.kind === "audio" ? " node-result" : " node-generator"}${node.id === selection.selectedId ? " selected" : ""}${selection.batchIds.has(node.id) ? " batch-selected" : ""}${promptAgentSelecting && promptAgentContextSelection.has(node.id) ? " agent-reference" : ""}${locked ? " generating" : ""}${workflowWaiting ? " workflow-waiting" : ""}`;
     if (element.className !== className) element.className = className;
     element.style.transform = `translate(${node.x}px, ${node.y}px)`;
     element.style.width = `${node.width}px`;
@@ -3990,8 +3984,8 @@ function syncDomNodes() {
       node.ttsSettings?.speed,
       node.ttsSettings?.format,
       node.ttsSettings?.duration,
-      node.id === selectedId,
-      batchSelectedIds.has(node.id),
+      node.id === selection.selectedId,
+      selection.batchIds.has(node.id),
       promptAgentSelecting && promptAgentContextSelection.has(node.id),
       locked,
       workflowWaiting,
@@ -4424,7 +4418,7 @@ function syncDomNodes() {
     const imagePanel = element.querySelector<HTMLElement>(
       ".image-config-panel",
     )!;
-    const imagePanelOpen = node.kind === "image" && node.id === selectedId;
+    const imagePanelOpen = node.kind === "image" && node.id === selection.selectedId;
     imagePanel.classList.toggle("open", imagePanelOpen);
     if (!imagePanelOpen)
       imagePanel
@@ -4434,7 +4428,7 @@ function syncDomNodes() {
       ".video-config-panel",
     )!;
     const videoPanelOpen =
-      node.kind === "video" && node.role !== "result" && node.id === selectedId;
+      node.kind === "video" && node.role !== "result" && node.id === selection.selectedId;
     videoPanel.classList.toggle("open", videoPanelOpen);
     if (!videoPanelOpen)
       videoPanel
@@ -4445,7 +4439,7 @@ function syncDomNodes() {
     )!;
     videoResultPrompt.classList.toggle(
       "open",
-      node.kind === "video" && node.role === "result" && node.id === selectedId,
+      node.kind === "video" && node.role === "result" && node.id === selection.selectedId,
     );
     videoResultPrompt.querySelector<HTMLElement>("p")!.textContent =
       node.generationPrompt || "暂无生成提示词";
@@ -4893,7 +4887,7 @@ function createDomNode(node: FlowNode) {
     if (node.kind !== "prompt") return;
     event.preventDefault();
     event.stopPropagation();
-    selectedId = node.id;
+    selection.selectedId = node.id;
     updateEditor();
     domResize = {
       id: node.id,
@@ -5087,10 +5081,10 @@ function createDomNode(node: FlowNode) {
     if (!current) return;
     const target = event.target as HTMLElement;
     if (target.closest("audio") && current.kind === "audio") {
-      const groupInitial = batchSelectedIds.has(current.id)
+      const groupInitial = selection.batchIds.has(current.id)
         ? new Map(
             nodes
-              .filter((item) => batchSelectedIds.has(item.id))
+              .filter((item) => selection.batchIds.has(item.id))
               .map((item) => [item.id, { x: item.x, y: item.y }]),
           )
         : undefined;
@@ -5137,9 +5131,9 @@ function createDomNode(node: FlowNode) {
     event.stopPropagation();
     if (
       (current.status === "queued" || current.status === "running") &&
-      !batchSelectedIds.has(current.id)
+      !selection.batchIds.has(current.id)
     ) {
-      selectedId = current.id;
+      selection.selectedId = current.id;
       updateEditor();
       draw();
       return;
@@ -5148,14 +5142,14 @@ function createDomNode(node: FlowNode) {
     // Select on pointerdown so the card composer still opens after returning
     // from another window. The drag threshold below clears it once this turns
     // into an actual card move.
-    if (!multiSelectMode && !batchSelectedIds.has(current.id)) {
-      selectedId = current.id;
+    if (!selection.multiSelectMode && !selection.batchIds.has(current.id)) {
+      selection.selectedId = current.id;
       updateEditor();
     }
-    const groupInitial = batchSelectedIds.has(current.id)
+    const groupInitial = selection.batchIds.has(current.id)
       ? new Map(
           nodes
-            .filter((item) => batchSelectedIds.has(item.id))
+            .filter((item) => selection.batchIds.has(item.id))
             .map((item) => [item.id, { x: item.x, y: item.y }]),
         )
       : undefined;
@@ -5194,7 +5188,7 @@ function createDomNode(node: FlowNode) {
       const current = liveNode(),
         audio = audioPanel.querySelector<HTMLAudioElement>("audio");
       if (!current?.mediaUrl || !audio) return;
-      selectedId = current.id;
+      selection.selectedId = current.id;
       updateEditor();
       if (audio.paused) void audio.play();
       else audio.pause();
@@ -5203,7 +5197,7 @@ function createDomNode(node: FlowNode) {
     if (current.kind === "prompt") {
       event.preventDefault();
       event.stopPropagation();
-      selectedId = current.id;
+      selection.selectedId = current.id;
       updateEditor();
       enterTextEdit(current, element);
       return;
@@ -5224,7 +5218,7 @@ function createDomNode(node: FlowNode) {
     if (!insideImage) return;
     event.preventDefault();
     event.stopPropagation();
-    selectedId = current.id;
+    selection.selectedId = current.id;
     updateEditor();
     openAssetPreview(current.mediaUrl, current.title, current.kind);
   });
@@ -5278,14 +5272,12 @@ function createDomNode(node: FlowNode) {
       event.preventDefault();
       event.stopPropagation();
       if (!output) return;
-      selectedId = 0;
+      selection.selectedId = 0;
       updateEditor();
-      connectionSnap = null;
-      connecting = {
-        nodeId: node.id,
-        side: "right",
-        pointer: { x: event.clientX, y: event.clientY },
-      };
+      connection.begin(node.id, "right", {
+        x: event.clientX,
+        y: event.clientY,
+      });
       draw();
     });
   });
@@ -5302,7 +5294,7 @@ function createDomNode(node: FlowNode) {
       event.stopPropagation();
       const current = liveNode();
       if (!current) return;
-      selectedId = current.id;
+      selection.selectedId = current.id;
       updateEditor();
       if (current.kind === "prompt") enterTextEdit(current, element);
       else promptInput.focus();
@@ -5333,7 +5325,7 @@ function createDomNode(node: FlowNode) {
       event.stopPropagation();
       const current = liveNode();
       if (!current) return;
-      selectedId = current.id;
+      selection.selectedId = current.id;
       updateEditor();
       void generate(current);
     });
@@ -5399,7 +5391,7 @@ function createDomNode(node: FlowNode) {
       latest.status = "idle";
       latest.progress = 0;
       latest.agentAuto = false;
-      selectedId = latest.id;
+      selection.selectedId = latest.id;
       updateEditor();
       scheduleSave();
       draw();
@@ -5421,7 +5413,7 @@ function createDomNode(node: FlowNode) {
       event.stopPropagation();
       const current = liveNode();
       if (!current) return;
-      selectedId = current.id;
+      selection.selectedId = current.id;
       deleteSelectedNode();
     });
   const imagePanel = element.querySelector<HTMLElement>(".image-config-panel")!;
@@ -5511,7 +5503,7 @@ function createDomNode(node: FlowNode) {
         current.body = description;
         scheduleSave();
       }
-      selectedId = current.id;
+      selection.selectedId = current.id;
       updateEditor();
       void generate(current);
     });
@@ -5670,7 +5662,7 @@ function createDomNode(node: FlowNode) {
         current.body = description;
         scheduleSave();
       }
-      selectedId = current.id;
+      selection.selectedId = current.id;
       updateEditor();
       void generate(current);
     });
@@ -5896,7 +5888,7 @@ function createDomNode(node: FlowNode) {
     event.stopPropagation();
     const current = liveNode();
     if (!current?.mediaUrl) return;
-    selectedId = current.id;
+    selection.selectedId = current.id;
     updateEditor();
     if (audioElement.paused) void audioElement.play();
     else audioElement.pause();
@@ -6187,7 +6179,7 @@ window.addEventListener("pointermove", (event) => {
     setSaveState("editing", "编辑中…");
     draw();
   }
-  if (connecting) {
+  if (connection.active) {
     updateConnectionPointer(event.clientX, event.clientY);
     startConnectionAutoPan(event.clientX, event.clientY);
     draw();
@@ -6198,22 +6190,22 @@ window.addEventListener("pointerup", (event) => {
     domResize = null;
     scheduleSave();
   }
-  if (!connecting) return;
-  const snappedNode = connectionSnap
-    ? nodes.find((node) => node.id === connectionSnap!.nodeId)
+  if (!connection.active) return;
+  const snappedNode = connection.snap
+    ? nodes.find((node) => node.id === connection.snap!.nodeId)
     : undefined;
   const target = snappedNode
-    ? { node: snappedNode, side: connectionSnap!.side }
+    ? { node: snappedNode, side: connection.snap!.side }
     : hitPort(
         event.clientX,
         event.clientY,
-        connectionSnapRadius,
-        connecting.nodeId,
+        connection.snapRadius,
+        connection.active.nodeId,
       );
   if (target) {
     const next = directedLink(
-      connecting.nodeId,
-      connecting.side,
+      connection.active.nodeId,
+      connection.active.side,
       target.node.id,
       target.side,
     );
@@ -6225,8 +6217,7 @@ window.addEventListener("pointerup", (event) => {
       scheduleSave();
     }
   }
-  connecting = null;
-  connectionSnap = null;
+  connection.cancel();
   stopConnectionAutoPan();
   draw();
 });
@@ -6238,9 +6229,9 @@ window.addEventListener("pointermove", (event) => {
   if (event.buttons === 0) {
     if (domDrag.moved) suppressNodeReleaseUntil = performance.now() + 700;
     else if (!domDrag.agentSelect) {
-      if (multiSelectMode) toggleBatchNode(domDrag.id);
+      if (selection.multiSelectMode) toggleBatchNode(domDrag.id);
       else {
-        selectedId = domDrag.id;
+        selection.selectedId = domDrag.id;
         updateEditor();
       }
     }
@@ -6270,8 +6261,8 @@ window.addEventListener("pointermove", (event) => {
     }
     drag.element.classList.add("dragging");
     if (drag.groupInitial?.size) batchToolbar.classList.add("group-moving");
-    if (!drag.agentSelect && selectedId === drag.id) {
-      selectedId = 0;
+    if (!drag.agentSelect && selection.selectedId === drag.id) {
+      selection.selectedId = 0;
       updateEditor();
       draw();
     }
@@ -6332,9 +6323,9 @@ window.addEventListener("pointerup", (event) => {
     else showToast("参考素材最多选择 8 个", "warning");
     renderPromptAgentContext(false);
   } else if (!drag.agentSelect && !drag.moved) {
-    if (multiSelectMode) toggleBatchNode(drag.id);
+    if (selection.multiSelectMode) toggleBatchNode(drag.id);
     else {
-      selectedId = drag.id;
+      selection.selectedId = drag.id;
       updateEditor();
     }
   }
@@ -6425,7 +6416,7 @@ for (const type of ["click", "auxclick", "dblclick"] as const)
   );
 
 async function deleteSelectedNode() {
-  const index = nodes.findIndex((node) => node.id === selectedId);
+  const index = nodes.findIndex((node) => node.id === selection.selectedId);
   if (index < 0) return;
   if (canvasHasActiveGeneration()) {
     showToast("画布正在生成，任务完成后即可删除节点", "warning");
@@ -6442,7 +6433,7 @@ async function deleteSelectedNode() {
       confirm: cascadeCount ? `删除 ${targets.size} 张卡片` : "确认删除",
       danger: true,
     });
-  if (!confirmed || nodes.findIndex((node) => node.id === selectedId) < 0)
+  if (!confirmed || nodes.findIndex((node) => node.id === selection.selectedId) < 0)
     return;
   for (let nodeIndex = nodes.length - 1; nodeIndex >= 0; nodeIndex--)
     if (targets.has(nodes[nodeIndex].id)) nodes.splice(nodeIndex, 1);
@@ -6450,8 +6441,8 @@ async function deleteSelectedNode() {
     if (targets.has(links[linkIndex].from) || targets.has(links[linkIndex].to))
       links.splice(linkIndex, 1);
   }
-  selectedId = 0;
-  for (const id of targets) batchSelectedIds.delete(id);
+  selection.selectedId = 0;
+  for (const id of targets) selection.batchIds.delete(id);
   updateEditor();
   scheduleSave();
   draw();
@@ -6477,7 +6468,7 @@ async function deleteSelectedNode() {
 }
 
 function selectedNode() {
-  return nodes.find((node) => node.id === selectedId);
+  return nodes.find((node) => node.id === selection.selectedId);
 }
 function canGenerateNode(node: FlowNode) {
   const credits =
@@ -6608,7 +6599,7 @@ function updateNodeJobProgressUi(node: FlowNode) {
               : label.textContent;
     }
   }
-  if (selectedId === node.id) updateEditor();
+  if (selection.selectedId === node.id) updateEditor();
   updateTaskMonitor();
 }
 
@@ -7001,7 +6992,7 @@ async function loadCanvas(keepLoadingStatus = false) {
     canvasServerUpdatedAt = document.updatedAt || "";
     canvasSaveBlocked = false;
     hideCanvasGuide("canvas-save-conflict");
-    selectedId = 0;
+    selection.selectedId = 0;
     setSaveState("saved", "已自动保存");
     updateEditor();
     draw();
@@ -7048,7 +7039,7 @@ async function generate(sourceOverride?: FlowNode) {
     return;
   }
   if (source.kind === "tts") {
-    selectedId = 0;
+    selection.selectedId = 0;
     updateEditor();
     draw();
     await generateTts(source);
@@ -7076,7 +7067,7 @@ async function generate(sourceOverride?: FlowNode) {
     draw();
     return;
   }
-  selectedId = 0;
+  selection.selectedId = 0;
   updateEditor();
   draw();
   jobLabel.textContent = "正在提交…";
@@ -7607,7 +7598,7 @@ function removeFailedResult(node: FlowNode, sourceId = node.sourceNodeId) {
   for (let linkIndex = links.length - 1; linkIndex >= 0; linkIndex--)
     if (links[linkIndex].from === node.id || links[linkIndex].to === node.id)
       links.splice(linkIndex, 1);
-  if (selectedId === node.id) selectedId = sourceId ?? 0;
+  if (selection.selectedId === node.id) selection.selectedId = sourceId ?? 0;
 }
 
 const agentWorkflowSubmitting = new Set<number>();
@@ -7823,20 +7814,19 @@ window.addEventListener("online", resumeActiveJobPolls);
 window.addEventListener("focus", resumeActiveJobPolls);
 
 function refreshBatchSelection() {
-  for (const id of [...batchSelectedIds])
-    if (!nodes.some((node) => node.id === id)) batchSelectedIds.delete(id);
-  batchToolbar.classList.toggle("open", batchSelectedIds.size > 0);
+  selection.prune(nodes);
+  batchToolbar.classList.toggle("open", selection.batchIds.size > 0);
   const count = batchToolbar.querySelector<HTMLElement>("[data-batch-count]")!;
   count.textContent =
     innerWidth <= 780
-      ? `已选 ${batchSelectedIds.size}`
-      : `已选 ${batchSelectedIds.size} 项`;
-  count.title = `已选择 ${batchSelectedIds.size} 个卡片`;
-  if (!batchSelectedIds.size) {
+      ? `已选 ${selection.batchIds.size}`
+      : `已选 ${selection.batchIds.size} 项`;
+  count.title = `已选择 ${selection.batchIds.size} 个卡片`;
+  if (!selection.batchIds.size) {
     draw();
     return;
   }
-  const selected = nodes.filter((node) => batchSelectedIds.has(node.id)),
+  const selected = selection.selectedNodes(nodes),
     left = Math.min(...selected.map((node) => screen(node).x)),
     right = Math.max(
       ...selected.map(
@@ -7849,14 +7839,12 @@ function refreshBatchSelection() {
   draw();
 }
 function clearBatchSelection() {
-  batchSelectedIds.clear();
+  selection.clearBatch();
   batchToolbar.classList.remove("open");
   draw();
 }
 function toggleBatchNode(id: number) {
-  if (batchSelectedIds.has(id)) batchSelectedIds.delete(id);
-  else batchSelectedIds.add(id);
-  selectedId = 0;
+  selection.toggleBatch(id);
   updateEditor();
   refreshBatchSelection();
 }
@@ -7878,8 +7866,8 @@ function updateMarqueeSelection() {
     width: `${right - left}px`,
     height: `${bottom - top}px`,
   });
-  batchSelectedIds.clear();
-  marquee.baseSelection.forEach((id) => batchSelectedIds.add(id));
+  selection.batchIds.clear();
+  marquee.baseSelection.forEach((id) => selection.batchIds.add(id));
   nodes.forEach((node) => {
     if (
       node.x < worldRight &&
@@ -7887,7 +7875,7 @@ function updateMarqueeSelection() {
       node.y < worldBottom &&
       node.y + node.height > worldTop
     )
-      batchSelectedIds.add(node.id);
+      selection.batchIds.add(node.id);
   });
   draw();
 }
@@ -7928,8 +7916,8 @@ function refreshCanvasModeHint() {
   const hint = document.querySelector<HTMLElement>(".dock-create-hint")!,
     title = hint.querySelector<HTMLElement>("strong")!,
     detail = hint.querySelector<HTMLElement>("small")!;
-  hint.classList.toggle("multi-mode", multiSelectMode);
-  if (!multiSelectMode) {
+  hint.classList.toggle("multi-mode", selection.multiSelectMode);
+  if (!selection.multiSelectMode) {
     title.textContent = "双击画布 · 创建卡片";
     detail.textContent = "菜单中可进入多选模式";
   } else {
@@ -7943,7 +7931,7 @@ function clearMarqueeHold() {
   marqueeHoldPointer = null;
 }
 function enterMultiSelectMode() {
-  multiSelectMode = true;
+  selection.enterMultiSelect();
   marqueeMode = true;
   document.body.classList.add("marquee-mode");
   refreshCanvasModeHint();
@@ -7955,7 +7943,7 @@ function enterMultiSelectMode() {
 function exitMultiSelectMode() {
   clearMarqueeHold();
   stopMarqueeAutoPan();
-  multiSelectMode = false;
+  selection.exitMultiSelect();
   marqueeMode = false;
   marquee = null;
   document.body.classList.remove("marquee-mode");
@@ -7985,16 +7973,16 @@ function cascadeSelectionIds(seed: Set<number>) {
   return result;
 }
 function deleteBatchSelection() {
-  if (!batchSelectedIds.size) return;
+  if (!selection.batchIds.size) return;
   if (canvasHasActiveGeneration()) {
     showToast("画布正在生成，任务完成后即可批量删除", "warning");
     return;
   }
-  const targets = cascadeSelectionIds(batchSelectedIds),
-    cascadeCount = targets.size - batchSelectedIds.size;
+  const targets = cascadeSelectionIds(selection.batchIds),
+    cascadeCount = targets.size - selection.batchIds.size;
   if (
     !window.confirm(
-      `删除 ${batchSelectedIds.size} 个选中节点${cascadeCount ? `，并清理 ${cascadeCount} 个仅依赖它们的下游节点` : ""}？`,
+      `删除 ${selection.batchIds.size} 个选中节点${cascadeCount ? `，并清理 ${cascadeCount} 个仅依赖它们的下游节点` : ""}？`,
     )
   )
     return;
@@ -8003,14 +7991,14 @@ function deleteBatchSelection() {
   for (let index = links.length - 1; index >= 0; index--)
     if (targets.has(links[index].from) || targets.has(links[index].to))
       links.splice(index, 1);
-  if (targets.has(selectedId)) selectedId = 0;
+  if (targets.has(selection.selectedId)) selection.selectedId = 0;
   clearBatchSelection();
   updateEditor();
   scheduleSave();
   showToast(`已删除 ${targets.size} 个节点`, "success");
 }
 function generateBatchSelection() {
-  const selected = nodes.filter((node) => batchSelectedIds.has(node.id)),
+  const selected = nodes.filter((node) => selection.batchIds.has(node.id)),
     candidates = selected.filter(
       (node) =>
         canGenerateNode(node) &&
@@ -8071,7 +8059,7 @@ document.addEventListener(
       event.stopImmediatePropagation();
       clearMarqueeHold();
       quickMarqueeMode = true;
-      multiSelectMode = true;
+      selection.multiSelectMode = true;
       marqueeMode = true;
       document.body.classList.add("marquee-mode");
       pointer.down = false;
@@ -8083,16 +8071,16 @@ document.addEventListener(
         worldStart: world(start),
         current: { ...start },
         active: true,
-        baseSelection: new Set(batchSelectedIds),
+        baseSelection: new Set(selection.batchIds),
       };
-      selectedId = 0;
+      selection.selectedId = 0;
       updateEditor();
       marqueeBox.classList.add("open");
       updateMarqueeSelection();
       startMarqueeAutoPan();
       return;
     }
-    if (!multiSelectMode) return;
+    if (!selection.multiSelectMode) return;
     clearMarqueeHold();
     marqueeHoldPointer = {
       id: event.pointerId,
@@ -8103,7 +8091,7 @@ document.addEventListener(
       if (
         !marqueeHoldPointer ||
         marqueeHoldPointer.id !== event.pointerId ||
-        !multiSelectMode
+        !selection.multiSelectMode
       )
         return;
       const touch = marqueeHoldPointer.pointerType === "touch";
@@ -8116,9 +8104,9 @@ document.addEventListener(
         worldStart: world(start),
         current: { ...start },
         active: true,
-        baseSelection: new Set(batchSelectedIds),
+        baseSelection: new Set(selection.batchIds),
       };
-      selectedId = 0;
+      selection.selectedId = 0;
       updateEditor();
       marqueeBox.classList.add("open");
       updateMarqueeSelection();
@@ -8172,7 +8160,7 @@ document.addEventListener(
       event.preventDefault();
       event.stopImmediatePropagation();
       marqueeContextSuppressedUntil = performance.now() + 650;
-      selectedId = 0;
+      selection.selectedId = 0;
       updateEditor();
       refreshBatchSelection();
     }
@@ -8189,7 +8177,7 @@ document.addEventListener(
     marqueeBox.classList.remove("open");
     if (quickMarqueeMode) {
       quickMarqueeMode = false;
-      multiSelectMode = false;
+      selection.multiSelectMode = false;
       marqueeMode = false;
       document.body.classList.remove("marquee-mode");
       refreshCanvasModeHint();
@@ -8200,7 +8188,7 @@ document.addEventListener(
 document.addEventListener(
   "contextmenu",
   (event) => {
-    if (!multiSelectMode && performance.now() >= marqueeContextSuppressedUntil)
+    if (!selection.multiSelectMode && performance.now() >= marqueeContextSuppressedUntil)
       return;
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -8208,7 +8196,7 @@ document.addEventListener(
   true,
 );
 window.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && multiSelectMode) exitMultiSelectMode();
+  if (event.key === "Escape" && selection.multiSelectMode) exitMultiSelectMode();
 });
 
 canvas.addEventListener("pointerdown", (e) => {
@@ -8229,19 +8217,19 @@ canvas.addEventListener("pointerdown", (e) => {
   {
     const hit = hitNode(e.clientX, e.clientY);
     if (hit) {
-      if (multiSelectMode) {
-        if (!batchSelectedIds.has(hit.id)) {
+      if (selection.multiSelectMode) {
+        if (!selection.batchIds.has(hit.id)) {
           pointer.down = false;
           pointer.blankCanvas = false;
           toggleBatchNode(hit.id);
           return;
         }
         pointer.draggingNode = hit.id;
-        pointer.draggingGroup = new Set(batchSelectedIds);
+        pointer.draggingGroup = new Set(selection.batchIds);
         pointer.toggleBatchOnRelease = hit.id;
         pointer.blankCanvas = false;
       } else {
-        selectedId = hit.id;
+        selection.selectedId = hit.id;
         pointer.draggingNode = hit.id;
         pointer.blankCanvas = false;
         updateEditor();
@@ -8259,24 +8247,24 @@ canvas.addEventListener("pointermove", (e) => {
     Math.hypot(e.clientX - pointer.startX, e.clientY - pointer.startY) > 4
   ) {
     pointer.moved = true;
-    if (pointer.draggingNode === selectedId) {
+    if (pointer.draggingNode === selection.selectedId) {
       nodeLayer
         .querySelector<HTMLElement>(
           `.flow-node[data-id="${pointer.draggingNode}"]`,
         )
         ?.classList.remove("selected");
-      selectedId = 0;
+      selection.selectedId = 0;
       updateEditor();
     }
     if (!pointer.blankCanvas) setSaveState("editing", "编辑中…");
-    if (pointer.blankCanvas && selectedId) {
+    if (pointer.blankCanvas && selection.selectedId) {
       canvasPanSelectedElement = nodeLayer.querySelector<HTMLElement>(
-        `.flow-node[data-id="${selectedId}"]`,
+        `.flow-node[data-id="${selection.selectedId}"]`,
       );
       canvasPanSelectedElement?.classList.add("canvas-pan-selected");
     }
   }
-  if (connecting) {
+  if (connection.active) {
     updateConnectionPointer(e.clientX, e.clientY);
     startConnectionAutoPan(e.clientX, e.clientY);
     draw(false);
@@ -8296,22 +8284,22 @@ canvas.addEventListener("pointermove", (e) => {
   draw(Boolean(pointer.draggingNode));
 });
 canvas.addEventListener("pointerup", (e) => {
-  if (connecting) {
-    const snappedNode = connectionSnap
-        ? nodes.find((node) => node.id === connectionSnap!.nodeId)
+  if (connection.active) {
+    const snappedNode = connection.snap
+        ? nodes.find((node) => node.id === connection.snap!.nodeId)
         : undefined,
       target = snappedNode
-        ? { node: snappedNode, side: connectionSnap!.side }
+        ? { node: snappedNode, side: connection.snap!.side }
         : hitPort(
             e.clientX,
             e.clientY,
-            connectionSnapRadius,
-            connecting.nodeId,
+            connection.snapRadius,
+            connection.active.nodeId,
           );
     if (target) {
       const next = directedLink(
-        connecting.nodeId,
-        connecting.side,
+        connection.active.nodeId,
+        connection.active.side,
         target.node.id,
         target.side,
       );
@@ -8321,11 +8309,10 @@ canvas.addEventListener("pointerup", (e) => {
       )
         links.push(next);
     }
-    connecting = null;
-    connectionSnap = null;
+    connection.cancel();
     stopConnectionAutoPan();
   } else if (pointer.blankCanvas && !pointer.moved) {
-    selectedId = 0;
+    selection.selectedId = 0;
     updateEditor();
   }
   if (pointer.toggleBatchOnRelease && !pointer.moved)
@@ -8349,9 +8336,8 @@ canvas.addEventListener("pointercancel", () => {
   pointer.draggingGroup = null;
   pointer.toggleBatchOnRelease = 0;
   pointer.blankCanvas = false;
-  if (connecting) {
-    connecting = null;
-    connectionSnap = null;
+  if (connection.active) {
+    connection.cancel();
     stopConnectionAutoPan();
   }
   draw();
@@ -8416,14 +8402,14 @@ const linkHoverHint = document.querySelector<HTMLElement>("#link-hover-hint")!;
 const touchLinkAction =
   document.querySelector<HTMLButtonElement>("#touch-link-action")!;
 function closeTouchLinkAction() {
-  touchSelectedLinkIndex = -1;
+  connection.touchSelectedLinkIndex = -1;
   touchLinkGesture = null;
   touchLinkAction.classList.remove("open", "locked");
   draw();
 }
 function openTouchLinkAction(index: number, x: number, y: number) {
   if (index < 0 || !links[index]) return closeTouchLinkAction();
-  touchSelectedLinkIndex = index;
+  connection.touchSelectedLinkIndex = index;
   const locked = canvasHasActiveGeneration();
   touchLinkAction.classList.toggle("locked", locked);
   touchLinkAction.disabled = locked;
@@ -8442,7 +8428,7 @@ document.addEventListener(
   "pointerdown",
   (event) => {
     if (
-      touchSelectedLinkIndex >= 0 &&
+      connection.touchSelectedLinkIndex >= 0 &&
       !touchLinkAction.contains(event.target as Node)
     )
       closeTouchLinkAction();
@@ -8452,7 +8438,7 @@ document.addEventListener(
 canvas.addEventListener(
   "pointerdown",
   (event) => {
-    if (event.pointerType !== "touch" || event.button !== 0 || multiSelectMode)
+    if (event.pointerType !== "touch" || event.button !== 0 || selection.multiSelectMode)
       return;
     const index = hitLink(event.clientX, event.clientY, 18);
     touchLinkGesture = {
@@ -8502,23 +8488,23 @@ canvas.addEventListener(
   true,
 );
 touchLinkAction.addEventListener("click", () => {
-  if (touchSelectedLinkIndex < 0 || !links[touchSelectedLinkIndex])
+  if (connection.touchSelectedLinkIndex < 0 || !links[connection.touchSelectedLinkIndex])
     return closeTouchLinkAction();
   if (canvasHasActiveGeneration()) {
     showToast("画布正在生成，任务完成后即可删除连线", "warning");
     return;
   }
-  links.splice(touchSelectedLinkIndex, 1);
+  links.splice(connection.touchSelectedLinkIndex, 1);
   if (navigator.vibrate) navigator.vibrate(18);
   closeTouchLinkAction();
   scheduleSave();
   showToast("连线已删除", "success");
 });
 canvas.addEventListener("pointermove", (event) => {
-  if (pointer.down || connecting) return;
+  if (pointer.down || connection.active) return;
   const index = hitLink(event.clientX, event.clientY);
-  if (index !== hoveredLinkIndex) {
-    hoveredLinkIndex = index;
+  if (index !== connection.hoveredLinkIndex) {
+    connection.hoveredLinkIndex = index;
     draw();
   }
   linkHoverHint.classList.toggle("open", index >= 0);
@@ -8534,8 +8520,8 @@ canvas.addEventListener("pointermove", (event) => {
   } else canvas.style.removeProperty("cursor");
 });
 canvas.addEventListener("pointerleave", () => {
-  if (hoveredLinkIndex >= 0) {
-    hoveredLinkIndex = -1;
+  if (connection.hoveredLinkIndex >= 0) {
+    connection.hoveredLinkIndex = -1;
     draw();
   }
   linkHoverHint.classList.remove("open");
@@ -8551,7 +8537,7 @@ canvas.addEventListener("contextmenu", (event) => {
     return;
   }
   links.splice(index, 1);
-  hoveredLinkIndex = -1;
+  connection.hoveredLinkIndex = -1;
   linkHoverHint.classList.remove("open");
   scheduleSave();
   draw();
@@ -8635,11 +8621,11 @@ function positionQuickNodeMenu(clientX: number, clientY: number) {
   quickNodeMenu.classList.toggle("opens-up", openUp);
 }
 canvas.addEventListener("dblclick", (event) => {
-  if (event.button !== 0 || connecting) return;
+  if (event.button !== 0 || connection.active) return;
   const hit = hitNode(event.clientX, event.clientY);
   if (hit) {
     event.preventDefault();
-    selectedId = hit.id;
+    selection.selectedId = hit.id;
     updateEditor();
     draw();
     if (
@@ -8657,7 +8643,7 @@ canvas.addEventListener("dblclick", (event) => {
     return;
   }
   event.preventDefault();
-  if (multiSelectMode) {
+  if (selection.multiSelectMode) {
     exitMultiSelectMode();
     return;
   }
@@ -9651,7 +9637,7 @@ function playPromptAgentHover() {
   promptAgentBurst.classList.add("hover-active");
 }
 function collectPromptAgentContext() {
-  const selected = nodes.find((node) => node.id === selectedId),
+  const selected = nodes.find((node) => node.id === selection.selectedId),
     result: FlowNode[] = [],
     seen = new Set<number>(),
     visit = (node: FlowNode) => {
@@ -10110,7 +10096,7 @@ function openComicStudio() {
     .querySelector<HTMLTextAreaElement>("textarea")!
     .value.trim();
   resetMarqueeRightGesture();
-  if (multiSelectMode) exitMultiSelectMode();
+  if (selection.multiSelectMode) exitMultiSelectMode();
   closePromptAgent();
   if (comicSessionOwnerKey && comicSessionOwnerKey !== currentComicOwnerKey()) {
     resetComicConversationState(true);
@@ -10671,7 +10657,7 @@ function comicVoiceConfig(roleName: string, profile: string, description = "") {
 function applyComicToCanvas() {
   if (!comicPlan) return;
   resetMarqueeRightGesture();
-  if (multiSelectMode) exitMultiSelectMode();
+  if (selection.multiSelectMode) exitMultiSelectMode();
   try {
     const steps: PromptAgentStep[] = [],
       characterSteps: number[] = [],
@@ -11325,7 +11311,7 @@ function saveComicAsLabel(copy = false) {
       x: rightEdge + 180,
       y: world({ x: innerWidth / 2, y: innerHeight / 2 }).y - 280,
     });
-    label = nodes.find((node) => node.id === selectedId);
+    label = nodes.find((node) => node.id === selection.selectedId);
   }
   if (!label) return;
   label.title = `漫剧方案 · ${comicPlan.title}`;
@@ -11581,7 +11567,7 @@ function applyPromptAgentPlan(result: PromptAgentResult) {
                 y: base.y + (index % 3) * 270,
               };
       addNode(step.kind, position, true);
-      const created = nodes.find((node) => node.id === selectedId);
+      const created = nodes.find((node) => node.id === selection.selectedId);
       if (!created) return;
       if (comicWorkflow && step.kind === "image") created.model = "gpt-image-2";
       created.body = step.prompt.trim();
@@ -11717,12 +11703,12 @@ function applyPromptAgentPlan(result: PromptAgentResult) {
           links.splice(index, 1);
       for (let index = nodes.length - 1; index >= 0; index--)
         if (createdIds.includes(nodes[index].id)) nodes.splice(index, 1);
-      selectedId = 0;
+      selection.selectedId = 0;
       promptAgentAppliedNodeId = 0;
       scheduleSave();
       draw();
     };
-    selectedId = promptAgentAppliedNodeId;
+    selection.selectedId = promptAgentAppliedNodeId;
     scheduleSave();
     draw();
     if (result.shouldGenerate) queueMicrotask(runAgentWorkflow);
@@ -11742,7 +11728,7 @@ function applyPromptAgentPlan(result: PromptAgentResult) {
       current.body = before.body;
       current.generationPrompt = before.generationPrompt;
       current.title = before.title;
-      selectedId = current.id;
+      selection.selectedId = current.id;
       scheduleSave();
       draw();
     };
@@ -11755,7 +11741,7 @@ function applyPromptAgentPlan(result: PromptAgentResult) {
           }
         : world({ x: innerWidth / 2, y: innerHeight / 2 });
     addNode(kind, anchor);
-    const created = nodes.find((node) => node.id === selectedId);
+    const created = nodes.find((node) => node.id === selection.selectedId);
     if (!created) return;
     created.body = result.finalPrompt;
     created.generationPrompt = result.finalPrompt;
@@ -11784,13 +11770,13 @@ function applyPromptAgentPlan(result: PromptAgentResult) {
       for (let index = links.length - 1; index >= 0; index--)
         if (links[index].from === created.id || links[index].to === created.id)
           links.splice(index, 1);
-      if (selectedId === created.id) selectedId = 0;
+      if (selection.selectedId === created.id) selection.selectedId = 0;
       promptAgentAppliedNodeId = 0;
       scheduleSave();
       draw();
     };
   }
-  selectedId = promptAgentAppliedNodeId;
+  selection.selectedId = promptAgentAppliedNodeId;
   scheduleSave();
   draw();
 }
@@ -11798,7 +11784,7 @@ function applyPromptAgentVoice(result: PromptAgentResult) {
   const config = result.voiceConfig || {},
     anchor = world({ x: innerWidth / 2, y: innerHeight / 2 });
   addNode("voice", anchor);
-  const created = nodes.find((node) => node.id === selectedId);
+  const created = nodes.find((node) => node.id === selection.selectedId);
   if (!created) return;
   const speed = Math.max(0.5, Math.min(2, Number(config.speed) || 1)),
     pitch = Math.max(-50, Math.min(50, Number(config.pitch) || 0)),
@@ -11822,7 +11808,7 @@ function applyPromptAgentVoice(result: PromptAgentResult) {
     for (let index = links.length - 1; index >= 0; index--)
       if (links[index].from === created.id || links[index].to === created.id)
         links.splice(index, 1);
-    if (selectedId === created.id) selectedId = 0;
+    if (selection.selectedId === created.id) selection.selectedId = 0;
     promptAgentAppliedNodeId = 0;
     scheduleSave();
     draw();
@@ -11927,7 +11913,7 @@ promptAgentPanel
       status =
         promptAgentPanel.querySelector<HTMLOutputElement>(".agent-status")!,
       article = promptAgentPanel.querySelector<HTMLElement>("article")!,
-      selected = nodes.find((node) => node.id === selectedId),
+      selected = nodes.find((node) => node.id === selection.selectedId),
       promptOnly = promptAgentMode !== "create",
       modeTrigger = promptAgentPanel.querySelector<HTMLButtonElement>(
         "[data-agent-mode-trigger]",
@@ -12091,7 +12077,7 @@ promptAgentPanel
   .querySelector("[data-agent-apply]")!
   .addEventListener("click", () => {
     if (!promptAgentResult) return;
-    const node = nodes.find((item) => item.id === selectedId);
+    const node = nodes.find((item) => item.id === selection.selectedId);
     if (
       !node ||
       !["image", "video"].includes(node.kind) ||
@@ -12126,7 +12112,7 @@ promptAgentPanel
   .addEventListener("click", () => {
     const node = nodes.find((item) => item.id === promptAgentAppliedNodeId);
     if (!node) return;
-    selectedId = node.id;
+    selection.selectedId = node.id;
     camera.x = -(node.x + node.width / 2) * camera.zoom;
     camera.y = -(node.y + node.height / 2) * camera.zoom;
     draw();
@@ -12218,7 +12204,7 @@ document.querySelector("#dock-clear")!.addEventListener("click", async () => {
     canvasServerVersion,
     canvasServerUpdatedAt,
   );
-  selectedId = 0;
+  selection.selectedId = 0;
   resetCanvasHistory(false);
   updateEditor();
   setSaveState("saved", "已自动保存");
@@ -12500,7 +12486,7 @@ function attachAssetToImageNode(
   node.generationPrompt = undefined;
   node.status = "idle";
   node.progress = 0;
-  selectedId = node.id;
+  selection.selectedId = node.id;
   scheduleSave();
   updateEditor();
   draw();
