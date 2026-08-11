@@ -5,11 +5,10 @@ import { CanvasInputFeature } from "../canvas/canvas-input-feature";
 import { CanvasBatchFeature } from "../canvas/canvas-batch-feature";
 import { CanvasHistoryFeature } from "../canvas/canvas-history-feature";
 import type { GenerationCapabilities, Point } from "../nodes/node-types";
-import { decodePromptClipboardText, normalizePromptText } from "../nodes/prompt-text";
+import { normalizePromptText } from "../nodes/prompt-text";
 import { CanvasNodeRuntimeFeature } from "../nodes/canvas-node-runtime-feature";
 import { TtsFeature } from "../services/tts-feature";
 import { apiFetch } from "../services/api";
-import { AppUpdateController } from "../services/app-update-controller";
 import {
   createCanvasGenerationRuntime,
   type CanvasGenerationRuntime,
@@ -29,14 +28,13 @@ import { TopbarMenuCoordinator } from "../ui/topbar-menu-coordinator";
 import { CanvasControlsRuntime } from "../ui/canvas-controls-runtime";
 import type { CanvasGuideMessage } from "../ui/canvas-guide-controller";
 import type { ToastType } from "../ui/toast-controller";
-import { CanvasFeedbackFeature } from "../ui/canvas-feedback-feature";
 import type { AuthUser } from "../ui/user-menu-controller";
 import { CanvasWorkspaceContentRuntime } from "../ui/canvas-workspace-content-runtime";
 import { CanvasNodePresentationRuntime } from "../nodes/canvas-node-presentation-runtime";
 import { createDefaultGenerationCapabilities } from "./state";
 import { WorkspaceRuntimeFeature } from "./workspace-runtime-feature";
-import { AccountSessionFeature } from "./account-session-feature";
-import { escapeRuntimeHtml, RuntimeFoundation } from "./runtime-foundation";
+import { RuntimeFoundation } from "./runtime-foundation";
+import { AccountRuntimeComposition } from "./account-runtime-composition";
 import { screenToWorld, worldToScreen } from "../canvas/camera-controller";
 
 let renderingRuntime: CanvasRenderingRuntimeFeature;
@@ -238,96 +236,41 @@ function modelDisplayName(value?: string) {
     "自定义模型"
   );
 }
-const canvasFeedback = new CanvasFeedbackFeature({
-  escapeHtml: escapeRuntimeHtml,
-  normalizePrompt: normalizePromptText,
-  decodePrompt: decodePromptClipboardText,
-});
 function showToast(
   message: string,
   type: ToastType = "error",
   detail = "",
 ) {
-  canvasFeedback.showToast(message, type, detail);
+  accountRuntime.showToast(message, type, detail);
 }
 
 function copyOriginalPrompt(prompt?: string) {
-  return canvasFeedback.copyOriginalPrompt(prompt);
+  return accountRuntime.copyPrompt(prompt);
 }
 
 function hideCanvasGuide(key?: string) {
-  canvasFeedback.hideGuide(key);
+  accountRuntime.hideGuide(key);
 }
 function showCanvasGuide(message: CanvasGuideMessage) {
-  return canvasFeedback.showGuide(message);
+  return accountRuntime.showGuide(message);
 }
-const appUpdateController = new AppUpdateController({
-  authenticated: () => Boolean(authWorkspace.user),
-  refreshCapabilities: () => loadGenerationCapabilities(true),
-  showNotice: ({ dismiss, reload }) => showCanvasGuide({
-    key: "app-update",
-    title: "检测到服务器版本更新",
-    detail: "刷新页面后即可使用最新版本。",
-    priority: 80,
-    actions: [
-      { label: "稍后", run: dismiss },
-      { label: "刷新生效", primary: true, run: reload },
-    ],
-  }),
-  hideNotice: () => hideCanvasGuide("app-update"),
+const accountRuntime: AccountRuntimeComposition = new AccountRuntimeComposition({
+  foundation,
+  persistence: () => canvasPersistence,
+  rendering: () => renderingRuntime,
+  content: () => contentRuntime,
+  resize,
+  loadCapabilities: (redraw) => loadGenerationCapabilities(redraw),
+  registerMenu: (menu, close) => topbarMenus.register(menu, close),
+  closeMenus: (except) => closeTopbarMenus(except),
 });
-appUpdateController.start();
-
-const accountSession = new AccountSessionFeature({
-  auth: {
-    nodes,
-    links,
-    getProjectId: () => foundation.projectId,
-    setProjectId: (id) => { foundation.projectId = id; },
-    getLoadedProjectId: () => canvasPersistence.loadedProjectId,
-    isSaveBlocked: () => canvasPersistence.blocked,
-    getServerVersion: () => canvasPersistence.serverVersion,
-    ensureRenderer: () => renderingRuntime.render.ensure(),
-    stopSave: (logout) => canvasPersistence.stopAndReset(logout),
-    resetNodeLease: () => canvasNodeIds.reset(),
-    loadCanvas: (keepStatus) => loadCanvas(keepStatus),
-    loadAssets: () => contentRuntime.assets.load(false),
-    apiFetch,
-    resize,
-    clearSelection: () => { selection.selectedId = 0; },
-    registerUserMenu: (close) => topbarMenus.register("user", close),
-    closeTopbarMenus: (opening) => closeTopbarMenus(opening ? "user" : undefined),
-    notify: (message, type, detail) => showToast(message, type, detail),
-  },
-  notifications: {
-    registerTopbarMenu: (close) => topbarMenus.register("notifications", close),
-    closeNotificationMenus: (opening) =>
-      closeTopbarMenus(opening ? "notifications" : undefined),
-    closePresenceMenus: (opening) =>
-      closeTopbarMenus(opening ? "presence" : undefined),
-    showGuide: showCanvasGuide,
-    hideGuide: hideCanvasGuide,
-    isGuideVisible: (key) => canvasFeedback.isGuideVisible(key),
-    checkAppUpdate: () => void appUpdateController.checkNow(),
-    restoreAfterReconnect: () => void contentRuntime.creation.comic.restoreAfterReconnect(),
-    toast: (message, type) => showToast(message, type),
-  },
-  account: {
-    getProjectId: () => foundation.projectId,
-    refreshNodeModels: refreshNodeModelMenus,
-    toast: (message, type) => showToast(message, type),
-  },
-});
-const authWorkspace = accountSession.auth;
-const accountTools = accountSession.account;
+const authWorkspace = accountRuntime.auth;
+const accountTools = accountRuntime.account;
 function showCanvasModeNotice(title: string, detail: string) {
-  canvasFeedback.showModeNotice(title, detail);
+  accountRuntime.showModeNotice(title, detail);
 }
 function refreshNodeModelMenus() {
-  nodeLayer
-    .querySelectorAll(".flow-node")
-    .forEach((element) => element.remove());
-  draw();
+  accountRuntime.refreshNodeModels();
 }
 authWorkspace.applyRoute();
 
@@ -523,10 +466,10 @@ contentRuntime = new CanvasWorkspaceContentRuntime({
 function refreshLocalImageAvailabilityUI() {
   /* 本地 Provider 暂不在模型列表展示 */
 }
-function loadGenerationCapabilities(redraw = false) {
+function loadGenerationCapabilities(redraw = false): Promise<void> {
   return workspaceRuntime.loadCapabilities(redraw);
 }
-const workspaceRuntime = new WorkspaceRuntimeFeature<AuthUser>({
+const workspaceRuntime: WorkspaceRuntimeFeature<AuthUser> = new WorkspaceRuntimeFeature<AuthUser>({
   capabilities: {
     current: () => generationCapabilities,
     apply: (capabilities) => { generationCapabilities = capabilities; },
