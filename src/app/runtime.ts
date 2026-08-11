@@ -67,7 +67,6 @@ import {
   fetchAssets,
   fetchShowcaseAssets,
   type LibraryAsset,
-  type SquareAsset,
   updateAssetVisibility,
   uploadProjectImages,
 } from "../services/assets";
@@ -108,6 +107,7 @@ import {
   renderNodeToolbar,
 } from "../ui/node-editor";
 import { filterAssets, formatFileSize } from "../ui/asset-panel";
+import { SquarePanelView } from "../ui/square-panel";
 import { WorkspacePanelController } from "../ui/toolbar";
 import {
   createProjectDialog,
@@ -7583,71 +7583,25 @@ function renderAssets() {
   document.querySelector<HTMLButtonElement>("#asset-bulk-download")!.disabled =
     disabled;
 }
-let squareAssets: SquareAsset[] = [],
-  squarePage = 0;
 const squareGrid = document.querySelector<HTMLElement>("#square-grid")!,
   squareSearch = document.querySelector<HTMLInputElement>("#square-search")!;
-async function loadSquare() {
-  squareGrid.classList.add("loading");
-  try {
-    squareAssets = await fetchShowcaseAssets();
-    squarePage = 0;
-    renderSquare();
-  } catch {
-    squareGrid.innerHTML =
-      '<div class="asset-empty"><b>◇</b><span>作品暂时无法加载</span><small>稍后再试</small></div>';
-  } finally {
-    squareGrid.classList.remove("loading");
-  }
-}
-function renderSquare() {
-  const query = squareSearch.value.trim().toLocaleLowerCase(),
-    assets = squareAssets.filter((asset) =>
-      `${asset.name} ${asset.author}`.toLocaleLowerCase().includes(query),
-    ),
-    pageCount = Math.max(1, Math.ceil(assets.length / ASSET_PAGE_SIZE));
-  squarePage = Math.min(squarePage, pageCount - 1);
-  const pageAssets = assets.slice(
-    squarePage * ASSET_PAGE_SIZE,
-    (squarePage + 1) * ASSET_PAGE_SIZE,
-  );
-  document.querySelector<HTMLElement>("#square-count")!.textContent =
-    `${assets.length} 项`;
-  squareGrid.innerHTML = assets.length
-    ? ""
-    : '<div class="asset-empty"><b>◇</b><span>没有找到作品</span><small>换个关键词试试</small></div>';
-  for (const asset of pageAssets) {
-    const video = asset.mimeType.startsWith("video/"),
-      card = document.createElement("article");
-    card.className = "square-card";
-    card.tabIndex = 0;
-    card.innerHTML = `<img src="${asset.thumbnailUrl || mediaThumbnailUrl(asset.url)}" alt="${escapeHtml(asset.name)}" loading="lazy" decoding="async"><i>${video ? "▶" : "⌕"}</i><footer><strong>${escapeHtml(asset.name)}</strong><small>${escapeHtml(asset.author || "Viora 创作者")}</small></footer>`;
-    const open = () =>
-      openAssetPreview(asset.url, asset.name, video ? "video" : "image");
-    card.addEventListener("click", open);
-    card.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") open();
-    });
-    squareGrid.append(card);
-  }
-  if (assets.length > ASSET_PAGE_SIZE) {
-    const pager = document.createElement("nav");
-    pager.className = "asset-pager square-pager";
-    pager.innerHTML = `<button type="button" data-square-page="prev" ${squarePage === 0 ? "disabled" : ""}>上一页</button><span>${squarePage + 1} / ${pageCount}</span><button type="button" data-square-page="next" ${squarePage >= pageCount - 1 ? "disabled" : ""}>下一页</button>`;
-    pager.querySelectorAll<HTMLButtonElement>("button").forEach((button) =>
-      button.addEventListener("click", () => {
-        squarePage += button.dataset.squarePage === "next" ? 1 : -1;
-        squareGrid.scrollTop = 0;
-        renderSquare();
-      }),
-    );
-    squareGrid.append(pager);
-  }
-}
-squareSearch.addEventListener("input", () => {
-  squarePage = 0;
-  renderSquare();
+const squarePanelView = new SquarePanelView({
+  grid: squareGrid,
+  count: document.querySelector<HTMLElement>("#square-count")!,
+  search: squareSearch,
+  pageSize: ASSET_PAGE_SIZE,
+  onOpen: (asset, kind) => openAssetPreview(asset.url, asset.name, kind),
 });
+async function loadSquare() {
+  squarePanelView.setLoading(true);
+  try {
+    squarePanelView.setAssets(await fetchShowcaseAssets());
+  } catch {
+    squarePanelView.showLoadError();
+  } finally {
+    squarePanelView.setLoading(false);
+  }
+}
 document
   .querySelector("#square-refresh")!
   .addEventListener("click", () => void loadSquare());
