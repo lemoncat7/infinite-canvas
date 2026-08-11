@@ -44,6 +44,7 @@ import type {
   TtsVoiceOption,
 } from "../nodes/node-types";
 import { createNode, makeNodePublicId } from "../nodes/node-service";
+import { downloadNodeImage as downloadNodeImageFile } from "../nodes/node-download";
 import { PromptNodeController } from "../nodes/prompt-node";
 import {
   fetchTtsProviders,
@@ -58,7 +59,6 @@ import {
   type GenerationJob,
 } from "../services/generation";
 import {
-  fetchAssetBlob,
   fetchShowcaseAssets,
   type LibraryAsset,
 } from "../services/assets";
@@ -97,6 +97,7 @@ import { AssetContextController } from "../ui/asset-context-controller";
 import { AssetBulkController } from "../ui/asset-bulk-controller";
 import { SquarePanelView } from "../ui/square-panel";
 import { WorkspacePanelController } from "../ui/toolbar";
+import { WorkspaceKeyboardController } from "../ui/workspace-keyboard-controller";
 import {
   createProjectDialog,
 } from "../ui/dialogs/project-dialog";
@@ -5174,35 +5175,8 @@ function openAssetPreview(
   assetPreviewController.open(url, name, kind);
 }
 async function downloadNodeImage(node: FlowNode) {
-  if (!node.mediaUrl) return;
   try {
-    const blob = await fetchAssetBlob(node.mediaUrl);
-    const mime = blob.type.split(";")[0].toLowerCase();
-    const extension =
-      (
-        {
-          "image/png": "png",
-          "image/jpeg": "jpg",
-          "image/webp": "webp",
-          "image/gif": "gif",
-          "image/avif": "avif",
-          "image/svg+xml": "svg",
-        } as Record<string, string>
-      )[mime] ?? "png";
-    const title =
-      (node.title || "图片").trim().replace(/[\\/:*?"<>|]/g, "-") || "图片";
-    const filename = /\.[a-z0-9]{2,5}$/i.test(title)
-      ? title
-      : `${title}.${extension}`;
-    const objectUrl = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = objectUrl;
-    link.download = filename;
-    link.hidden = true;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    await downloadNodeImageFile(node);
   } catch (error) {
     showToast(
       "图片下载失败",
@@ -5228,52 +5202,25 @@ document.addEventListener("pointerdown", (event) => {
       if (!details.contains(target)) details.open = false;
     });
 });
-window.addEventListener("keydown", (event) => {
-  const shortcutTarget = event.target as HTMLElement | null,
-    isEditing = Boolean(
-      shortcutTarget?.matches(
-        'input, textarea, select, [contenteditable="true"]',
-      ),
-    );
-  if (
-    (event.ctrlKey || event.metaKey) &&
-    !event.altKey &&
-    !isEditing &&
-    event.key.toLowerCase() === "z"
-  ) {
-    event.preventDefault();
-    if (event.shiftKey) void redoCanvas();
-    else void undoCanvas();
-    return;
-  }
-  if (
-    (event.ctrlKey || event.metaKey) &&
-    !event.altKey &&
-    !isEditing &&
-    event.key.toLowerCase() === "y"
-  ) {
-    event.preventDefault();
-    void redoCanvas();
-    return;
-  }
-  if (event.key === "Escape" && quickNodeMenu.classList.contains("open")) {
+new WorkspaceKeyboardController({
+  closeQuickMenu: () => {
+    if (!quickNodeMenu.classList.contains("open")) return false;
     closeQuickNodeMenu();
-    return;
-  }
-  if (event.key === "Escape" && nodeInfoModal.classList.contains("open")) {
+    return true;
+  },
+  closeNodeInfo: () => {
+    if (!nodeInfoModal.classList.contains("open")) return false;
     closeNodeInfo();
-    return;
-  }
-  if (event.key === "Escape" && assetPreviewController.isOpen) {
+    return true;
+  },
+  closeAssetPreview: () => {
+    if (!assetPreviewController.isOpen) return false;
     assetPreviewController.close();
-    return;
-  }
-  if (event.key !== "Delete" && event.key !== "Backspace") return;
-  const target = event.target as HTMLElement | null;
-  if (target?.matches('input, textarea, select, [contenteditable="true"]'))
-    return;
-  event.preventDefault();
-  deleteSelectedNode();
+    return true;
+  },
+  undo: () => { void undoCanvas(); },
+  redo: () => { void redoCanvas(); },
+  deleteSelected: () => { void deleteSelectedNode(); },
 });
 function refreshLocalImageAvailabilityUI() {
   /* 本地 Provider 暂不在模型列表展示 */
