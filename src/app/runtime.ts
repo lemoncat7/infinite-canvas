@@ -133,12 +133,8 @@ import { ComicPlanController } from "../ui/comic-plan-controller";
 import { ComicOutputController } from "../ui/comic-output-controller";
 import { ComicLabelController } from "../ui/comic-labels";
 import {
-  configurePromptAgentNode,
-  connectPromptAgentInputs,
-  planComicWorkflowLayout,
-  promptAgentStepPosition,
-  resolvePromptAgentInputs,
-} from "../nodes/prompt-agent-workflow";
+  PromptAgentApplicationController,
+} from "../nodes/prompt-agent-application";
 import { createNodeView } from "../nodes/node-view-factory";
 import { syncNodeMediaView } from "../nodes/node-media-view";
 import { syncImageNodePanel } from "../nodes/image-node-sync";
@@ -4803,202 +4799,28 @@ document.addEventListener(
   },
   true,
 );
+const promptAgentApplication = new PromptAgentApplicationController({
+  nodes,
+  links,
+  getSources: selectedPromptAgentNodes,
+  getSelectedId: () => selection.selectedId,
+  setSelectedId: (id) => { selection.selectedId = id; },
+  worldCenter: () => world({ x: innerWidth / 2, y: innerHeight / 2 }),
+  addNode,
+  persist: scheduleSave,
+  draw,
+  runWorkflow: runAgentWorkflow,
+  loadVoices: (providerId) => { void loadTtsVoices(providerId); },
+});
 function applyPromptAgentPlan(result: PromptAgentResult) {
-  const sources = selectedPromptAgentNodes(),
-    current = sources[0],
-    kind = result.targetType || result.kind,
-    canUpdate =
-      current &&
-      current.kind === kind &&
-      current.role !== "result" &&
-      !current.mediaUrl,
-    action =
-      result.action === "update_current" && canUpdate
-        ? "update_current"
-        : result.action === "create_new"
-          ? "create_new"
-          : "create_child";
-  promptAgentUndo = null;
-  promptAgentAppliedNodeId = 0;
-  const planned = (result.steps || [])
-    .filter(
-      (step) =>
-        ["image", "video", "voice", "tts"].includes(step.kind) &&
-        step.prompt?.trim(),
-    )
-    .slice(0, 192);
-  if (planned.length) {
-    const imageSources = sources.filter(
-        (source) => source.kind === "image" && Boolean(source.mediaUrl),
-      ),
-      createdIds: number[] = [],
-      createdNodes: FlowNode[] = [],
-      rightEdge = nodes.length
-        ? Math.max(...nodes.map((node) => node.x + node.width))
-        : 0,
-      base = {
-        x: rightEdge + 230,
-        y: current
-          ? current.y + 80
-          : world({ x: innerWidth / 2, y: innerHeight / 2 }).y,
-      },
-      comicLayout = planComicWorkflowLayout(planned, base);
-    planned.forEach((step, index) => {
-      const comicWorkflow = result.layout === "comic-workflow",
-        position = promptAgentStepPosition({
-          index,
-          step,
-          layout: result.layout,
-          base,
-          comic: comicLayout,
-        });
-      addNode(step.kind, position, true);
-      const created = nodes.find((node) => node.id === selection.selectedId);
-      if (!created) return;
-      configurePromptAgentNode({
-        node: created,
-        step,
-        index,
-        comicWorkflow,
-        shouldGenerate: Boolean(result.shouldGenerate),
-      });
-      createdIds.push(created.id);
-      createdNodes.push(created);
-      connectPromptAgentInputs(
-        created,
-        resolvePromptAgentInputs({
-          step,
-          stepIndex: index,
-          imageSources,
-          createdNodes,
-          comicWorkflow,
-        }),
-        links,
-      );
-    });
-    promptAgentAppliedNodeId = createdIds[0] || 0;
-    promptAgentUndo = () => {
-      for (let index = links.length - 1; index >= 0; index--)
-        if (
-          createdIds.includes(links[index].from) ||
-          createdIds.includes(links[index].to)
-        )
-          links.splice(index, 1);
-      for (let index = nodes.length - 1; index >= 0; index--)
-        if (createdIds.includes(nodes[index].id)) nodes.splice(index, 1);
-      selection.selectedId = 0;
-      promptAgentAppliedNodeId = 0;
-      scheduleSave();
-      draw();
-    };
-    selection.selectedId = promptAgentAppliedNodeId;
-    scheduleSave();
-    draw();
-    if (result.shouldGenerate) queueMicrotask(runAgentWorkflow);
-    return;
-  }
-  if (action === "update_current" && current) {
-    const before = {
-      body: current.body,
-      generationPrompt: current.generationPrompt,
-      title: current.title,
-    };
-    current.body = result.finalPrompt;
-    current.generationPrompt = result.finalPrompt;
-    current.title = kind === "video" ? "Agent · 视频任务" : "Agent · 图像任务";
-    promptAgentAppliedNodeId = current.id;
-    promptAgentUndo = () => {
-      current.body = before.body;
-      current.generationPrompt = before.generationPrompt;
-      current.title = before.title;
-      selection.selectedId = current.id;
-      scheduleSave();
-      draw();
-    };
-  } else {
-    const anchor =
-      action === "create_child" && current
-        ? {
-            x: current.x + current.width + 120,
-            y: current.y + current.height / 2,
-          }
-        : world({ x: innerWidth / 2, y: innerHeight / 2 });
-    addNode(kind, anchor);
-    const created = nodes.find((node) => node.id === selection.selectedId);
-    if (!created) return;
-    created.body = result.finalPrompt;
-    created.generationPrompt = result.finalPrompt;
-    created.title = kind === "video" ? "Agent · 视频任务" : "Agent · 图像任务";
-    promptAgentAppliedNodeId = created.id;
-    if (action === "create_child")
-      sources
-        .filter((source) => source.id !== created.id)
-        .forEach((source, inputIndex) => {
-          if (
-            !links.some(
-              (link) => link.from === source.id && link.to === created.id,
-            )
-          )
-            links.push({
-              from: source.id,
-              to: created.id,
-              fromSide: "right",
-              toSide: "left",
-              inputOrder: inputIndex + 1,
-            });
-        });
-    promptAgentUndo = () => {
-      const index = nodes.findIndex((node) => node.id === created.id);
-      if (index >= 0) nodes.splice(index, 1);
-      for (let index = links.length - 1; index >= 0; index--)
-        if (links[index].from === created.id || links[index].to === created.id)
-          links.splice(index, 1);
-      if (selection.selectedId === created.id) selection.selectedId = 0;
-      promptAgentAppliedNodeId = 0;
-      scheduleSave();
-      draw();
-    };
-  }
-  selection.selectedId = promptAgentAppliedNodeId;
-  scheduleSave();
-  draw();
+  const applied = promptAgentApplication.applyPlan(result);
+  promptAgentAppliedNodeId = applied.appliedNodeId;
+  promptAgentUndo = applied.undo;
 }
 function applyPromptAgentVoice(result: PromptAgentResult) {
-  const config = result.voiceConfig || {},
-    anchor = world({ x: innerWidth / 2, y: innerHeight / 2 });
-  addNode("voice", anchor);
-  const created = nodes.find((node) => node.id === selection.selectedId);
-  if (!created) return;
-  const speed = Math.max(0.5, Math.min(2, Number(config.speed) || 1)),
-    pitch = Math.max(-50, Math.min(50, Number(config.pitch) || 0)),
-    volume = Math.max(0, Math.min(2, Number(config.volume) || 1));
-  created.title = `语音配置 · ${String(config.roleName || "新角色").trim() || "新角色"}`;
-  created.body = String(result.finalPrompt || config.tone || "自然").trim();
-  created.voiceSettings = {
-    providerId: "easyvoice-local",
-    voiceId: String(config.voiceId || "zh-CN-XiaoxiaoNeural"),
-    language: "zh-CN",
-    defaultSpeed: speed,
-    pitch,
-    volume,
-    roleName: String(config.roleName || "").trim(),
-    tone: String(config.tone || "自然").trim(),
-  };
-  promptAgentAppliedNodeId = created.id;
-  promptAgentUndo = () => {
-    const index = nodes.findIndex((node) => node.id === created.id);
-    if (index >= 0) nodes.splice(index, 1);
-    for (let index = links.length - 1; index >= 0; index--)
-      if (links[index].from === created.id || links[index].to === created.id)
-        links.splice(index, 1);
-    if (selection.selectedId === created.id) selection.selectedId = 0;
-    promptAgentAppliedNodeId = 0;
-    scheduleSave();
-    draw();
-  };
-  void loadTtsVoices("easyvoice-local");
-  scheduleSave();
-  draw();
+  const applied = promptAgentApplication.applyVoice(result);
+  promptAgentAppliedNodeId = applied.appliedNodeId;
+  promptAgentUndo = applied.undo;
 }
 promptAgentPanel
   .querySelector<HTMLButtonElement>(".agent-submit")!
