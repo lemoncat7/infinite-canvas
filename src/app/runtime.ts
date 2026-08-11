@@ -79,14 +79,7 @@ import {
   speechSegments,
 } from "../nodes/video-node";
 import { inferVoiceConfig } from "../nodes/voice-node";
-import type {
-  ComicPlan,
-  ComicShot,
-  PromptAgentMode,
-  PromptAgentResult,
-  PromptAgentStep,
-} from "../nodes/comic-types";
-import { stripCharactersFromScenePrompt } from "../nodes/comic-format";
+import type { ComicPlan, ComicShot } from "../nodes/comic-types";
 import { bindNodeConfigPanel } from "../ui/node-editor";
 import { AssetLibraryView } from "../ui/asset-library-view";
 import { AssetLibraryController } from "../ui/asset-library-controller";
@@ -1628,52 +1621,16 @@ async function finalizeGenerationJob(currentNode: FlowNode, job: GenerationJob) 
 }
 function pollJob(node: FlowNode) { generationPoller.poll(node); }
 function refreshBatchSelection() {
-  selection.prune(nodes);
-  batchToolbar.classList.toggle("open", selection.batchIds.size > 0);
-  const count = batchToolbar.querySelector<HTMLElement>("[data-batch-count]")!;
-  count.textContent =
-    innerWidth <= 780
-      ? `已选 ${selection.batchIds.size}`
-      : `已选 ${selection.batchIds.size} 项`;
-  count.title = `已选择 ${selection.batchIds.size} 个卡片`;
-  if (!selection.batchIds.size) {
-    draw();
-    return;
-  }
-  const selected = selection.selectedNodes(nodes),
-    left = Math.min(...selected.map((node) => screen(node).x)),
-    right = Math.max(
-      ...selected.map(
-        (node) => screen({ x: node.x + node.width, y: node.y }).x,
-      ),
-    ),
-    top = Math.min(...selected.map((node) => screen(node).y));
-  batchToolbar.style.left = `${Math.max(12, Math.min(innerWidth - batchToolbar.offsetWidth - 12, (left + right) / 2 - batchToolbar.offsetWidth / 2))}px`;
-  batchToolbar.style.top = `${Math.max(72, top - 58)}px`;
-  draw();
+  batchSelectionController.refresh();
 }
 function clearBatchSelection() {
-  selection.clearBatch();
-  batchToolbar.classList.remove("open");
-  draw();
+  batchSelectionController.clear();
 }
 function toggleBatchNode(id: number) {
-  selection.toggleBatch(id);
-  updateEditor();
-  refreshBatchSelection();
+  batchSelectionController.toggle(id);
 }
 function refreshCanvasModeHint() {
-  const hint = document.querySelector<HTMLElement>(".dock-create-hint")!,
-    title = hint.querySelector<HTMLElement>("strong")!,
-    detail = hint.querySelector<HTMLElement>("small")!;
-  hint.classList.toggle("multi-mode", selection.multiSelectMode);
-  if (!selection.multiSelectMode) {
-    title.textContent = "双击画布 · 创建卡片";
-    detail.textContent = "菜单中可进入多选模式";
-  } else {
-    title.textContent = "点按卡片 · 选择 / 取消";
-    detail.textContent = "长按空白框选 · 双击空白退出";
-  }
+  batchSelectionController.refreshModeHint();
 }
 function enterMultiSelectMode() { marqueeController.enter(); }
 function exitMultiSelectMode() { marqueeController.exit(); }
@@ -1685,11 +1642,15 @@ const batchSelectionController = new BatchSelectionController({
   batchIds: selection.batchIds,
   selectedId: () => selection.selectedId,
   clearSelectedId: () => { selection.selectedId = 0; },
+  multiSelectMode: () => selection.multiSelectMode,
+  screen,
+  viewportWidth: () => innerWidth,
   generationActive: canvasHasActiveGeneration,
   enqueue: (ids) => generationWorkflow.enqueue(ids),
   clearSelection: clearBatchSelection,
   exitMode: exitMultiSelectMode,
   update: updateEditor,
+  draw,
   save: scheduleSave,
   toast: (message, tone, detail) => showToast(message, tone, detail),
   confirm: (message) => window.confirm(message),
@@ -2072,9 +2033,6 @@ const comicPlanController = new ComicPlanController({
 function requestComicPlan() {
   return comicPlanController.submit();
 }
-function scenePromptWithoutCharacters(value: string) {
-  return stripCharactersFromScenePrompt(value, comicState.plan);
-}
 const comicOutputController = new ComicOutputController({
   state: comicState,
   getNodes: () => nodes,
@@ -2082,7 +2040,7 @@ const comicOutputController = new ComicOutputController({
     resetMarqueeRightGesture();
     if (selection.multiSelectMode) exitMultiSelectMode();
   },
-  applyPlan: applyPromptAgentPlan,
+  applyPlan: (result) => promptAgentApplication.applyPlan(result),
   closeStudio: closeComicStudio,
   onWorkflowReady: (stats) => {
     showToast(
@@ -2181,9 +2139,6 @@ const promptAgentApplication = new PromptAgentApplicationController({
   runWorkflow: runAgentWorkflow,
   loadVoices: (providerId) => { void loadTtsVoices(providerId); },
 });
-function applyPromptAgentPlan(result: PromptAgentResult) {
-  promptAgentApplication.applyPlan(result);
-}
 promptAgentRequests = new PromptAgentRequestController({
   panel: promptAgentPanel,
   controls: promptAgentControls,

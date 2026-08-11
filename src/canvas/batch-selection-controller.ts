@@ -11,6 +11,9 @@ export class BatchSelectionController {
       batchIds: Set<number>;
       selectedId: () => number;
       clearSelectedId: () => void;
+      multiSelectMode: () => boolean;
+      screen: (point: { x: number; y: number }) => { x: number; y: number };
+      viewportWidth: () => number;
       generationActive: () => boolean;
       enqueue: (ids: Set<number>) => {
         candidates: number;
@@ -21,12 +24,69 @@ export class BatchSelectionController {
       clearSelection: () => void;
       exitMode: () => void;
       update: () => void;
+      draw: () => void;
       save: () => void;
       toast: (message: string, tone: ToastTone, detail?: string) => void;
       confirm: (message: string) => boolean;
     },
   ) {
     this.bind();
+  }
+
+  refresh() {
+    const validIds = new Set(this.deps.nodes.map((node) => node.id));
+    if (!validIds.has(this.deps.selectedId())) this.deps.clearSelectedId();
+    for (const id of this.deps.batchIds)
+      if (!validIds.has(id)) this.deps.batchIds.delete(id);
+    const count = this.deps.batchIds.size;
+    this.deps.toolbar.classList.toggle("open", count > 0);
+    const label = this.deps.toolbar.querySelector<HTMLElement>("[data-batch-count]")!;
+    label.textContent = this.deps.viewportWidth() <= 780
+      ? `已选 ${count}`
+      : `已选 ${count} 项`;
+    label.title = `已选择 ${count} 个卡片`;
+    if (!count) return this.deps.draw();
+    const selected = this.deps.nodes.filter((node) => this.deps.batchIds.has(node.id));
+    const left = Math.min(...selected.map((node) => this.deps.screen(node).x));
+    const right = Math.max(...selected.map((node) =>
+      this.deps.screen({ x: node.x + node.width, y: node.y }).x,
+    ));
+    const top = Math.min(...selected.map((node) => this.deps.screen(node).y));
+    const viewportWidth = this.deps.viewportWidth();
+    this.deps.toolbar.style.left = `${Math.max(12, Math.min(
+      viewportWidth - this.deps.toolbar.offsetWidth - 12,
+      (left + right) / 2 - this.deps.toolbar.offsetWidth / 2,
+    ))}px`;
+    this.deps.toolbar.style.top = `${Math.max(72, top - 58)}px`;
+    this.deps.draw();
+  }
+
+  clear() {
+    this.deps.batchIds.clear();
+    this.deps.toolbar.classList.remove("open");
+    this.deps.draw();
+  }
+
+  toggle(id: number) {
+    if (this.deps.batchIds.has(id)) this.deps.batchIds.delete(id);
+    else this.deps.batchIds.add(id);
+    this.deps.clearSelectedId();
+    this.deps.update();
+    this.refresh();
+  }
+
+  refreshModeHint() {
+    const hint = document.querySelector<HTMLElement>(".dock-create-hint")!;
+    const title = hint.querySelector<HTMLElement>("strong")!;
+    const detail = hint.querySelector<HTMLElement>("small")!;
+    const active = this.deps.multiSelectMode();
+    hint.classList.toggle("multi-mode", active);
+    title.textContent = active
+      ? "点按卡片 · 选择 / 取消"
+      : "双击画布 · 创建卡片";
+    detail.textContent = active
+      ? "长按空白框选 · 双击空白退出"
+      : "菜单中可进入多选模式";
   }
 
   cascade(seed: Set<number>) {
