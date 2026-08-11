@@ -61,8 +61,15 @@ import {
   type GenerationJob,
 } from "../services/generation";
 import {
+  deleteAsset,
+  deleteAssets,
+  fetchAssetBlob,
   fetchAssets,
+  fetchShowcaseAssets,
   type LibraryAsset,
+  type SquareAsset,
+  updateAssetVisibility,
+  uploadProjectImages,
 } from "../services/assets";
 import {
   createProject,
@@ -7269,12 +7276,8 @@ document
       danger: true,
     });
     if (!confirmed) return;
-    const results = await Promise.all(
-      [...selectedAssetIds].map((id) =>
-        apiFetch(`/api/assets/${id}`, { method: "DELETE" }),
-      ),
-    );
-    if (results.some((response) => !response.ok))
+    const failed = await deleteAssets(selectedAssetIds);
+    if (failed)
       showToast("部分资产删除失败", "error");
     else showToast("所选资产已删除", "success");
     selectedAssetIds.clear();
@@ -7286,10 +7289,14 @@ document
     for (const asset of libraryAssets.filter((item) =>
       selectedAssetIds.has(item.id),
     )) {
-      const response = await apiFetch(asset.url);
-      if (!response.ok) continue;
+      let blob: Blob;
+      try {
+        blob = await fetchAssetBlob(asset.url);
+      } catch {
+        continue;
+      }
       const link = document.createElement("a");
-      link.href = URL.createObjectURL(await response.blob());
+      link.href = URL.createObjectURL(blob);
       link.download = asset.name;
       link.click();
       window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
@@ -7334,29 +7341,7 @@ async function uploadImageFiles(
   button.disabled = true;
   button.textContent = "正在上传…";
   try {
-    const payload = await Promise.all(
-      images.map(async (file) => ({
-        name: file.name || `粘贴图片-${Date.now()}.png`,
-        mimeType: file.type,
-        data: await fileBase64(file),
-      })),
-    );
-    const response = await apiFetch(`/api/projects/${currentProjectId}/assets`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ files: payload }),
-    });
-    if (!response.ok)
-      throw new Error(
-        response.status === 413
-          ? "图片过大，单张图片不能超过 100MB"
-          : `上传失败（${response.status}）`,
-      );
-    const uploaded = (await response.json()) as Array<{
-      name: string;
-      mimeType: string;
-      url: string;
-    }>;
+    const uploaded = await uploadProjectImages(currentProjectId, images);
     if (targetNodeId && uploaded[0])
       attachAssetToImageNode(targetNodeId, uploaded[0]);
     else if (placement && uploaded[0])
@@ -7598,15 +7583,6 @@ function renderAssets() {
   document.querySelector<HTMLButtonElement>("#asset-bulk-download")!.disabled =
     disabled;
 }
-type SquareAsset = {
-  id: string;
-  name: string;
-  mimeType: string;
-  createdAt: string;
-  author: string;
-  url: string;
-  thumbnailUrl?: string;
-};
 let squareAssets: SquareAsset[] = [],
   squarePage = 0;
 const squareGrid = document.querySelector<HTMLElement>("#square-grid")!,
@@ -7614,9 +7590,7 @@ const squareGrid = document.querySelector<HTMLElement>("#square-grid")!,
 async function loadSquare() {
   squareGrid.classList.add("loading");
   try {
-    const response = await apiFetch("/api/showcase");
-    if (!response.ok) throw new Error("load failed");
-    squareAssets = (await response.json()) as SquareAsset[];
+    squareAssets = await fetchShowcaseAssets();
     squarePage = 0;
     renderSquare();
   } catch {
@@ -7695,9 +7669,7 @@ function openAssetPreview(
 async function downloadNodeImage(node: FlowNode) {
   if (!node.mediaUrl) return;
   try {
-    const response = await apiFetch(node.mediaUrl);
-    if (!response.ok) throw new Error(`原图读取失败（${response.status}）`);
-    const blob = await response.blob();
+    const blob = await fetchAssetBlob(node.mediaUrl);
     const mime = blob.type.split(";")[0].toLowerCase();
     const extension =
       (
@@ -7773,13 +7745,10 @@ document
   .addEventListener("click", async () => {
     if (!selectedAsset) return;
     const next = !selectedAsset.isPublic;
-    const response = await apiFetch(`/api/assets/${selectedAsset.id}/visibility`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ isPublic: next }),
-    });
     assetContextMenu.classList.remove("open");
-    if (!response.ok) {
+    try {
+      await updateAssetVisibility(selectedAsset.id, next);
+    } catch {
       showToast("主页展示状态更新失败", "error");
       return;
     }
@@ -7796,9 +7765,7 @@ document
       !window.confirm(`确定删除“${selectedAsset.name}”吗？`)
     )
       return;
-    const response = await apiFetch(`/api/assets/${selectedAsset.id}`, {
-      method: "DELETE",
-    });
+    const response = await deleteAsset(selectedAsset.id);
     if (!response.ok) {
       window.alert("删除失败，请重试");
       return;
@@ -7831,14 +7798,6 @@ function escapeHtml(value: string) {
   const element = document.createElement("span");
   element.textContent = value;
   return element.innerHTML;
-}
-function fileBase64(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
 }
 document.addEventListener("pointerdown", (event) => {
   const target = event.target as Node;
