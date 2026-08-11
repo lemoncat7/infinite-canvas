@@ -4,7 +4,6 @@ import { CanvasSpatialIndex } from "../canvas/spatial-index";
 import { CanvasStore } from "../canvas/store";
 import {
   applyCanvasOperations,
-  diffCanvasSnapshots,
   normalizeCanvasLinks,
   type CanvasSyncOperation,
   type CanvasSyncSnapshot,
@@ -17,11 +16,9 @@ import { MarqueeController } from "../canvas/marquee-controller";
 import { CanvasPointerLifecycle } from "../canvas/canvas-pointer-lifecycle";
 import { TouchPinchController } from "../canvas/touch-pinch-controller";
 import { CameraViewportController } from "../canvas/camera-viewport-controller";
-import { normalizeCanvasDocument } from "../canvas/document-normalizer";
 import { CanvasClearController } from "../canvas/clear-controller";
-import { fetchCanvasDocument } from "../canvas/sync-client";
 import { CanvasSaveCoordinator } from "../canvas/save-coordinator";
-import { repairRestoredCanvas } from "../canvas/restoration";
+import { CanvasLoadCoordinator } from "../canvas/load-coordinator";
 import { LinkInteractionView } from "../canvas/link-interaction-view";
 import { GenerationPoller } from "../services/generation-poller";
 import { GenerationWorkflow } from "../services/generation-workflow";
@@ -50,7 +47,6 @@ import { TtsGenerationController } from "../nodes/tts-generation-controller";
 import { GenerationSubmitController } from "../nodes/generation-submit-controller";
 import { apiFetch } from "../services/api";
 import {
-  hydrateGenerationPrompts,
   type GenerationJob,
 } from "../services/generation";
 import {
@@ -3294,93 +3290,47 @@ const canvasSaveCoordinator: CanvasSaveCoordinator = new CanvasSaveCoordinator({
   reload: () => loadCanvas(),
 });
 
-async function loadCanvas(keepLoadingStatus = false) {
-  const loadSequence = canvasSaveCoordinator.beginLoad();
-  try {
-    const loadingProjectId = currentProjectId,
-      leasedNextId = nextId,
-      leasedEnd = canvasNodeIdBlockEnd;
-    setWorkspaceBootStatus("正在读取画布与生成任务");
-    generationPoller.cancelAll();
-    const canvasResult = await fetchCanvasDocument(loadingProjectId);
-    if (
-      loadingProjectId !== currentProjectId ||
-      !canvasSaveCoordinator.isCurrentLoad(loadSequence, loadingProjectId)
-    )
-      return;
-    if (canvasResult.kind === "missing") {
-      canvasSaveCoordinator.loadedProjectId = loadingProjectId;
-      await saveCanvas();
-      resetCanvasHistory(false);
-      return;
-    }
-    const document = canvasResult.document;
-    const normalizedDocument = normalizeCanvasDocument(document, camera, normalizePromptText),
-      receivedBaseline = normalizedDocument.baseline;
-    document.nodes = normalizedDocument.nodes;
-    document.links = normalizedDocument.links;
+const canvasLoadCoordinator = new CanvasLoadCoordinator({
+  save: canvasSaveCoordinator,
+  nodes,
+  links,
+  camera,
+  projectId: () => currentProjectId,
+  normalizePrompt: normalizePromptText,
+  clearViews: () => {
     nodeLayer.replaceChildren();
     pixiDetachedNodeCache.clear();
     pixiEditorWarmScheduled = false;
-    nodes.splice(0, nodes.length, ...normalizedDocument.nodes);
-    await hydrateGenerationPrompts(nodes);
-    const migrated = normalizeCanvasLinks(document.links ?? []);
-    links.splice(0, links.length, ...migrated);
-    if (leasedNextId <= leasedEnd) {
-      nextId = leasedNextId;
-      canvasNodeIdBlockEnd = leasedEnd;
-    } else {
-      nextId = nodes.length ? Math.max(...nodes.map((node) => node.id)) + 1 : 1;
-      canvasNodeIdBlockEnd = 0;
-    }
-    const { repositionedResult } = repairRestoredCanvas(nodes, links);
-    if (document.camera) {
-      Object.assign(camera, document.camera);
-      cameraViewport.syncTarget();
-    }
-    if (
-      !canvasSaveCoordinator.isCurrentLoad(loadSequence, loadingProjectId)
-    )
-      return;
-    if (nextId > canvasNodeIdBlockEnd) {
-      setWorkspaceBootStatus("正在申请安全节点空间");
-      if (!(await reserveCanvasNodeIds(loadingProjectId)))
-        throw new Error("canvas id lease failed");
-    } else setWorkspaceBootStatus("正在校验节点编号空间");
-    if (
-      !canvasSaveCoordinator.isCurrentLoad(loadSequence, loadingProjectId)
-    )
-      return;
-    canvasSaveCoordinator.completeLoad(loadingProjectId, receivedBaseline);
-    hideCanvasGuide("canvas-save-conflict");
-    selection.selectedId = 0;
-    setSaveState("saved", "已自动保存");
-    updateEditor();
-    draw();
-    resetCanvasHistory(true);
-    if (
-      repositionedResult ||
-      diffCanvasSnapshots(receivedBaseline, captureCanvasSnapshot()).length
-    )
-      scheduleSave();
-    nodes
-      .filter(
-        (node) =>
-          node.jobId && (node.status === "queued" || node.status === "running"),
-      )
-      .forEach(pollJob);
-    queueMicrotask(runAgentWorkflow);
-    if (!keepLoadingStatus) {
-      const status = setWorkspaceBootStatus("已同步服务器最新版本");
-      hideWorkspaceBootStatusAfter(status, 650);
-    }
-  } catch {
-    setSaveState("error", "离线模式");
-    if (!keepLoadingStatus) {
-      const status = setWorkspaceBootStatus("同步失败，请检查连接");
-      hideWorkspaceBootStatusAfter(status, 1800);
-    }
-  }
+  },
+  cancelPolling: () => generationPoller.cancelAll(),
+  getLease: () => ({ nextId, end: canvasNodeIdBlockEnd }),
+  restoreLease: (leasedNextId, leasedEnd) => {
+    nextId = leasedNextId;
+    canvasNodeIdBlockEnd = leasedEnd;
+  },
+  resetLease: (value) => {
+    nextId = value;
+    canvasNodeIdBlockEnd = 0;
+  },
+  needsLease: () => nextId > canvasNodeIdBlockEnd,
+  reserveIds: reserveCanvasNodeIds,
+  syncCamera: () => cameraViewport.syncTarget(),
+  setBootStatus: setWorkspaceBootStatus,
+  hideBootStatus: hideWorkspaceBootStatusAfter,
+  hideConflictGuide: () => hideCanvasGuide("canvas-save-conflict"),
+  clearSelection: () => { selection.selectedId = 0; },
+  setSavedState: () => setSaveState("saved", "已自动保存"),
+  setOfflineState: () => setSaveState("error", "离线模式"),
+  update: updateEditor,
+  draw,
+  resetHistory: resetCanvasHistory,
+  capture: captureCanvasSnapshot,
+  scheduleSave,
+  pollJob,
+  runAgentWorkflow,
+});
+function loadCanvas(keepLoadingStatus = false) {
+  return canvasLoadCoordinator.load(keepLoadingStatus);
 }
 
 const ttsGenerationController = new TtsGenerationController({
