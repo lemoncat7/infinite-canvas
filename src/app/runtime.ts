@@ -24,11 +24,6 @@ import { LinkInteractionView } from "../canvas/link-interaction-view";
 import { GenerationPoller } from "../services/generation-poller";
 import { GenerationWorkflow } from "../services/generation-workflow";
 import { CanvasNodeIdAllocator } from "../services/canvas-node-id-allocator";
-import {
-  appendRevisionNode,
-  findOutputPosition,
-  removeResultNode,
-} from "../nodes/generation-node-lifecycle";
 import { CanvasMediaFeature } from "../canvas/canvas-media-feature";
 import type {
   FlowLink,
@@ -47,13 +42,11 @@ import {
   canGenerateNode as evaluateCanGenerateNode,
   generationBlockedReason as evaluateGenerationBlockedReason,
 } from "../nodes/generation-eligibility";
-import { GenerationSubmitController } from "../nodes/generation-submit-controller";
 import { PendingTaskCancellationController } from "../nodes/pending-task-cancellation-controller";
 import { apiFetch } from "../services/api";
 import { AppUpdateController } from "../services/app-update-controller";
 import { GenerationCapabilitiesController } from "../services/generation-capabilities-controller";
-import { GenerationFinalizer } from "../services/generation-finalizer";
-import type { GenerationJob } from "../services/generation";
+import { CanvasGenerationFeature } from "../services/canvas-generation-feature";
 import { ClientDiagnostics } from "../services/client-diagnostics";
 import {
   clipVideoPrompt,
@@ -137,6 +130,7 @@ function ensurePixiRenderer() {
 
 let generationCapabilities: GenerationCapabilities =
   createDefaultGenerationCapabilities();
+let canvasGeneration: CanvasGenerationFeature;
 function loadTtsProviders() {
   return ttsFeature.loadProviders();
 }
@@ -1069,80 +1063,47 @@ function previewVoice(voice: FlowNode) {
 function generateTts(source: FlowNode) {
   return ttsFeature.generate(source);
 }
-const generationSubmitController = new GenerationSubmitController({
+canvasGeneration = new CanvasGenerationFeature({
   nodes,
   links,
+  imageCache,
+  jobLabel,
+  getSelectedId: () => selection.selectedId,
+  setSelectedId: (id) => { selection.selectedId = id; },
   selectedNode,
   blockedReason: generationBlockedReason,
   normalizePrompt: normalizePromptText,
-  projectId: () => currentProjectId,
+  getProjectId: () => currentProjectId,
+  allocateNodeId: allocateCanvasNodeId,
   clearSelection: () => {
     selection.selectedId = 0;
     updateEditor();
     draw();
   },
-  update: updateEditor,
-  draw,
-  save: scheduleSave,
-  focusPrompt: () => promptInput.focus(),
-  setJobLabel: (value) => { jobLabel.textContent = value; },
-  createRevision: createRevisionNode,
-  removeFailedResult,
-  generateTts,
-  pollJob,
-  hasAuthenticatedUser: () => Boolean(authWorkspace.user),
-  applyCredits: (creditsAvailable) => {
-    const user = authWorkspace.user;
-    if (!user) return;
-    authWorkspace.setUser({
-      ...user,
-      reservedCredits: Math.max(
-        0,
-        Number(user.credits ?? 0) - creditsAvailable,
-      ),
-    });
-    authWorkspace.renderUser();
-    refreshNodeModelMenus();
-  },
-  toast: (message, tone, detail) => showToast(message, tone, detail),
-});
-function generate(sourceOverride?: FlowNode) {
-  return generationSubmitController.generate(sourceOverride);
-}
-function createRevisionNode(source: FlowNode) {
-  const id = allocateCanvasNodeId();
-  if (id === null) return null;
-  const revision = appendRevisionNode(id, source, nodes, links);
-  scheduleSave(); draw();
-  return revision;
-}
-function removeFailedResult(node: FlowNode, sourceId = node.sourceNodeId) {
-  removeResultNode(node, nodes, links);
-  if (selection.selectedId === node.id) selection.selectedId = sourceId ?? 0;
-}
-function runAgentWorkflow() { generationWorkflow.run(); }
-const generationFinalizer = new GenerationFinalizer({
-  imageCache,
-  jobLabel,
-  getUser: () => authWorkspace.user,
-  setUser: (user) => authWorkspace.setUser(user),
-  normalizePrompt: normalizePromptText,
-  removeFailedResult,
-  loadAssets: () => loadAssets(false),
-  isAssetPanelOpen: () => Boolean(
-    document.querySelector("#assets-panel")?.classList.contains("open"),
-  ),
-  renderAssets,
-  renderUser: () => authWorkspace.renderUser(),
-  refreshModelMenus: refreshNodeModelMenus,
   updateEditor,
   draw,
   save: scheduleSave,
-  runWorkflow: runAgentWorkflow,
+  focusPrompt: () => promptInput.focus(),
+  generateTts,
+  pollJob,
+  getUser: () => authWorkspace.user,
+  setUser: (user) => authWorkspace.setUser(user),
+  renderUser: () => authWorkspace.renderUser(),
+  refreshModelMenus: refreshNodeModelMenus,
+  loadAssets: () => loadAssets(false),
+  renderAssets,
+  isAssetPanelOpen: () => Boolean(
+    document.querySelector("#assets-panel")?.classList.contains("open"),
+  ),
+  runWorkflow: () => generationWorkflow.run(),
   toast: (message, tone, detail) => showToast(message, tone, detail),
 });
-async function finalizeGenerationJob(currentNode: FlowNode, job: GenerationJob) {
-  await generationFinalizer.finalize(currentNode, job);
+function generate(sourceOverride?: FlowNode) {
+  return canvasGeneration.generate(sourceOverride);
+}
+function runAgentWorkflow() { generationWorkflow.run(); }
+function finalizeGenerationJob(currentNode: FlowNode, job: import("../services/generation").GenerationJob) {
+  return canvasGeneration.finalize(currentNode, job);
 }
 function pollJob(node: FlowNode) { generationPoller.poll(node); }
 function refreshBatchSelection() {
