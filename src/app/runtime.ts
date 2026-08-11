@@ -53,8 +53,7 @@ import { ConnectionRules } from "../nodes/connection-rules";
 import { decodePromptClipboardText, normalizePromptText } from "../nodes/prompt-text";
 import { downloadNodeImage as downloadNodeImageFile } from "../nodes/node-download";
 import { PromptNodeController } from "../nodes/prompt-node";
-import { TtsCatalogController } from "../services/tts-catalog";
-import { TtsGenerationController } from "../nodes/tts-generation-controller";
+import { TtsFeature } from "../services/tts-feature";
 import {
   canGenerateNode as evaluateCanGenerateNode,
   generationBlockedReason as evaluateGenerationBlockedReason,
@@ -83,6 +82,7 @@ import { AssetPreviewController } from "../ui/asset-preview";
 import { AssetLibraryFeature } from "../ui/asset-library-feature";
 import { CanvasToolbarController } from "../ui/canvas-toolbar-controller";
 import { NodeInfoController } from "../ui/node-info-controller";
+import { WorkspaceOverlayController } from "../ui/workspace-overlay-controller";
 import { SquarePanelView } from "../ui/square-panel";
 import { WorkspacePanelController } from "../ui/toolbar";
 import { WorkspaceNavigationCoordinator } from "../ui/workspace-navigation-coordinator";
@@ -186,29 +186,11 @@ function ensurePixiRenderer() {
 
 let generationCapabilities: GenerationCapabilities =
   createDefaultGenerationCapabilities();
-const ttsCatalog = new TtsCatalogController({
-  invalidateProviders: () => {
-    nodes
-      .filter((node) => node.kind === "voice")
-      .forEach((node) => nodeDomStates.delete(node.id));
-    draw();
-  },
-  invalidateVoices: (providerId) => {
-    nodes
-      .filter(
-        (node) =>
-          node.kind === "voice" &&
-          node.voiceSettings?.providerId === providerId,
-      )
-      .forEach((node) => nodeDomStates.delete(node.id));
-    draw();
-  },
-});
 function loadTtsProviders() {
-  return ttsCatalog.loadProviders();
+  return ttsFeature.loadProviders();
 }
 function loadTtsVoices(providerId = "easyvoice-local") {
-  return ttsCatalog.loadVoices(providerId);
+  return ttsFeature.loadVoices(providerId);
 }
 const canvas = document.querySelector<HTMLElement>("#canvas")!;
 const nodeViewport = document.querySelector<HTMLElement>("#node-viewport")!;
@@ -367,7 +349,6 @@ const canvasHistory = new CanvasHistoryController({
   guide: showHistoryShortcutGuide,
 });
 function resetCanvasHistory(restore = true) { canvasHistory.reset(restore); }
-function commitCanvasHistory() { canvasHistory.commit(); }
 function queueCanvasHistory() { canvasHistory.queue(); }
 function updateHistoryControls() { canvasHistory.refreshControls(); }
 function undoCanvas() { return canvasHistory.undo(); }
@@ -936,12 +917,6 @@ function nodeIsActivelyGenerating(node: FlowNode | undefined) {
 function canvasHasActiveGeneration() {
   return generationGraph.hasActiveGeneration();
 }
-function nodeFeedsActiveGeneration(nodeId: number) {
-  return generationGraph.feedsActiveGeneration(nodeId);
-}
-function nodeIsGenerationProtected(node: FlowNode) {
-  return generationGraph.isProtected(node);
-}
 function orderedImageInputs(targetId: number) {
   return generationGraph.orderedImageInputs(targetId);
 }
@@ -970,9 +945,6 @@ canvasStore.subscribe((change) => {
 });
 function rebuildPaintIndexes() {
   canvasGeometry.rebuild();
-}
-function linkPathGeometry(link: FlowLink) {
-  return canvasGeometry.linkPath(link);
 }
 function canvasInteractionActive() {
   return Boolean(pointer.down || domPointer.drag || interaction.marquee?.active || touchPinch.active);
@@ -1127,8 +1099,8 @@ const boundNodeDomSynchronizer = new BoundNodeDomSynchronizer({
   createElement: createDomNode,
   isGenerating: nodeIsActivelyGenerating,
   defaultNodeCopy,
-  getProviders: () => ttsCatalog.providers,
-  getVoices: () => ttsCatalog.voicesByProvider,
+  getProviders: () => ttsFeature.catalog.providers,
+  getVoices: () => ttsFeature.catalog.voicesByProvider,
   ensureProviders: loadTtsProviders,
   ensureVoices: loadTtsVoices,
   escapeHtml,
@@ -1403,11 +1375,23 @@ function loadCanvas(keepLoadingStatus = false) {
   return canvasLoadCoordinator.load(keepLoadingStatus);
 }
 
-const ttsGenerationController = new TtsGenerationController({
+const ttsFeature = new TtsFeature({
   nodes,
   links,
   getProjectId: () => currentProjectId,
   allocateNodeId: allocateCanvasNodeId,
+  invalidateProviders: () => {
+    nodes
+      .filter((node) => node.kind === "voice")
+      .forEach((node) => nodeDomStates.delete(node.id));
+    draw();
+  },
+  invalidateVoices: (providerId) => {
+    nodes
+      .filter((node) => node.kind === "voice" && node.voiceSettings?.providerId === providerId)
+      .forEach((node) => nodeDomStates.delete(node.id));
+    draw();
+  },
   updateEditor,
   draw,
   save: scheduleSave,
@@ -1415,13 +1399,13 @@ const ttsGenerationController = new TtsGenerationController({
   toast: (message, tone) => showToast(message, tone),
 });
 function connectedVoiceNode(source: FlowNode) {
-  return ttsGenerationController.connectedVoice(source);
+  return ttsFeature.connectedVoice(source);
 }
 function previewVoice(voice: FlowNode) {
-  return ttsGenerationController.preview(voice);
+  return ttsFeature.preview(voice);
 }
 function generateTts(source: FlowNode) {
-  return ttsGenerationController.generate(source);
+  return ttsFeature.generate(source);
 }
 const generationSubmitController = new GenerationSubmitController({
   nodes,
@@ -2205,18 +2189,12 @@ function escapeHtml(value: string) {
   element.textContent = value;
   return element.innerHTML;
 }
-document.addEventListener("pointerdown", (event) => {
-  const target = event.target as Node;
-  if (!quickNodeMenu.contains(target)) closeQuickNodeMenu();
-  assetLibraryFeature.closeContextIfOutside(target);
-  document
-    .querySelectorAll<HTMLDetailsElement>(
-      ".image-config-panel details[open],.video-config-panel details[open],.voice-config-panel details[open]",
-    )
-    .forEach((details) => {
-      if (!details.contains(target)) details.open = false;
-    });
-});
+new WorkspaceOverlayController({
+  quickMenu: quickNodeMenu,
+  closeQuickMenu: closeQuickNodeMenu,
+  closeAssetContextIfOutside: (target) =>
+    assetLibraryFeature.closeContextIfOutside(target),
+}).bind();
 new WorkspaceKeyboardController({
   closeQuickMenu: () => {
     if (!quickNodeMenu.classList.contains("open")) return false;
