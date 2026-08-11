@@ -1,5 +1,6 @@
 import "../style.css";
 import { CanvasPerformanceMonitor } from "../canvas/performance-monitor";
+import { CanvasPaintCoordinator } from "../canvas/canvas-paint-coordinator";
 import { CanvasSpatialIndex } from "../canvas/spatial-index";
 import { CanvasGeometryController } from "../canvas/canvas-geometry-controller";
 import { ConnectionAutoPanController } from "../canvas/connection-auto-pan-controller";
@@ -585,8 +586,6 @@ new CanvasPointerLifecycle({
   closeQuickMenu: closeQuickNodeMenu,
   smoothZoom: cameraViewport.smoothBy,
 });
-let drawFrame: number | null = null;
-let drawNeedsDomSync = true;
 const nodeDomStates = new Map<number, unknown[]>();
 const canvasSpatialIndex = new CanvasSpatialIndex();
 const pixiEditorCache = new PixiEditorCache(
@@ -1076,36 +1075,26 @@ function startConnectionAutoPan(sx: number, sy: number) {
 function hitLink(sx: number, sy: number, tolerance = 9) {
   return canvasGeometry.hitLink(sx, sy, tolerance);
 }
-function positionCardLayerForFrame() {
-  nodeViewport.style.transform = `translate3d(${innerWidth / 2 + camera.x}px, ${innerHeight / 2 + camera.y}px,0) scale(${camera.zoom})`;
-}
 const mountedDomNodeIds = new Set<number>();
-function paint() {
-  const performanceFrame = canvasPerformance.beginFrame();
-  drawFrame = null;
-  const interacting = canvasInteractionActive(),
-    syncUi = drawNeedsDomSync && !interacting;
-  if (syncUi) drawNeedsDomSync = false;
-  if (syncUi || canvasGeometry.nodeIndex.size !== nodes.length)
-    rebuildPaintIndexes();
-  positionCardLayerForFrame();
-  if (syncUi) {
-    syncDomNodes();
-    schedulePixiEditorWarmup();
-    updateTaskMonitor();
-    updateHistoryControls();
-    zoomSlider.value = String(Math.round(camera.zoom * 100));
-    zoomSlider.title = `${Math.round(camera.zoom * 100)}%`;
-    zoomPercent.value = `${Math.round(camera.zoom * 100)}%`;
-    nodeCount.textContent = String(nodes.length);
-  }
+const canvasPaint = new CanvasPaintCoordinator({
+  performance: canvasPerformance,
+  viewport: nodeViewport,
+  zoomSlider,
+  zoomPercent,
+  nodeCount,
+  viewportSize: () => ({ width: innerWidth, height: innerHeight }),
+  camera: () => camera,
+  interacting: canvasInteractionActive,
+  state: () => {
   const pendingNode = connection.active
     ? canvasGeometry.nodeIndex.get(connection.active.nodeId) ??
       nodes.find((node) => node.id === connection.active!.nodeId)
     : undefined;
-  pixiRenderer?.render({
+    return {
     nodes,
     links,
+    nodeCount: nodes.length,
+    indexedNodeCount: canvasGeometry.nodeIndex.size,
     domNodeIds: [...mountedDomNodeIds],
     camera,
     selectedId: selection.selectedId,
@@ -1124,13 +1113,17 @@ function paint() {
           snapped: Boolean(connection.snap),
         }
       : undefined,
-  });
-  canvasPerformance.endFrame(performanceFrame);
-}
-function draw(syncDom = true) {
-  if (syncDom) drawNeedsDomSync = true;
-  if (drawFrame === null) drawFrame = requestAnimationFrame(paint);
-}
+    };
+  },
+  renderer: () => pixiRenderer,
+  rebuildIndexes: rebuildPaintIndexes,
+  syncDom: syncDomNodes,
+  warmEditors: schedulePixiEditorWarmup,
+  updateTasks: updateTaskMonitor,
+  updateHistory: updateHistoryControls,
+});
+function paint() { canvasPaint.paint(); }
+function draw(syncDom = true) { canvasPaint.draw(syncDom); }
 function resize() {
   draw();
 }
