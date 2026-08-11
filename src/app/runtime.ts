@@ -116,6 +116,7 @@ import {
   NotificationCenterController,
   OnlinePresenceView,
 } from "../ui/notification-center";
+import { FeedbackController } from "../ui/feedback-controller";
 import { ComicSidePanelController } from "../ui/comic-side-panel";
 import { ComicStudioView } from "../ui/comic-studio";
 import { ComicLabelController } from "../ui/comic-labels";
@@ -2273,59 +2274,13 @@ function connectNotificationStream() {
   if (!authUser) return disconnectNotificationStream();
   notificationStreamController.connect(authUser.id);
 }
-document.querySelector("#open-feedback")!.addEventListener("click", () => {
-  workspaceUserMenu.classList.remove("open");
-  feedbackModal.classList.add("open");
-  feedbackForm.querySelector<HTMLInputElement>('input[name="title"]')!.focus();
-});
-feedbackModal
-  .querySelectorAll("[data-feedback-close]")
-  .forEach((button) =>
-    button.addEventListener("click", () =>
-      feedbackModal.classList.remove("open"),
-    ),
-  );
-feedbackModal.addEventListener("pointerdown", (event) => {
-  if (event.target === feedbackModal) feedbackModal.classList.remove("open");
-});
-feedbackForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const submit = feedbackForm.querySelector<HTMLButtonElement>(
-      'button[type="submit"]',
-    )!,
-    output = feedbackForm.querySelector<HTMLOutputElement>("output")!,
-    data = Object.fromEntries(new FormData(feedbackForm));
-  submit.disabled = true;
-  output.textContent = "正在提交…";
-  try {
-    const response = await apiFetch("/api/feedback", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          ...data,
-          projectId: currentProjectId || undefined,
-          pageUrl: location.href,
-          userAgent: navigator.userAgent,
-        }),
-      }),
-      result = (await response.json().catch(() => ({}))) as {
-        id?: string;
-        error?: string;
-      };
-    if (!response.ok) throw new Error(result.error || "提交失败");
-    feedbackForm.reset();
-    output.textContent = "感谢反馈，我们已经收到。";
-    showToast("反馈已提交，感谢你的帮助", "success");
-    window.setTimeout(() => {
-      feedbackModal.classList.remove("open");
-      output.textContent = "";
-    }, 1200);
-  } catch (reason) {
-    output.textContent =
-      reason instanceof Error ? reason.message : "提交失败，请稍后重试";
-  } finally {
-    submit.disabled = false;
-  }
+new FeedbackController({
+  modal: feedbackModal,
+  form: feedbackForm,
+  openButton: document.querySelector<HTMLElement>("#open-feedback")!,
+  closeUserMenu: () => userMenuController.close(),
+  getProjectId: () => currentProjectId,
+  toast: (message, type) => showToast(message, type),
 });
 const labModal = document.querySelector<HTMLElement>("#lab-modal")!;
 document.querySelector("#open-lab")!.addEventListener("click", () => {
