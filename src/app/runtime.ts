@@ -67,7 +67,7 @@ import {
   fetchShowcaseAssets,
   type LibraryAsset,
 } from "../services/assets";
-import { streamComicDialogue, streamComicPlan } from "../services/comic";
+import { streamComicPlan } from "../services/comic";
 import { ComicSessionController } from "../services/comic-session";
 import { ComicSessionState } from "../services/comic-session-state";
 import {
@@ -130,6 +130,7 @@ import { createComicStudioShell } from "../ui/comic-studio-shell";
 import { ComicSidePanelController } from "../ui/comic-side-panel";
 import { ComicStudioView } from "../ui/comic-studio";
 import { ComicSessionRecoveryView } from "../ui/comic-session-recovery";
+import { ComicDialogueController } from "../ui/comic-dialogue-controller";
 import { ComicLabelController } from "../ui/comic-labels";
 import { buildComicWorkflow } from "../nodes/comic-workflow";
 import {
@@ -4568,138 +4569,30 @@ function closeComicStudio() {
 function renderComicPlan(plan: ComicPlan) {
   comicStudioView.renderPlan(plan);
 }
-async function requestComicDialogue(message: string) {
-  if (comicState.submitting || !message.trim()) return;
-  comicState.submitting = true;
-  if (!(await ensureComicProjectContext())) {
-    comicState.submitting = false;
-    showToast("当前项目不可用，请重新进入项目", "error");
-    return;
-  }
-  const conversation = comicStudio.querySelector<HTMLElement>(
-      "[data-comic-conversation]",
-    )!,
-    userMessage = document.createElement("div");
-  userMessage.className = "comic-message user";
-  userMessage.innerHTML = `<div><p>${escapeHtml(message.trim())}</p></div>`;
-  conversation.insertBefore(
-    userMessage,
-    comicStudio.querySelector(".comic-plan"),
-  );
-  const status = comicStudio.querySelector<HTMLOutputElement>(
-      "[data-comic-status]",
-    )!,
-    send = comicStudio.querySelector<HTMLButtonElement>("[data-comic-send]")!,
-    field = comicStudio.querySelector<HTMLTextAreaElement>(
-      "[data-comic-message]",
-    )!,
-    confirm = comicBriefPanel.querySelector<HTMLButtonElement>(
-      "[data-comic-confirm]",
-    )!;
-  send.disabled = true;
-  field.disabled = true;
-  confirm.disabled = true;
-  send.classList.add("thinking");
-  status.textContent = "正在整理你的想法…";
-  status.classList.add("visible");
-  const selectedContexts = selectedPromptAgentNodes(),
-    linkedLabel = nodes.find((node) => node.id === comicState.linkedLabelId),
-    context = [
+const comicDialogueController = new ComicDialogueController({
+  studio: comicStudio,
+  briefPanel: comicBriefPanel,
+  state: comicState,
+  getProjectId: () => currentProjectId,
+  ensureProjectContext: ensureComicProjectContext,
+  getContext: () => {
+    const selectedContexts = selectedPromptAgentNodes();
+    const linkedLabel = nodes.find((node) => node.id === comicState.linkedLabelId);
+    return [
       ...(linkedLabel
-        ? [
-            `关联标签「${linkedLabel.title}」：${linkedLabel.body.slice(0, 5000)}`,
-          ]
+        ? [`关联标签「${linkedLabel.title}」：${linkedLabel.body.slice(0, 5000)}`]
         : []),
       ...selectedContexts.map(
         (node, index) =>
           `素材 ${index + 1}「${node.title}」：${node.generationPrompt || node.body || "视觉参考"}`,
       ),
     ];
-  let streamingAssistant: HTMLElement | null = null;
-  try {
-    const assistant = document.createElement("div");
-    streamingAssistant = assistant;
-    assistant.className = "comic-message assistant compact streaming";
-    assistant.innerHTML = "<i>✦</i><div><b>正在回应</b><p></p></div>";
-    conversation.insertBefore(
-      assistant,
-      comicStudio.querySelector(".comic-plan"),
-    );
-    conversation.scrollTo({
-      top: conversation.scrollHeight,
-      behavior: "smooth",
-    });
-    const replyText = assistant.querySelector<HTMLElement>("p")!,
-      replyTitle = assistant.querySelector<HTMLElement>("b")!,
-      result = await streamComicDialogue(
-        {
-          projectId: currentProjectId,
-          sessionId: comicState.sessionId || undefined,
-          message: message.trim(),
-          context,
-          plan: comicState.sessionId ? undefined : comicState.plan,
-          model: "gpt-5.5",
-        },
-        (event) => {
-        if (event.type === "start") {
-          comicState.sessionId = String(event.sessionId || comicState.sessionId);
-          status.textContent = "正在理解并回应…";
-        } else if (event.type === "delta") {
-          replyText.textContent = event.text || "";
-          conversation.scrollTop = conversation.scrollHeight;
-        } else if (event.type === "retry") {
-          replyText.textContent = "";
-          status.textContent = event.message || "正在切换备用线路…";
-        } else if (event.type === "reset") replyText.textContent = "";
-        },
-      );
-    comicState.sessionId = String(result.sessionId || comicState.sessionId);
-    comicState.brief = result.brief || comicState.brief;
-    comicState.ready = Boolean(result.ready);
-    comicState.pendingRevision = String(result.pendingRevision || "");
-    if (!comicState.plan && !comicState.originalIdea)
-      comicState.originalIdea = comicState.brief?.premise || message.trim();
-    renderComicBrief();
-    replyText.textContent =
-      result.reply || replyText.textContent || "我已经记下了。";
-    replyTitle.textContent = comicState.plan
-      ? "修改建议已记下"
-      : comicState.ready
-        ? "方向已经清楚"
-        : "我们继续把故事聊清楚";
-    assistant.classList.remove("streaming");
-    conversation.scrollTo({
-      top: conversation.scrollHeight,
-      behavior: "smooth",
-    });
-    status.textContent = comicState.plan
-      ? comicState.pendingRevision
-        ? "等待你确认应用修改"
-        : "继续告诉我想调整的地方"
-      : comicState.ready
-        ? "可以确认生成完整剧本"
-        : "等待继续补充";
-  } catch (error) {
-    const messageText = error instanceof Error ? error.message : "漫剧对话失败";
-    if (streamingAssistant) {
-      streamingAssistant.classList.remove("streaming");
-      streamingAssistant.querySelector("b")!.textContent = "这次没有连接上";
-      streamingAssistant.querySelector("p")!.textContent =
-        "你的消息没有丢失，可以再次发送重试。";
-    }
-    status.textContent = messageText;
-    showToast(messageText, "error");
-  } finally {
-    comicState.submitting = false;
-    send.disabled = false;
-    field.disabled = false;
-    confirm.disabled = false;
-    send.classList.remove("thinking");
-    field.focus();
-    window.setTimeout(() => {
-      if (!comicState.submitting) status.classList.remove("visible");
-    }, 2200);
-  }
+  },
+  renderBrief: renderComicBrief,
+  showError: (message) => showToast(message, "error"),
+});
+function requestComicDialogue(message: string) {
+  return comicDialogueController.submit(message);
 }
 async function requestComicPlan() {
   if (comicState.submitting) return;
