@@ -2,6 +2,7 @@ import "../style.css";
 import { CanvasPerformanceMonitor } from "../canvas/performance-monitor";
 import { CanvasSpatialIndex } from "../canvas/spatial-index";
 import { CanvasGeometryController } from "../canvas/canvas-geometry-controller";
+import { ConnectionAutoPanController } from "../canvas/connection-auto-pan-controller";
 import { PixiEditorCache } from "../canvas/pixi-editor-cache";
 import { CanvasStore } from "../canvas/store";
 import {
@@ -249,8 +250,6 @@ let videoReferenceSwapSelection: { videoId: number; sourceId: number } | null =
 const promptNodeEditor = new PromptNodeController();
 let contextPosition: Point = { x: 0, y: 0 };
 const connection = new CanvasConnectionController();
-let connectionAutoPanFrame = 0,
-  connectionAutoPanPointer: Point | null = null;
 let currentProjectId = localStorage.getItem("flow-project-id") ?? "default";
 const canvasNodeIds = new CanvasNodeIdAllocator({
   projectId: () => currentProjectId,
@@ -1116,44 +1115,17 @@ function updateConnectionPointer(sx: number, sy: number) {
     target ? { nodeId: target.node.id, side: target.side } : null,
   );
 }
+const connectionAutoPan = new ConnectionAutoPanController({
+  camera,
+  active: () => Boolean(connection.active),
+  updatePointer: updateConnectionPointer,
+  draw: () => draw(false),
+});
 function stopConnectionAutoPan() {
-  if (connectionAutoPanFrame) cancelAnimationFrame(connectionAutoPanFrame);
-  connectionAutoPanFrame = 0;
-  connectionAutoPanPointer = null;
+  connectionAutoPan.stop();
 }
 function startConnectionAutoPan(sx: number, sy: number) {
-  connectionAutoPanPointer = { x: sx, y: sy };
-  if (connectionAutoPanFrame) return;
-  let previous = performance.now();
-  const tick = (now: number) => {
-    if (!connection.active || !connectionAutoPanPointer) {
-      connectionAutoPanFrame = 0;
-      return;
-    }
-    const elapsed = Math.min(2, (now - previous) / 16.67),
-      edge = 88,
-      maxSpeed = 14,
-      axisSpeed = (position: number, limit: number) =>
-        position < edge
-          ? -Math.min(1, Math.max(0, 1 - position / edge)) * maxSpeed
-          : position > limit - edge
-            ? Math.min(1, Math.max(0, 1 - (limit - position) / edge)) * maxSpeed
-            : 0,
-      vx = axisSpeed(connectionAutoPanPointer.x, innerWidth),
-      vy = axisSpeed(connectionAutoPanPointer.y, innerHeight);
-    if (vx || vy) {
-      camera.x -= vx * elapsed;
-      camera.y -= vy * elapsed;
-      updateConnectionPointer(
-        connectionAutoPanPointer.x,
-        connectionAutoPanPointer.y,
-      );
-      draw(false);
-    }
-    previous = now;
-    connectionAutoPanFrame = requestAnimationFrame(tick);
-  };
-  connectionAutoPanFrame = requestAnimationFrame(tick);
+  connectionAutoPan.start(sx, sy);
 }
 function hitLink(sx: number, sy: number, tolerance = 9) {
   return canvasGeometry.hitLink(sx, sy, tolerance);
