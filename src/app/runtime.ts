@@ -13,11 +13,7 @@ import {
 import { CanvasSelectionController } from "../canvas/selection-controller";
 import { CanvasConnectionController } from "../canvas/connection-controller";
 import { CanvasInteractionController } from "../canvas/interaction-controller";
-import { DomPointerLifecycle } from "../canvas/dom-pointer-lifecycle";
-import { MarqueeController } from "../canvas/marquee-controller";
-import { CanvasPointerLifecycle } from "../canvas/canvas-pointer-lifecycle";
-import { TouchPinchController } from "../canvas/touch-pinch-controller";
-import { CameraViewportController } from "../canvas/camera-viewport-controller";
+import { CanvasInputFeature } from "../canvas/canvas-input-feature";
 import { CanvasClearController } from "../canvas/clear-controller";
 import { CanvasClearResultApplier } from "../canvas/clear-result-applier";
 import { CanvasSaveCoordinator } from "../canvas/save-coordinator";
@@ -395,102 +391,50 @@ batchToolbar.innerHTML =
   '<span data-batch-count>已选 0 项</span><button type="button" data-batch-generate aria-label="生成所选卡片" title="生成">生成</button><button type="button" data-batch-delete aria-label="删除所选卡片" title="删除">删除</button><button type="button" data-batch-clear aria-label="退出多选模式" title="退出">退出</button>';
 document.body.append(marqueeBox, batchToolbar);
 let promptAgentFeature: PromptAgentFeature;
-const cameraViewport = new CameraViewportController({
+const canvasInput = new CanvasInputFeature({
+  canvas,
+  nodeLayer,
+  nodes,
   camera,
-  nodes,
-  viewport: () => ({ width: innerWidth, height: innerHeight }),
+  interaction,
+  selection,
+  marqueeBox,
+  batchToolbar,
   draw,
   save: scheduleSave,
-});
-const domPointer = new DomPointerLifecycle({
-  nodes,
-  zoom: () => camera.zoom,
-  groupMovingElement: batchToolbar,
   setEditing: () => setSaveState("editing", "编辑中…"),
-  save: scheduleSave,
-  draw,
-  syncElements: syncDraggedNodeElements,
+  updateEditor,
+  syncDraggedElements: syncDraggedNodeElements,
   refreshBatchSelection,
-  isMultiSelectMode: () => selection.multiSelectMode,
+  clearBatchSelection,
   toggleBatchNode,
-  selectNode: (id) => { selection.selectedId = id; updateEditor(); },
-  clearSelection: () => { selection.selectedId = 0; updateEditor(); draw(); },
-  selectedId: () => selection.selectedId,
-  isAgentSelected: (id) => promptAgentFeature.selectedIds.has(id),
-  agentSelectionSize: () => promptAgentFeature.selectedIds.size,
-  toggleAgentSelection: (id) => {
-    if (promptAgentFeature.selectedIds.has(id)) promptAgentFeature.selectedIds.delete(id);
-    else promptAgentFeature.selectedIds.add(id);
-  },
+  refreshCanvasModeHint,
+  showCanvasModeNotice,
+  getAgentIds: () => promptAgentFeature.selectedIds,
   renderAgentSelection: () => promptAgentFeature.renderContext(false),
   warnAgentLimit: () => showToast("参考素材最多选择 8 个", "warning"),
   hasConnection: () => Boolean(connection.active),
-  moveConnection: (event) => {
+  moveConnection: (event, syncDom) => {
     updateConnectionPointer(event.clientX, event.clientY);
     startConnectionAutoPan(event.clientX, event.clientY);
-    draw();
+    draw(syncDom);
   },
   finishConnection: finishDomConnection,
-});
-const touchPinch = new TouchPinchController({
-  selector: "#canvas,.flow-node",
-  zoom: () => camera.zoom,
-  setZoom: (zoom, anchor) => cameraViewport.setZoom(zoom, anchor),
-  pan: (dx, dy) => { camera.x += dx; camera.y += dy; },
-  cancelSingleTouch: () => {
-    pointer.down = false;
-    pointer.draggingNode = null;
-    canvas.classList.remove("dragging");
+  cancelConnection: () => {
     connection.cancel();
     stopConnectionAutoPan();
-    domPointer.cancel();
   },
-  syncZoomTarget: cameraViewport.syncTarget,
-  draw,
-});
-const marqueeController = new MarqueeController({
-  canvas,
-  nodeLayer,
-  box: marqueeBox,
-  nodes,
-  camera,
-  interaction,
-  selection,
-  screen: (point) => worldToScreen(point, camera, { width: innerWidth, height: innerHeight }),
-  world: (point) => screenToWorld(point, camera, { width: innerWidth, height: innerHeight }),
-  updateEditor,
-  refreshSelection: refreshBatchSelection,
-  clearSelection: clearBatchSelection,
-  refreshHint: refreshCanvasModeHint,
-  draw,
-  notice: showCanvasModeNotice,
-});
-new CanvasPointerLifecycle({
-  canvas,
-  nodeLayer,
-  interaction,
-  selection,
-  zoom: () => camera.zoom,
   hitNode,
-  cancelCameraAnimation: cameraViewport.cancel,
-  toggleBatchNode,
-  updateEditor,
-  setEditing: () => setSaveState("editing", "编辑中…"),
   moveNode: (id, dx, dy) => canvasStore.moveNodeById(id, dx, dy),
   panCamera: (dx, dy) => canvasStore.panCamera(dx, dy),
-  connectionActive: () => Boolean(connection.active),
-  moveConnection: (event) => {
-    updateConnectionPointer(event.clientX, event.clientY);
-    startConnectionAutoPan(event.clientX, event.clientY);
-    draw(false);
-  },
-  finishConnection: finishDomConnection,
-  cancelConnection: () => { connection.cancel(); stopConnectionAutoPan(); },
-  save: scheduleSave,
-  draw,
   closeQuickMenu: closeQuickNodeMenu,
-  smoothZoom: cameraViewport.smoothBy,
+  screen: (point) => worldToScreen(point, camera, { width: innerWidth, height: innerHeight }),
+  world: (point) => screenToWorld(point, camera, { width: innerWidth, height: innerHeight }),
 });
+const cameraViewport = canvasInput.cameraViewport;
+const domPointer = canvasInput.domPointer;
+const touchPinch = canvasInput.touchPinch;
+const marqueeController = canvasInput.marquee;
 const nodeViews = new CanvasNodeViewFeature({
   viewport: nodeViewport,
   layer: nodeLayer,
