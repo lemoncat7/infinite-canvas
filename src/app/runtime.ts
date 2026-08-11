@@ -2,6 +2,7 @@ import "../style.css";
 import { CanvasPerformanceMonitor } from "../canvas/performance-monitor";
 import { CanvasSpatialIndex } from "../canvas/spatial-index";
 import { CanvasGeometryController } from "../canvas/canvas-geometry-controller";
+import { PixiEditorCache } from "../canvas/pixi-editor-cache";
 import { CanvasStore } from "../canvas/store";
 import {
   applyCanvasOperations,
@@ -629,55 +630,22 @@ new CanvasPointerLifecycle({
 let drawFrame: number | null = null;
 let drawNeedsDomSync = true;
 const nodeDomStates = new Map<number, unknown[]>();
-const pixiDetachedNodeCache = new Map<number, HTMLElement>();
-let pixiEditorWarmScheduled = false;
+const canvasSpatialIndex = new CanvasSpatialIndex();
+const pixiEditorCache = new PixiEditorCache(
+  nodes,
+  camera,
+  canvasSpatialIndex,
+  (point) => world(point),
+  () => selection.selectedId,
+  createDomNode,
+  (id) => nodeDomStates.delete(id),
+);
+const pixiDetachedNodeCache = pixiEditorCache.elements;
 function cacheDetachedPixiNode(id: number, element: HTMLElement) {
-  pixiDetachedNodeCache.delete(id);
-  pixiDetachedNodeCache.set(id, element);
-  element.remove();
-  while (pixiDetachedNodeCache.size > 2) {
-    const oldestId = pixiDetachedNodeCache.keys().next().value as
-      | number
-      | undefined;
-    if (oldestId === undefined) break;
-    pixiDetachedNodeCache.delete(oldestId);
-    nodeDomStates.delete(oldestId);
-  }
+  pixiEditorCache.detach(id, element);
 }
 function schedulePixiEditorWarmup() {
-  if (pixiEditorWarmScheduled || pixiDetachedNodeCache.size >= 2 || !nodes.length)
-    return;
-  pixiEditorWarmScheduled = true;
-  const warm = () => {
-    pixiEditorWarmScheduled = false;
-    const center = world({ x: innerWidth / 2, y: innerHeight / 2 }),
-      offsetX = innerWidth / 2 + camera.x,
-      offsetY = innerHeight / 2 + camera.y,
-      candidates = canvasSpatialIndex
-        .search({
-          minX: -offsetX / camera.zoom,
-          minY: -offsetY / camera.zoom,
-          maxX: (innerWidth - offsetX) / camera.zoom,
-          maxY: (innerHeight - offsetY) / camera.zoom,
-        })
-        .map((id) => nodes.find((node) => node.id === id))
-        .filter((node): node is FlowNode => Boolean(node))
-        .sort(
-          (left, right) =>
-            Math.hypot(left.x - center.x, left.y - center.y) -
-            Math.hypot(right.x - center.x, right.y - center.y),
-        );
-    for (const node of candidates) {
-      if (pixiDetachedNodeCache.has(node.id) || node.id === selection.selectedId) continue;
-      cacheDetachedPixiNode(node.id, createDomNode(node));
-      if (pixiDetachedNodeCache.size >= 2) break;
-    }
-  };
-  const requestIdle = Reflect.get(window, "requestIdleCallback") as
-    | ((callback: () => void, options: { timeout: number }) => number)
-    | undefined;
-  if (requestIdle) requestIdle(warm, { timeout: 1200 });
-  else globalThis.setTimeout(warm, 180);
+  pixiEditorCache.scheduleWarmup();
 }
 const mediaLifecycle = new MediaLifecycleController({
   mobile: innerWidth <= 780,
@@ -1298,7 +1266,6 @@ function orderedTargetLinks(targetId: number) {
     })
     .map((item) => item.link);
 }
-const canvasSpatialIndex = new CanvasSpatialIndex();
 const canvasGeometry = new CanvasGeometryController(
   nodes,
   links,
@@ -1909,8 +1876,7 @@ const canvasLoadCoordinator = new CanvasLoadCoordinator({
   normalizePrompt: normalizePromptText,
   clearViews: () => {
     nodeLayer.replaceChildren();
-    pixiDetachedNodeCache.clear();
-    pixiEditorWarmScheduled = false;
+    pixiEditorCache.clear();
   },
   cancelPolling: () => generationPoller.cancelAll(),
   getLease: () => ({ nextId, end: canvasNodeIdBlockEnd }),
