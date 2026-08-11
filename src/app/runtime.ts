@@ -4,11 +4,6 @@ import { CanvasPaintCoordinator } from "../canvas/canvas-paint-coordinator";
 import { CanvasPersistenceFeature } from "../canvas/canvas-persistence-feature";
 import { CanvasConnectionFeature } from "../canvas/canvas-connection-feature";
 import { CanvasStore } from "../canvas/store";
-import {
-  applyCanvasOperations,
-  type CanvasSyncOperation,
-  type CanvasSyncSnapshot,
-} from "../canvas/sync";
 import { CanvasSelectionController } from "../canvas/selection-controller";
 import { CanvasConnectionController } from "../canvas/connection-controller";
 import { CanvasInteractionController } from "../canvas/interaction-controller";
@@ -170,18 +165,6 @@ const canvasSyncClientId = (() => {
   sessionStorage.setItem("flow-canvas-client-id", id);
   return id;
 })();
-function captureCanvasSnapshot(
-  version?: number,
-  updatedAt?: string,
-): CanvasSyncSnapshot {
-  return canvasPersistence.capture(version, updatedAt);
-}
-function applySynchronizedCanvas(
-  snapshot: CanvasSyncSnapshot,
-  preserveSelection = true,
-) {
-  canvasPersistence.apply(snapshot, preserveSelection);
-}
 async function reserveCanvasNodeIds(projectId = currentProjectId) {
   return canvasNodeIds.reserve(projectId);
 }
