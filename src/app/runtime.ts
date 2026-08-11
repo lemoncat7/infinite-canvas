@@ -46,6 +46,7 @@ import type {
 } from "../nodes/node-types";
 import { makeNodePublicId } from "../nodes/node-service";
 import { NodeLifecycleController } from "../nodes/node-lifecycle-controller";
+import { decodePromptClipboardText, normalizePromptText } from "../nodes/prompt-text";
 import { downloadNodeImage as downloadNodeImageFile } from "../nodes/node-download";
 import { PromptNodeController } from "../nodes/prompt-node";
 import { TtsCatalogController } from "../services/tts-catalog";
@@ -711,36 +712,6 @@ function showToast(
   toastController.show(message, type, detail);
 }
 
-function normalizePromptText(prompt?: string) {
-  let value = prompt?.trim() || "";
-  if (!value) return "";
-  const blocks = value
-    .split(/\n{2,}/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-  if (
-    blocks.length % 2 === 0 &&
-    blocks.slice(0, blocks.length / 2).join("\n\n") ===
-      blocks.slice(blocks.length / 2).join("\n\n")
-  )
-    value = blocks.slice(0, blocks.length / 2).join("\n\n");
-  const lines = value.split("\n"),
-    cleaned: string[] = [];
-  for (const line of lines) {
-    if (line.trim() && line.trim() === cleaned.at(-1)?.trim()) continue;
-    cleaned.push(line);
-  }
-  return cleaned.join("\n").trim();
-}
-function decodePromptClipboardText(value: string) {
-  const encoded = (value.match(/%[0-9a-fA-F]{2}/g) || []).length;
-  if (encoded < 2 && !/%20/i.test(value)) return value;
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value.replace(/%20/gi, " ");
-  }
-}
 async function copyOriginalPrompt(prompt?: string) {
   const value = normalizePromptText(prompt);
   if (!value) {
