@@ -24,6 +24,32 @@ export type ComicDialogueRequest = {
   model: string;
 };
 
+export interface ComicSessionSnapshot {
+  id?: string;
+  phase?: string;
+  brief?: ComicBrief;
+  pendingRevision?: string;
+  plan?: ComicPlan | null;
+  generationStatus?: string;
+  generationStage?: string;
+  generationProgress?: number;
+  generationReceivedBytes?: number;
+  generationError?: string;
+  hasGenerationCheckpoint?: boolean;
+}
+
+export async function fetchComicSession(
+  projectId: string,
+  sessionId = "",
+): Promise<ComicSessionSnapshot | null | undefined> {
+  const query = new URLSearchParams({ projectId });
+  if (sessionId) query.set("sessionId", sessionId);
+  const response = await apiFetch(`/api/agents/comic/session?${query}`);
+  if (response.status === 204) return null;
+  if (!response.ok) return undefined;
+  return (await response.json()) as ComicSessionSnapshot;
+}
+
 export async function streamComicDialogue(
   request: ComicDialogueRequest,
   onEvent: (event: ComicDialogueEvent) => void,

@@ -47,7 +47,7 @@ import {
   renameProject,
   type ProjectSummary,
 } from "../services/projects";
-import { streamComicDialogue } from "../services/comic";
+import { fetchComicSession, streamComicDialogue } from "../services/comic";
 import {
   composeImageGenerationPrompt as buildImageGenerationPrompt,
 } from "../nodes/image-node";
@@ -84,6 +84,7 @@ import {
 } from "../ui/dialogs/project-dialog";
 import { renderProjectList } from "../ui/project-panel";
 import { ComicSidePanelController } from "../ui/comic-side-panel";
+import { ComicStudioView } from "../ui/comic-studio";
 import { ContextMenuController } from "../ui/context-menu";
 import { createDefaultGenerationCapabilities } from "./state";
 import {
@@ -8362,6 +8363,11 @@ function showComicMobilePanel(kind: "brief" | "plan" | null) {
 function positionComicBriefPanel() {
   comicSidePanel.position();
 }
+const comicStudioView = new ComicStudioView(
+  comicStudio,
+  comicBriefPanel,
+  positionComicBriefPanel,
+);
 comicHeaderNav
   .querySelector<HTMLButtonElement>("[data-comic-scheme]")!
   .addEventListener("click", () => {
@@ -8977,21 +8983,7 @@ let comicPlan: ComicPlan | null = null,
   comicReady = false,
   comicPendingRevision = "";
 function setComicInteractionLocked(locked: boolean) {
-  const field = comicStudio.querySelector<HTMLTextAreaElement>(
-      "[data-comic-message]",
-    )!,
-    send = comicStudio.querySelector<HTMLButtonElement>("[data-comic-send]")!,
-    confirm = comicBriefPanel.querySelector<HTMLButtonElement>(
-      "[data-comic-confirm]",
-    )!,
-    newSession =
-      comicStudio.querySelector<HTMLButtonElement>("[data-comic-new]")!;
-  field.disabled = locked;
-  send.disabled = locked;
-  confirm.disabled = locked;
-  newSession.disabled = locked;
-  send.classList.toggle("thinking", locked);
-  comicStudio.classList.toggle("is-busy", locked);
+  comicStudioView.setInteractionLocked(locked);
 }
 let comicRestoreKey = "",
   comicRestoreTimer = 0;
@@ -9017,57 +9009,17 @@ async function ensureComicProjectContext() {
   return Boolean(currentProjectId);
 }
 function renderComicBrief() {
-  const panel = comicBriefPanel,
-    content = panel.querySelector<HTMLElement>("[data-comic-brief-content]")!,
-    confirm = panel.querySelector<HTMLButtonElement>("[data-comic-confirm]")!,
-    state = panel.querySelector<HTMLElement>("[data-comic-brief-state]")!;
-  panel.hidden = !comicBrief || !comicStudio.classList.contains("open");
-  const values = comicBrief
-    ? [
-        ["简介", comicBrief.premise],
-        ["类型", comicBrief.genre],
-        ["画幅", comicBrief.aspectRatio || "16:9"],
-        ["预计时长", comicBrief.duration || "评估中"],
-        ["人物", comicBrief.characters],
-        ["冲突", comicBrief.conflict],
-        ["风格", comicBrief.visualStyle],
-        ["结局", comicBrief.ending],
-      ].filter((entry): entry is [string, string] => Boolean(entry[1]))
-    : [];
   const linkedTitle = nodes
     .find((node) => node.id === comicLinkedLabelId)
     ?.title.replace(/^漫剧方案\s*·\s*/, "");
-  panel.querySelector<HTMLElement>("[data-comic-brief-title]")!.textContent =
-    comicBrief?.title || comicPlan?.title || linkedTitle || "漫剧创作方案";
-  content.innerHTML =
-    values
-      .map(
-        ([label, value]) =>
-          `<p><b>${label}</b><span>${escapeHtml(value)}</span></p>`,
-      )
-      .join("") +
-    (comicBrief?.openQuestions?.length
-      ? `<aside><b>还需确认</b><span>${comicBrief.openQuestions.map(escapeHtml).join(" · ")}</span></aside>`
-      : "");
-  const canConfirm = Boolean(
-    comicSessionId && (comicPlan ? comicPendingRevision : comicReady),
-  );
-  confirm.hidden = !canConfirm;
-  confirm.querySelector("span")!.textContent = comicPlan
-    ? "应用本轮修改"
-    : "生成完整剧本";
-  confirm.querySelector("small")!.textContent = comicPlan
-    ? "只调整已确认的内容"
-    : "确认后开始正式构思";
-  state.textContent = comicPlan
-    ? comicPendingRevision
-      ? "待确认修改"
-      : "方案已生成"
-    : comicReady
-      ? "可以生成"
-      : "讨论中";
-  panel.classList.toggle("ready", canConfirm);
-  requestAnimationFrame(positionComicBriefPanel);
+  comicStudioView.renderBrief({
+    brief: comicBrief,
+    plan: comicPlan,
+    sessionId: comicSessionId,
+    pendingRevision: comicPendingRevision,
+    ready: comicReady,
+    linkedTitle,
+  });
 }
 function comicLabels() {
   return nodes
@@ -9162,11 +9114,9 @@ async function restoreComicSession(force = false) {
   if (!force && comicRestoreKey === key) return;
   comicRestoreKey = key;
   try {
-    const trackedSessionId = comicSubmitting ? comicSessionId : "",
-      response = await apiFetch(
-        `/api/agents/comic/session?projectId=${encodeURIComponent(currentProjectId)}${trackedSessionId ? `&sessionId=${encodeURIComponent(trackedSessionId)}` : ""}`,
-      );
-    if (response.status === 204) {
+    const trackedSessionId = comicSubmitting ? comicSessionId : "";
+    const saved = await fetchComicSession(currentProjectId, trackedSessionId);
+    if (saved === null) {
       comicSubmitting = false;
       setComicInteractionLocked(false);
       comicOriginalIdea = "";
@@ -9182,20 +9132,7 @@ async function restoreComicSession(force = false) {
         .classList.remove("visible", "generating");
       return;
     }
-    if (!response.ok) return;
-    const saved = (await response.json()) as {
-      id?: string;
-      phase?: string;
-      brief?: ComicBrief;
-      pendingRevision?: string;
-      plan?: ComicPlan | null;
-      generationStatus?: string;
-      generationStage?: string;
-      generationProgress?: number;
-      generationReceivedBytes?: number;
-      generationError?: string;
-      hasGenerationCheckpoint?: boolean;
-    };
+    if (!saved) return;
     if (key !== currentComicOwnerKey()) return;
     comicSessionId = String(saved.id || "");
     comicBrief = saved.brief || null;
@@ -9287,51 +9224,7 @@ function closeComicStudio() {
   closePromptAgent();
 }
 function renderComicPlan(plan: ComicPlan) {
-  const panel = comicStudio.querySelector<HTMLElement>(".comic-plan")!;
-  panel.hidden = false;
-  const frameCount = plan.shots.reduce(
-    (sum, shot) => sum + (shot.frames?.length || 1),
-    0,
-  );
-  comicStudio.querySelector<HTMLElement>("[data-comic-title]")!.textContent =
-    plan.title || "未命名漫剧";
-  comicStudio.querySelector<HTMLElement>("[data-comic-logline]")!.textContent =
-    plan.logline || "";
-  comicStudio.querySelector<HTMLElement>("[data-comic-meta]")!.textContent =
-    `${plan.duration} · ${plan.aspectRatio} · ${plan.shots.length} 个制作镜头 · ${frameCount} 张分镜图`;
-  const assets = [
-    ...(plan.characters || []).map(
-      (character) =>
-        `<div class="comic-character"><b>角色 · ${escapeHtml(character.name)}</b><p>${escapeHtml(character.description)}</p></div>`,
-    ),
-    ...(plan.props || []).map(
-      (prop) =>
-        `<div class="comic-character"><b>道具 · ${escapeHtml(prop.name)}</b><p>${escapeHtml(prop.description)}</p></div>`,
-    ),
-  ];
-  comicStudio.querySelector<HTMLElement>("[data-comic-characters]")!.innerHTML =
-    assets.join("") || "<p>本方案没有需要单独锁定的视觉资产</p>";
-  comicStudio.querySelector<HTMLElement>("[data-comic-outline]")!.innerHTML = (
-    plan.outline || []
-  )
-    .map(
-      (item) =>
-        `<li><b>${escapeHtml(item.act)}</b><span>${escapeHtml(item.content)}</span></li>`,
-    )
-    .join("");
-  comicStudio.querySelector<HTMLElement>("[data-comic-shots]")!.innerHTML =
-    plan.shots
-      .map((shot) => {
-        const frames = shot.frames?.length
-          ? shot.frames
-          : [{ title: "主画面", imagePrompt: shot.imagePrompt }];
-        return `<details class="comic-shot"><summary><em>${String(shot.number).padStart(2, "0")}</em><span><b>${escapeHtml(shot.title)}</b><small>${shot.duration} 秒 · ${frames.length} 张连续分镜 · ${escapeHtml(shot.scene)}</small></span><i>⌄</i></summary><div>${shot.storyBeat ? `<p><b>剧情节拍</b>${escapeHtml(shot.storyBeat)}</p>` : ""}${shot.action ? `<p><b>表演动作</b>${escapeHtml(shot.action)}</p>` : ""}<p><b>对白 / 旁白</b>${escapeHtml(shot.dialogue || "无对白，以画面动作推进")}</p>${frames.map((frame, index) => `<p><b>分镜 ${index + 1} · ${escapeHtml(frame.title)}</b>${escapeHtml(frame.imagePrompt)}</p>`).join("")}<p><b>动态</b>${escapeHtml(shot.videoPrompt)}</p>${shot.continuity ? `<p><b>连续性</b>${escapeHtml(shot.continuity)}</p>` : ""}${shot.transition ? `<p><b>转场</b>${escapeHtml(shot.transition)}</p>` : ""}</div></details>`;
-      })
-      .join("");
-  const conversation = comicStudio.querySelector<HTMLElement>(
-    "[data-comic-conversation]",
-  )!;
-  conversation.scrollTo({ top: conversation.scrollHeight, behavior: "smooth" });
+  comicStudioView.renderPlan(plan);
 }
 async function requestComicDialogue(message: string) {
   if (comicSubmitting || !message.trim()) return;
