@@ -83,6 +83,7 @@ import type { ComicPlan, ComicShot } from "../nodes/comic-types";
 import { bindNodeConfigPanel } from "../ui/node-editor";
 import { AssetPreviewController } from "../ui/asset-preview";
 import { AssetLibraryFeature } from "../ui/asset-library-feature";
+import { CanvasToolbarController } from "../ui/canvas-toolbar-controller";
 import { SquarePanelView } from "../ui/square-panel";
 import { WorkspacePanelController } from "../ui/toolbar";
 import { WorkspaceNavigationCoordinator } from "../ui/workspace-navigation-coordinator";
@@ -1644,37 +1645,16 @@ new LinkInteractionView({
   save: scheduleSave, draw,
   notify: (message, type) => showToast(message, type),
 });
-document.querySelector("#reset")!.addEventListener("click", cameraViewport.fit);
-document
-  .querySelector("#mobile-fit-canvas")!
-  .addEventListener("click", cameraViewport.fit);
-zoomSlider.addEventListener("input", () => {
-  cameraViewport.setImmediate(Number(zoomSlider.value) / 100, { x: innerWidth / 2, y: innerHeight / 2 });
-});
-document
-  .querySelector("#zoom-in")!
-  .addEventListener("click", () =>
-    cameraViewport.smoothBy(1.15, { x: innerWidth / 2, y: innerHeight / 2 }),
-  );
-document
-  .querySelector("#zoom-out")!
-  .addEventListener("click", () =>
-    cameraViewport.smoothBy(1 / 1.15, { x: innerWidth / 2, y: innerHeight / 2 }),
-  );
-document
-  .querySelector("#quick-create")!
-  .addEventListener("click", () => addNode("image"));
-generateButton.addEventListener("click", () => void generate());
-document
-  .querySelector("#delete-node")!
-  .addEventListener("click", deleteSelectedNode);
-document
-  .querySelectorAll<HTMLElement>("[data-add]")
-  .forEach((button) =>
-    button.addEventListener("click", () =>
-      addNode(button.dataset.add as NodeKind),
-    ),
-  );
+new CanvasToolbarController({
+  zoomSlider,
+  viewportCenter: () => ({ x: innerWidth / 2, y: innerHeight / 2 }),
+  fit: cameraViewport.fit,
+  setZoom: (zoom, anchor) => cameraViewport.setImmediate(zoom, anchor),
+  zoomBy: cameraViewport.smoothBy,
+  addNode: (kind) => addNode(kind),
+  generate: () => { void generate(); },
+  deleteSelected: () => { void deleteSelectedNode(); },
+}).bind();
 const quickNodeMenu = document.querySelector<HTMLElement>("#quick-node-menu")!;
 function closeQuickNodeMenu() {
   quickNodeMenuController.close();
