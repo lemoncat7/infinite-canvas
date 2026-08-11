@@ -87,6 +87,8 @@ import { SquarePanelView } from "../ui/square-panel";
 import { WorkspacePanelController } from "../ui/toolbar";
 import { WorkspaceKeyboardController } from "../ui/workspace-keyboard-controller";
 import { TaskMonitorController } from "../ui/task-monitor-controller";
+import { TopbarMenuCoordinator } from "../ui/topbar-menu-coordinator";
+import { QuickNodeMenuController } from "../ui/quick-node-menu-controller";
 import {
   createProjectDialog,
 } from "../ui/dialogs/project-dialog";
@@ -371,6 +373,11 @@ const taskMonitorController = new TaskMonitorController({
 });
 const taskMonitorButton = taskMonitorController.button;
 const taskMonitorPanel = taskMonitorController.panel;
+const topbarMenus = new TopbarMenuCoordinator();
+topbarMenus.register("task", () => taskMonitorController.close());
+topbarMenus.register("presence", () =>
+  document.querySelector("#online-status-panel")?.classList.remove("open"),
+);
 type CanvasHistorySnapshot = {
   nodes: FlowNode[];
   links: FlowLink[];
@@ -848,16 +855,11 @@ function updateTaskMonitor() {
 function closeTopbarMenus(
   except?: "workspace" | "task" | "user" | "notifications" | "presence",
 ) {
-  if (except !== "task") taskMonitorPanel.classList.remove("open");
-  if (except !== "user") workspaceUserMenu.classList.remove("open");
-  if (except !== "notifications") notificationModal.classList.remove("open");
-  if (except !== "presence")
-    document.querySelector("#online-status-panel")?.classList.remove("open");
-  if (except !== "workspace") closeMobileWorkspaceMenu();
+  topbarMenus.closeAll(except);
 }
 document.addEventListener("click", () => {
-  taskMonitorPanel.classList.remove("open");
-  document.querySelector("#online-status-panel")?.classList.remove("open");
+  taskMonitorController.close();
+  topbarMenus.closeAll();
 });
 const marqueeBox = document.createElement("div"),
   batchToolbar = document.createElement("div");
@@ -1910,6 +1912,7 @@ homePreview.addEventListener("click", (event) => {
 const workspaceUserMenu = document.querySelector<HTMLElement>(
   "#workspace-user-menu",
 )!;
+topbarMenus.register("user", () => workspaceUserMenu.classList.remove("open"));
 async function logoutToHome(message?: string) {
   await canvasSaveCoordinator.stopAndReset(true);
   await apiFetch("/api/auth/logout", { method: "POST" }).catch(() => {});
@@ -1952,6 +1955,9 @@ const notificationModal = document.querySelector<HTMLElement>(
   notificationCount = document.querySelector<HTMLElement>(
     "[data-notification-count]",
   )!;
+topbarMenus.register("notifications", () =>
+  notificationModal.classList.remove("open"),
+);
 const notificationCenter = new NotificationCenterController({
   modal: notificationModal,
   list: notificationList,
@@ -3411,88 +3417,34 @@ document
     ),
   );
 const quickNodeMenu = document.querySelector<HTMLElement>("#quick-node-menu")!;
-let quickNodePosition: Point | null = null;
 function closeQuickNodeMenu() {
-  quickNodeMenu.classList.remove("open");
-  quickNodePosition = null;
+  quickNodeMenuController.close();
 }
-function positionQuickNodeMenu(clientX: number, clientY: number) {
-  const margin = 12,
-    gap = 12,
-    width = quickNodeMenu.offsetWidth || 304,
-    height = quickNodeMenu.offsetHeight;
-  const left = Math.max(
-      margin,
-      Math.min(clientX + gap, innerWidth - width - margin),
-    ),
-    spaceBelow = innerHeight - clientY - gap - margin,
-    spaceAbove = clientY - gap - margin,
-    openUp = height > spaceBelow && spaceAbove > spaceBelow;
-  const top = openUp
-    ? Math.max(margin, clientY - gap - height)
-    : Math.min(clientY + gap, innerHeight - height - margin);
-  quickNodeMenu.style.left = `${left}px`;
-  quickNodeMenu.style.top = `${Math.max(margin, top)}px`;
-  quickNodeMenu.classList.toggle("opens-up", openUp);
-}
-canvas.addEventListener("dblclick", (event) => {
-  if (event.button !== 0 || connection.active) return;
-  const hit = hitNode(event.clientX, event.clientY);
-  if (hit) {
-    event.preventDefault();
-    selection.selectedId = hit.id;
+const quickNodeMenuController = new QuickNodeMenuController({
+  canvas,
+  menu: quickNodeMenu,
+  connectionActive: () => Boolean(connection.active),
+  hitNode,
+  selectNode: (node) => {
+    selection.selectedId = node.id;
     updateEditor();
     draw();
-    if (
-      hit.mediaUrl &&
-      (hit.kind === "image" || hit.kind === "video")
-    )
-      openAssetPreview(hit.mediaUrl, hit.title, hit.kind);
-    else if (hit.kind === "prompt")
-      requestAnimationFrame(() => {
-        const element = nodeLayer.querySelector<HTMLElement>(
-          `.flow-node[data-id="${hit.id}"]`,
-        );
-        if (element) enterTextEdit(hit, element);
-      });
-    return;
-  }
-  event.preventDefault();
-  if (selection.multiSelectMode) {
-    exitMultiSelectMode();
-    return;
-  }
-  quickNodePosition = world({ x: event.clientX, y: event.clientY });
-  quickNodeMenu.classList.remove("open");
-  requestAnimationFrame(() => {
-    quickNodeMenu.classList.add("open");
-    positionQuickNodeMenu(event.clientX, event.clientY);
-  });
+  },
+  previewNode: (node) =>
+    openAssetPreview(node.mediaUrl!, node.title, node.kind as "image" | "video"),
+  editPromptNode: (node) => {
+    const element = nodeLayer.querySelector<HTMLElement>(
+      `.flow-node[data-id="${node.id}"]`,
+    );
+    if (element) enterTextEdit(node, element);
+  },
+  multiSelectActive: () => selection.multiSelectMode,
+  exitMultiSelect: exitMultiSelectMode,
+  enterMultiSelect: enterMultiSelectMode,
+  toWorld: world,
+  addNode: (kind, position) => addNode(kind, position),
+  uploadAt: openAssetUploadAt,
 });
-quickNodeMenu
-  .querySelectorAll<HTMLButtonElement>("[data-quick-add]")
-  .forEach((button) =>
-    button.addEventListener("click", (event) => {
-      event.stopPropagation();
-      if (quickNodePosition)
-        addNode(button.dataset.quickAdd as NodeKind, quickNodePosition);
-      closeQuickNodeMenu();
-    }),
-  );
-quickNodeMenu
-  .querySelector<HTMLButtonElement>("[data-quick-upload]")!
-  .addEventListener("click", (event) => {
-    event.stopPropagation();
-    closeQuickNodeMenu();
-    openAssetUploadAt(quickNodePosition);
-  });
-quickNodeMenu
-  .querySelector<HTMLButtonElement>("[data-quick-multi]")!
-  .addEventListener("click", (event) => {
-    event.stopPropagation();
-    closeQuickNodeMenu();
-    enterMultiSelectMode();
-  });
 const appearanceButton =
   document.querySelector<HTMLButtonElement>("#dock-appearance")!;
 let themeTransitioning = false;
@@ -4142,6 +4094,7 @@ const workspacePanelController = new WorkspacePanelController(
 function closeMobileWorkspaceMenu() {
   workspacePanelController.closeMobileMenu();
 }
+topbarMenus.register("workspace", closeMobileWorkspaceMenu);
 function closeWorkspacePanels() {
   workspacePanelController.close();
 }
