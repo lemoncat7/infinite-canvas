@@ -67,7 +67,6 @@ import {
   fetchShowcaseAssets,
   type LibraryAsset,
 } from "../services/assets";
-import { streamComicPlan } from "../services/comic";
 import { ComicSessionController } from "../services/comic-session";
 import { ComicSessionState } from "../services/comic-session-state";
 import {
@@ -131,6 +130,7 @@ import { ComicSidePanelController } from "../ui/comic-side-panel";
 import { ComicStudioView } from "../ui/comic-studio";
 import { ComicSessionRecoveryView } from "../ui/comic-session-recovery";
 import { ComicDialogueController } from "../ui/comic-dialogue-controller";
+import { ComicPlanController } from "../ui/comic-plan-controller";
 import { ComicLabelController } from "../ui/comic-labels";
 import { buildComicWorkflow } from "../nodes/comic-workflow";
 import {
@@ -4594,145 +4594,39 @@ const comicDialogueController = new ComicDialogueController({
 function requestComicDialogue(message: string) {
   return comicDialogueController.submit(message);
 }
-async function requestComicPlan() {
-  if (comicState.submitting) return;
-  comicState.submitting = true;
-  if (!(await ensureComicProjectContext())) {
-    comicState.submitting = false;
-    showToast("当前项目不可用，请重新进入项目", "error");
-    return;
-  }
-  if (!comicState.sessionId) {
-    comicState.submitting = false;
-    showToast("项目已切换，请先在当前项目重新聊聊创作方向", "warning");
-    return;
-  }
-  const revision = comicState.plan ? comicState.pendingRevision : "";
-  if (comicState.plan && !revision) {
-    comicState.submitting = false;
-    showToast("还没有需要应用的修改", "warning");
-    return;
-  }
-  const conversation = comicStudio.querySelector<HTMLElement>(
-    "[data-comic-conversation]",
-  )!;
-  const status = comicStudio.querySelector<HTMLOutputElement>(
-      "[data-comic-status]",
-    )!,
-    send = comicStudio.querySelector<HTMLButtonElement>("[data-comic-send]")!,
-    field = comicStudio.querySelector<HTMLTextAreaElement>(
-      "[data-comic-message]",
-    )!,
-    confirm = comicBriefPanel.querySelector<HTMLButtonElement>(
-      "[data-comic-confirm]",
-    )!;
-  send.disabled = true;
-  field.disabled = true;
-  confirm.disabled = true;
-  confirm.querySelector("span")!.textContent = revision
-    ? "正在应用修改…"
-    : "正在生成完整剧本…";
-  confirm.querySelector("small")!.textContent = "任务运行期间请稍候";
-  send.classList.add("thinking");
-  status.textContent = revision ? "正在理解你的修改…" : "正在理解故事想法…";
-  status.style.setProperty("--comic-progress", "2%");
-  status.classList.add("visible", "generating");
-  const selectedContexts = selectedPromptAgentNodes(),
-    linkedLabel = nodes.find((node) => node.id === comicState.linkedLabelId),
-    context = [
-      ...(linkedLabel
-        ? [`已关联故事标签「${linkedLabel.title}」：\n${linkedLabel.body}`]
-        : []),
-      ...selectedContexts.map(
-        (node, index) =>
-          `素材 ${index + 1}「${node.title}」：${node.generationPrompt || node.body || "视觉参考"}`,
-      ),
-    ],
-    visuals = selectedContexts
-      .filter((node) => node.kind === "image" && node.mediaUrl)
-      .map((node) => node.mediaUrl!);
-  try {
-    const confirmedBrief = JSON.stringify(
-      comicState.brief || { premise: comicState.originalIdea.slice(0, 1200) },
-    );
-    let lastPhase = "正在构思…";
-    const payload = await streamComicPlan(
-      {
-        projectId: currentProjectId,
-        sessionId: comicState.sessionId,
-        idea: confirmedBrief,
-        context,
-        visuals,
-        previousPlan: comicState.plan,
-        revision,
-        model: "gpt-5.5",
-      },
-      (event) => {
-        if (event.type === "start")
-          status.textContent = event.message || "正在构思…";
-        else if (event.type === "progress") {
-          lastPhase = event.phase || lastPhase;
-          const progress = Math.max(0, Math.min(100, event.progress || 0));
-          const amount = event.receivedBytes
-            ? ` · 已接收 ${(event.receivedBytes / 1024).toFixed(1)} KB`
-            : "";
-          status.style.setProperty("--comic-progress", `${progress}%`);
-          status.textContent = `${lastPhase} · ${progress}%${amount}`;
-        } else if (event.type === "heartbeat") {
-          const amount = event.receivedBytes
-            ? ` · 已接收 ${(event.receivedBytes / 1024).toFixed(1)} KB`
-            : "";
-          const waiting =
-            (event.idleSeconds || 0) >= 10
-              ? ` · 已等待 ${event.idleSeconds} 秒`
-              : " · 持续接收中";
-          status.textContent = `${lastPhase} · ${event.progress || 0}%${amount}${waiting}`;
-        } else if (event.type === "result")
-          status.style.setProperty("--comic-progress", "100%");
-      },
-    );
-    comicState.plan = payload;
-    comicState.brief = { ...(comicState.brief || {}), title: payload.title };
-    comicState.pendingRevision = "";
-    comicState.ready = false;
-    renderComicPlan(payload);
-    renderComicBrief();
-    const assistant = document.createElement("div");
-    assistant.className = "comic-message assistant compact";
-    assistant.innerHTML = `<i>✦</i><div><b>${revision ? "修改已应用" : "完整剧本已经生成"}</b><p>${escapeHtml(revision ? payload.changeSummary || "未提及的部分保持不变。" : `《${payload.title}》共 ${payload.shots.length} 个镜头。你可以继续和我讨论改进方向，我会先整理修改，等你确认后再应用。`)}</p></div>`;
-    conversation.insertBefore(
-      assistant,
-      comicStudio.querySelector(".comic-plan"),
-    );
-    status.textContent = revision ? "方案已更新" : "完整剧本已完成";
-    conversation.scrollTo({
-      top: conversation.scrollHeight,
-      behavior: "smooth",
-    });
-  } catch (error) {
-    const messageText =
-      error instanceof Error ? error.message : "漫剧方案生成失败";
-    // A browser/proxy stream can disconnect while the server-side generation
-    // continues. Reconcile with the persisted session before reporting failure
-    // or unlocking the editor, otherwise users can accidentally submit twice.
-    comicSessionController.invalidate();
-    await restoreComicSession(true);
-    if (comicState.submitting) {
-      status.classList.add("visible", "generating");
-    } else {
-      status.textContent = messageText;
-      showToast(messageText, "error");
-    }
-  } finally {
-    if (!comicState.submitting) {
-      setComicInteractionLocked(false);
-      renderComicBrief();
-      field.focus();
-      window.setTimeout(() => {
-        if (!comicState.submitting) status.classList.remove("visible", "generating");
-      }, 2600);
-    }
-  }
+const comicPlanController = new ComicPlanController({
+  studio: comicStudio,
+  briefPanel: comicBriefPanel,
+  state: comicState,
+  getProjectId: () => currentProjectId,
+  ensureProjectContext: ensureComicProjectContext,
+  getInputs: () => {
+    const selectedContexts = selectedPromptAgentNodes();
+    const linkedLabel = nodes.find((node) => node.id === comicState.linkedLabelId);
+    return {
+      context: [
+        ...(linkedLabel
+          ? [`已关联故事标签「${linkedLabel.title}」：\n${linkedLabel.body}`]
+          : []),
+        ...selectedContexts.map(
+          (node, index) =>
+            `素材 ${index + 1}「${node.title}」：${node.generationPrompt || node.body || "视觉参考"}`,
+        ),
+      ],
+      visuals: selectedContexts
+        .filter((node) => node.kind === "image" && node.mediaUrl)
+        .map((node) => node.mediaUrl!),
+    };
+  },
+  renderBrief: renderComicBrief,
+  renderPlan: renderComicPlan,
+  setInteractionLocked: setComicInteractionLocked,
+  invalidateSession: () => comicSessionController.invalidate(),
+  restoreSession: () => restoreComicSession(true),
+  showToast: (message, tone) => showToast(message, tone),
+});
+function requestComicPlan() {
+  return comicPlanController.submit();
 }
 function scenePromptWithoutCharacters(value: string) {
   return stripCharactersFromScenePrompt(value, comicState.plan);
