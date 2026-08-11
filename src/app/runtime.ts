@@ -51,6 +51,7 @@ import {
   generationBlockedReason as evaluateGenerationBlockedReason,
 } from "../nodes/generation-eligibility";
 import { GenerationSubmitController } from "../nodes/generation-submit-controller";
+import { PendingTaskCancellationController } from "../nodes/pending-task-cancellation-controller";
 import { apiFetch } from "../services/api";
 import { friendlyGenerationError } from "../services/generation-error-presenter";
 import {
@@ -758,95 +759,23 @@ function startAllEmptyImages() {
     duration: 5200,
   });
 }
-async function cancelPendingProjectTasks() {
-  const localWaiting = nodes.filter(
-      (node) => node.agentAuto && node.status === "waiting",
-    ),
-    queued = nodes.filter((node) => node.status === "queued"),
-    orphanQueued = new Set(
-      queued.filter((node) => !node.jobId).map((node) => node.id),
-    );
-  if (!localWaiting.length && !queued.length) return;
-  const confirmed = await askProjectDialog({
-    title: "取消所有等待任务？",
-    description: `将取消 ${queued.length} 个排队任务和 ${localWaiting.length} 个等待上游任务，已经生成中的任务不会受到影响。`,
-    confirm: "一键取消",
-  });
-  if (!confirmed) return;
-  try {
-    const response = await apiFetch(
-        `/api/projects/${currentProjectId}/jobs/cancel-pending`,
-        { method: "POST" },
-      ),
-      result = (await response.json()) as {
-        canceled?: number;
-        ids?: string[];
-        error?: string;
-      };
-    if (!response.ok) throw new Error(result.error || "取消失败");
-    const canceledIds = new Set(result.ids || []);
-    localWaiting.forEach((node) => {
-      node.agentAuto = false;
-      node.status = "idle";
-      node.progress = 0;
-    });
-    for (const jobId of canceledIds) {
-      generationPoller.cancel(jobId);
-    }
-    for (let index = nodes.length - 1; index >= 0; index--) {
-      const node = nodes[index],
-        orphan = orphanQueued.has(node.id);
-      if (!orphan && (!node.jobId || !canceledIds.has(node.jobId))) continue;
-      if (node.role === "result" || node.title === "图片修改结果" || orphan) {
-        const id = node.id;
-        nodes.splice(index, 1);
-        for (let linkIndex = links.length - 1; linkIndex >= 0; linkIndex--)
-          if (links[linkIndex].from === id || links[linkIndex].to === id)
-            links.splice(linkIndex, 1);
-      } else {
-        delete node.jobId;
-        node.status = "idle";
-        node.progress = 0;
-        node.agentAuto = false;
-      }
-    }
-    try {
-      const userResponse = await apiFetch("/api/users/me");
-      if (userResponse.ok) {
-        const previousAvailable = Math.max(
-          0,
-          Number(authUser?.credits ?? 0) -
-            Number(authUser?.reservedCredits ?? 0),
-        );
-        authUser = (await userResponse.json()) as AuthUser;
-        const nextAvailable = Math.max(
-          0,
-          Number(authUser.credits ?? 0) - Number(authUser.reservedCredits ?? 0),
-        );
-        renderAuthenticatedUser();
-        if (
-          previousAvailable >= 1 !== nextAvailable >= 1 ||
-          previousAvailable >= 2 !== nextAvailable >= 2
-        )
-          refreshNodeModelMenus();
-      }
-    } catch {
-      /* 稍后同步 */
-    }
-    scheduleSave();
-    updateEditor();
-    draw();
-    showToast(
-      `已取消 ${(result.canceled || 0) + localWaiting.length + orphanQueued.size} 个等待任务`,
-      "success",
-    );
-  } catch (error) {
-    showToast(
-      "取消等待任务失败",
-      "error",
-      error instanceof Error ? error.message : "请稍后重试",
-    );
-  }
+const pendingTaskCancellation = new PendingTaskCancellationController<AuthUser>({
+  nodes,
+  links,
+  projectId: () => currentProjectId,
+  ask: async (options) => (await askProjectDialog(options)) === true,
+  cancelPoll: (jobId) => generationPoller.cancel(jobId),
+  getUser: () => authUser,
+  setUser: (user) => { authUser = user; },
+  renderUser: renderAuthenticatedUser,
+  refreshModels: refreshNodeModelMenus,
+  save: scheduleSave,
+  update: updateEditor,
+  draw,
+  toast: (message, tone, detail) => showToast(message, tone, detail),
+});
+function cancelPendingProjectTasks() {
+  return pendingTaskCancellation.cancel();
 }
 function focusTaskNode(nodeId: number) {
   const node = nodes.find((item) => item.id === nodeId);
