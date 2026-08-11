@@ -68,7 +68,6 @@ import {
   fetchShowcaseAssets,
   type LibraryAsset,
   updateAssetVisibility,
-  uploadProjectImages,
 } from "../services/assets";
 import {
   createProject,
@@ -110,6 +109,7 @@ import { filterAssets } from "../ui/asset-panel";
 import { AssetLibraryView } from "../ui/asset-library-view";
 import { AssetTouchController } from "../ui/asset-touch-controller";
 import { AssetPreviewController } from "../ui/asset-preview";
+import { AssetUploadController } from "../ui/asset-upload-controller";
 import { SquarePanelView } from "../ui/square-panel";
 import { WorkspacePanelController } from "../ui/toolbar";
 import {
@@ -4892,9 +4892,8 @@ quickNodeMenu
   .querySelector<HTMLButtonElement>("[data-quick-upload]")!
   .addEventListener("click", (event) => {
     event.stopPropagation();
-    contextUploadPosition = quickNodePosition;
     closeQuickNodeMenu();
-    assetUpload.click();
+    openAssetUploadAt(quickNodePosition);
   });
 quickNodeMenu
   .querySelector<HTMLButtonElement>("[data-quick-multi]")!
@@ -7027,7 +7026,6 @@ const assetPreviewController = new AssetPreviewController({
   name: document.querySelector<HTMLElement>("#preview-name")!,
   closeButton: document.querySelector<HTMLElement>("#close-preview")!,
 });
-let contextUploadPosition: Point | null = null;
 let imageNodeAssetTargetId: number | null = null;
 let draggingAsset: {
   url: string;
@@ -7186,12 +7184,29 @@ function imageNodeAllowsSourceChange(nodeId: number) {
   }
   return true;
 }
+const assetUploadController = new AssetUploadController({
+  input: assetUpload,
+  nodeInput: imageNodeUpload,
+  button: document.querySelector<HTMLButtonElement>("#upload-assets")!,
+  triggers: [
+    document.querySelector<HTMLElement>("#upload-assets")!,
+    document.querySelector<HTMLElement>("#dock-upload")!,
+  ],
+  getProjectId: () => currentProjectId,
+  getPastePosition: () => world({ x: innerWidth / 2, y: innerHeight / 2 }),
+  onAttachNode: attachAssetToImageNode,
+  onPlace: (position, asset) =>
+    addMediaNode(asset.url, asset.name, position, "image"),
+  onReload: () => loadAssets(),
+  onToast: (message, tone, detail) => showToast(message, tone, detail),
+});
+function openAssetUploadAt(position: Point | null = null) {
+  assetUploadController.open(position);
+}
 function beginImageNodeUpload(nodeId: number) {
   if (!imageNodeAllowsSourceChange(nodeId)) return;
   imageNodeAssetTargetId = null;
-  imageNodeUpload.dataset.nodeId = String(nodeId);
-  imageNodeUpload.value = "";
-  imageNodeUpload.click();
+  assetUploadController.openForNode(nodeId);
 }
 async function beginImageNodeLibrary(nodeId: number) {
   if (!imageNodeAllowsSourceChange(nodeId)) return;
@@ -7202,18 +7217,6 @@ async function beginImageNodeLibrary(nodeId: number) {
   await loadAssets();
   renderAssets();
 }
-imageNodeUpload.addEventListener("change", () => {
-  const files = [...(imageNodeUpload.files ?? [])],
-    nodeId = Number(imageNodeUpload.dataset.nodeId);
-  if (files.length && Number.isFinite(nodeId))
-    void uploadImageFiles(files, null, false, nodeId);
-});
-document
-  .querySelector("#upload-assets")!
-  .addEventListener("click", () => assetUpload.click());
-document
-  .querySelector("#dock-upload")!
-  .addEventListener("click", () => assetUpload.click());
 [assetSearch, assetProjectFilter, assetTypeFilter, assetSort].forEach(
   (control) =>
     control.addEventListener("input", () => {
@@ -7295,67 +7298,6 @@ document.querySelector("#new-project")!.addEventListener("click", async () => {
 });
 projectSearch.addEventListener("input", renderProjects);
 projectSort.addEventListener("change", renderProjects);
-async function uploadImageFiles(
-  files: File[],
-  placement: Point | null,
-  pasted = false,
-  targetNodeId?: number,
-) {
-  const images = files.filter((file) => file.type.startsWith("image/"));
-  if (!images.length) {
-    showToast("仅支持上传图片", "warning");
-    return;
-  }
-  const button = document.querySelector<HTMLButtonElement>("#upload-assets")!;
-  button.disabled = true;
-  button.textContent = "正在上传…";
-  try {
-    const uploaded = await uploadProjectImages(currentProjectId, images);
-    if (targetNodeId && uploaded[0])
-      attachAssetToImageNode(targetNodeId, uploaded[0]);
-    else if (placement && uploaded[0])
-      addMediaNode(uploaded[0].url, uploaded[0].name, placement, "image");
-    await loadAssets();
-    if (pasted) showToast("图片已粘贴到画布中心", "success");
-  } catch (error) {
-    showToast(
-      "图片上传失败",
-      "error",
-      error instanceof Error ? error.message : "请重试",
-    );
-  } finally {
-    button.disabled = false;
-    button.textContent = "↑ 上传图片";
-    assetUpload.value = "";
-    assetUpload.accept = "image/*";
-    assetUpload.multiple = true;
-  }
-}
-assetUpload.addEventListener("change", () => {
-  const files = [...(assetUpload.files ?? [])],
-    placement = contextUploadPosition;
-  contextUploadPosition = null;
-  if (files.length) void uploadImageFiles(files, placement);
-});
-window.addEventListener("paste", (event) => {
-  const image = [...(event.clipboardData?.items ?? [])]
-    .find((item) => item.kind === "file" && item.type.startsWith("image/"))
-    ?.getAsFile();
-  if (!image) return;
-  event.preventDefault();
-  const namedImage = image.name
-    ? image
-    : new File(
-        [image],
-        `粘贴图片-${Date.now()}.${image.type.split("/")[1] || "png"}`,
-        { type: image.type },
-      );
-  void uploadImageFiles(
-    [namedImage],
-    world({ x: innerWidth / 2, y: innerHeight / 2 }),
-    true,
-  );
-});
 async function loadProjects() {
   try {
     projectSummaries = (await fetchProjects()).map((project) => ({
