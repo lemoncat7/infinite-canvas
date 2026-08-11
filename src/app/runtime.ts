@@ -31,7 +31,6 @@ import { LinkInteractionView } from "../canvas/link-interaction-view";
 import { GenerationPoller } from "../services/generation-poller";
 import { GenerationWorkflow } from "../services/generation-workflow";
 import { CanvasNodeIdAllocator } from "../services/canvas-node-id-allocator";
-import { SessionActivityController } from "../services/session-activity";
 import {
   appendRevisionNode,
   findOutputPosition,
@@ -89,8 +88,6 @@ import { WorkspaceKeyboardController } from "../ui/workspace-keyboard-controller
 import { TaskMonitorController } from "../ui/task-monitor-controller";
 import { TopbarMenuCoordinator } from "../ui/topbar-menu-coordinator";
 import { QuickNodeMenuController } from "../ui/quick-node-menu-controller";
-import { HomeSceneController } from "../ui/home-scene-controller";
-import { HomeShowcaseController } from "../ui/home-showcase-controller";
 import { AppearanceController } from "../ui/appearance-controller";
 import { NodeEditorStateController } from "../ui/node-editor-state-controller";
 import { CanvasGuideController, type CanvasGuideMessage } from "../ui/canvas-guide-controller";
@@ -99,11 +96,7 @@ import {
   createProjectDialog,
 } from "../ui/dialogs/project-dialog";
 import { ProjectController } from "../ui/project-controller";
-import {
-  UserMenuController,
-  type AuthUser,
-} from "../ui/user-menu-controller";
-import { AuthModalController } from "../ui/auth-modal-controller";
+import type { AuthUser } from "../ui/user-menu-controller";
 import { NotificationFeature } from "../ui/notification-feature";
 import { AccountToolsFeature } from "../ui/account-tools-feature";
 import { PromptAgentFeature } from "../ui/prompt-agent-feature";
@@ -121,10 +114,9 @@ import { ComicLabelController } from "../ui/comic-labels";
 import { BoundNodeViewFactory } from "../nodes/bound-node-view-factory";
 import { BoundNodeDomSynchronizer } from "../nodes/bound-node-dom-synchronizer";
 import { createDefaultGenerationCapabilities } from "./state";
-import { WorkspaceSessionController } from "./workspace-session-controller";
 import { ProjectSwitchController } from "./project-switch-controller";
 import { ApplicationBootstrapController } from "./application-bootstrap-controller";
-import { WorkspaceRouteController } from "./workspace-route-controller";
+import { AuthWorkspaceFeature } from "./auth-workspace-feature";
 import {
   connectionControlPoint,
   nodePortPosition,
@@ -379,9 +371,9 @@ const pendingTaskCancellation = new PendingTaskCancellationController<AuthUser>(
   projectId: () => currentProjectId,
   ask: async (options) => (await askProjectDialog(options)) === true,
   cancelPoll: (jobId) => generationPoller.cancel(jobId),
-  getUser: () => authUser,
-  setUser: (user) => { authUser = user; },
-  renderUser: renderAuthenticatedUser,
+  getUser: () => authWorkspace.user,
+  setUser: (user) => authWorkspace.setUser(user),
+  renderUser: () => authWorkspace.renderUser(),
   refreshModels: refreshNodeModelMenus,
   save: scheduleSave,
   update: updateEditor,
@@ -622,7 +614,7 @@ function showCanvasGuide(message: CanvasGuideMessage) {
   return canvasGuideController.show(message);
 }
 const appUpdateController = new AppUpdateController({
-  authenticated: () => Boolean(authUser),
+  authenticated: () => Boolean(authWorkspace.user),
   refreshCapabilities: () => loadGenerationCapabilities(true),
   showNotice: ({ dismiss, reload }) => showCanvasGuide({
     key: "app-update",
@@ -638,78 +630,16 @@ const appUpdateController = new AppUpdateController({
 });
 appUpdateController.start();
 
-const homePage = document.querySelector<HTMLElement>("#home-page")!;
-const homeGallery = document.querySelector<HTMLElement>("#home-gallery")!;
-const homeLoginModal =
-  document.querySelector<HTMLElement>("#home-login-modal")!;
-const homePreview = document.querySelector<HTMLElement>("#home-preview")!;
-let authUser: AuthUser | null = null;
-let authReady = false;
-const homeShowcase = new HomeShowcaseController(
-  homeGallery,
-  homePreview,
-  document.querySelector<HTMLElement>(".home-showcase")!,
-);
-const sessionActivity = new SessionActivityController({
-  isAuthenticated: () => Boolean(authUser),
-  logout: (message) => logoutToHome(message),
-});
-const authModalController = new AuthModalController({
-  modal: homeLoginModal,
-  onAuthenticated: async (user, completedMode) => {
-    authUser = user;
-    authReady = true;
-    sessionActivity.touch();
-    renderAuthenticatedUser();
-    if (!(await synchronizeCanvasAfterAuthentication()))
-      throw new Error("登录成功，但画布未能完整同步，请重试");
-    if (completedMode === "register") {
-      location.hash = "#/canvas";
-      await Promise.all([loadAssets(), accountTools.loadModels()]);
-      applyAppRoute();
-    } else showToast(`欢迎回来，${user.name}`, "success");
-  },
-});
-function setWorkspaceBootStatus(message: string, visible = true) {
-  return workspaceRoute.status(message, visible);
-}
-function hideWorkspaceBootStatusAfter(version: number, delay: number) {
-  workspaceRoute.hideStatus(version, delay);
-}
-function applyAppRoute() {
-  workspaceRoute.apply();
-}
-function openAuth(mode: "login" | "register") {
-  authModalController.open(mode);
-}
-const workspaceRoute = new WorkspaceRouteController({
-  homePage,
-  authenticated: () => Boolean(authUser),
-  authReady: () => authReady,
-  showcaseLoaded: () => homeShowcase.loaded,
-  loadShowcase: () => homeShowcase.load(),
-  enterWorkspace: () => { void enterWorkspace(); },
-  openAuth,
-  resize,
-});
-workspaceRoute.bind();
-function renderAuthenticatedUser() {
-  userMenuController.render(authUser);
-  if (authUser) {
-    void notificationFeature.load();
-    notificationFeature.connect();
-  } else notificationFeature.disconnect();
-}
-const workspaceSession = new WorkspaceSessionController({
+let notificationFeature: NotificationFeature;
+let accountTools: AccountToolsFeature;
+const authWorkspace: AuthWorkspaceFeature = new AuthWorkspaceFeature({
   nodes,
   links,
-  authenticated: () => Boolean(authUser),
-  currentProjectId: () => currentProjectId,
-  setCurrentProjectId: (id) => { currentProjectId = id; },
-  loginMode: () => authModalController.mode,
-  loadedProjectId: () => canvasSaveCoordinator.loadedProjectId,
-  saveBlocked: () => canvasSaveCoordinator.blocked,
-  serverVersion: () => canvasSaveCoordinator.serverVersion,
+  getProjectId: () => currentProjectId,
+  setProjectId: (id) => { currentProjectId = id; },
+  getLoadedProjectId: () => canvasSaveCoordinator.loadedProjectId,
+  isSaveBlocked: () => canvasSaveCoordinator.blocked,
+  getServerVersion: () => canvasSaveCoordinator.serverVersion,
   ensureRenderer: ensurePixiRenderer,
   stopSave: (logout) => canvasSaveCoordinator.stopAndReset(logout),
   resetNodeLease: () => canvasNodeIds.reset(),
@@ -717,52 +647,20 @@ const workspaceSession = new WorkspaceSessionController({
   loadAssets: () => loadAssets(false),
   loadModels: () => accountTools.loadModels(),
   apiFetch,
-  status: setWorkspaceBootStatus,
-  hideStatus: hideWorkspaceBootStatusAfter,
-  applyRoute: applyAppRoute,
+  resize,
   clearSelection: () => { selection.selectedId = 0; },
-  clearToken: () => userMenuController.clearToken(),
-  closeUserMenu: () => userMenuController.close(),
-  renderUser: renderAuthenticatedUser,
-  clearUser: () => { authUser = null; },
+  registerUserMenu: (close) => topbarMenus.register("user", close),
+  closeTopbarMenus: (opening) => closeTopbarMenus(opening ? "user" : undefined),
+  onUserRendered: (user) => {
+    if (user) {
+      void notificationFeature.load();
+      notificationFeature.connect();
+    } else notificationFeature.disconnect();
+  },
   notify: (message, type, detail) => showToast(message, type, detail),
 });
-async function ensureCurrentUserProject() {
-  return workspaceSession.ensureCurrentProject();
-}
-async function synchronizeCanvasAfterAuthentication(force = false) {
-  return workspaceSession.synchronize(force);
-}
-async function enterWorkspace() {
-  await workspaceSession.enter();
-}
-new HomeSceneController(homePage, homeLoginModal, homePreview);
-const workspaceUserMenu = document.querySelector<HTMLElement>(
-  "#workspace-user-menu",
-)!;
-topbarMenus.register("user", () => workspaceUserMenu.classList.remove("open"));
-async function logoutToHome(message?: string) {
-  await workspaceSession.logout(message);
-}
-const userMenuController = new UserMenuController({
-  menu: workspaceUserMenu,
-  button: document.querySelector<HTMLButtonElement>("#workspace-user")!,
-  homeLogin: document.querySelector<HTMLButtonElement>("#home-login")!,
-  homeEnter: document.querySelector<HTMLButtonElement>("#home-enter")!,
-  logoutButton: document.querySelector<HTMLElement>("#workspace-logout")!,
-  inviteCopyButton:
-    document.querySelector<HTMLButtonElement>("#copy-invite-code")!,
-  getUser: () => authUser,
-  setUser: (user) => {
-    authUser = user;
-  },
-  closeTopbarMenus: (opening) =>
-    closeTopbarMenus(opening ? "user" : undefined),
-  logout: () => logoutToHome(),
-  toast: (message, type) => showToast(message, type),
-});
-const notificationFeature = new NotificationFeature({
-  getUserId: () => authUser?.id,
+notificationFeature = new NotificationFeature({
+  getUserId: () => authWorkspace.user?.id,
   registerTopbarMenu: (close) => topbarMenus.register("notifications", close),
   closeNotificationMenus: (opening) =>
     closeTopbarMenus(opening ? "notifications" : undefined),
@@ -785,13 +683,13 @@ function showCanvasModeNotice(title: string, detail: string) {
     duration: 2100,
   });
 }
-const accountTools = new AccountToolsFeature({
-  getUser: () => authUser,
-  setUser: (user) => { authUser = user; },
+accountTools = new AccountToolsFeature({
+  getUser: () => authWorkspace.user,
+  setUser: (user) => authWorkspace.setUser(user),
   getProjectId: () => currentProjectId,
-  closeUserMenu: () => userMenuController.close(),
+  closeUserMenu: () => authWorkspace.userMenu.close(),
   onCreditsChanged: () => {
-    renderAuthenticatedUser();
+    authWorkspace.renderUser();
     refreshNodeModelMenus();
   },
   refreshNodeModels: refreshNodeModelMenus,
@@ -803,7 +701,7 @@ function refreshNodeModelMenus() {
     .forEach((element) => element.remove());
   draw();
 }
-applyAppRoute();
+authWorkspace.applyRoute();
 
 const viewportSize = () => ({ width: innerWidth, height: innerHeight });
 const screen = (point: Point) =>
@@ -1029,7 +927,7 @@ function syncDomNodes() {
 const boundNodeViewFactory = new BoundNodeViewFactory({
   nodes,
   batchIds: selection.batchIds,
-  authUser: () => authUser,
+  authUser: () => authWorkspace.user,
   customApiModels: () => accountTools.models,
   generationCapabilities: () => generationCapabilities,
   getSelectedId: () => selection.selectedId,
@@ -1163,14 +1061,14 @@ function selectedNode() {
 function canGenerateNode(node: FlowNode) {
   return evaluateCanGenerateNode(node, {
     availableCredits:
-      Number(authUser?.credits ?? 0) - Number(authUser?.reservedCredits ?? 0),
+      Number(authWorkspace.user?.credits ?? 0) - Number(authWorkspace.user?.reservedCredits ?? 0),
     hasConnectedVoice: Boolean(connectedVoiceNode(node)),
   });
 }
 function generationBlockedReason(node: FlowNode) {
   return evaluateGenerationBlockedReason(node, {
     availableCredits:
-      Number(authUser?.credits ?? 0) - Number(authUser?.reservedCredits ?? 0),
+      Number(authWorkspace.user?.credits ?? 0) - Number(authWorkspace.user?.reservedCredits ?? 0),
     hasConnectedVoice: Boolean(connectedVoiceNode(node)),
   });
 }
@@ -1228,7 +1126,7 @@ const canvasSnapshots = new CanvasSnapshotController({
 
 const canvasSaveCoordinator: CanvasSaveCoordinator = new CanvasSaveCoordinator({
   clientId: canvasSyncClientId,
-  authenticated: () => Boolean(authUser),
+  authenticated: () => Boolean(authWorkspace.user),
   projectId: () => currentProjectId,
   capture: captureCanvasSnapshot,
   applyMerged: applySynchronizedCanvas,
@@ -1265,8 +1163,8 @@ const canvasLoadCoordinator = new CanvasLoadCoordinator({
   needsLease: () => canvasNodeIds.needsLease(),
   reserveIds: reserveCanvasNodeIds,
   syncCamera: () => cameraViewport.syncTarget(),
-  setBootStatus: setWorkspaceBootStatus,
-  hideBootStatus: hideWorkspaceBootStatusAfter,
+  setBootStatus: (message) => authWorkspace.status(message),
+  hideBootStatus: (version, delay) => authWorkspace.hideStatus(version, delay),
   hideConflictGuide: () => hideCanvasGuide("canvas-save-conflict"),
   clearSelection: () => { selection.selectedId = 0; },
   setSavedState: () => setSaveState("saved", "已自动保存"),
@@ -1336,17 +1234,18 @@ const generationSubmitController = new GenerationSubmitController({
   removeFailedResult,
   generateTts,
   pollJob,
-  hasAuthenticatedUser: () => Boolean(authUser),
+  hasAuthenticatedUser: () => Boolean(authWorkspace.user),
   applyCredits: (creditsAvailable) => {
-    if (!authUser) return;
-    authUser = {
-      ...authUser,
+    const user = authWorkspace.user;
+    if (!user) return;
+    authWorkspace.setUser({
+      ...user,
       reservedCredits: Math.max(
         0,
-        Number(authUser.credits ?? 0) - creditsAvailable,
+        Number(user.credits ?? 0) - creditsAvailable,
       ),
-    };
-    renderAuthenticatedUser();
+    });
+    authWorkspace.renderUser();
     refreshNodeModelMenus();
   },
   toast: (message, tone, detail) => showToast(message, tone, detail),
@@ -1369,8 +1268,8 @@ function runAgentWorkflow() { generationWorkflow.run(); }
 const generationFinalizer = new GenerationFinalizer({
   imageCache,
   jobLabel,
-  getUser: () => authUser,
-  setUser: (user) => { authUser = user; },
+  getUser: () => authWorkspace.user,
+  setUser: (user) => authWorkspace.setUser(user),
   normalizePrompt: normalizePromptText,
   removeFailedResult,
   loadAssets: () => loadAssets(false),
@@ -1378,7 +1277,7 @@ const generationFinalizer = new GenerationFinalizer({
     document.querySelector("#assets-panel")?.classList.contains("open"),
   ),
   renderAssets,
-  renderUser: renderAuthenticatedUser,
+  renderUser: () => authWorkspace.renderUser(),
   refreshModelMenus: refreshNodeModelMenus,
   updateEditor,
   draw,
@@ -1558,7 +1457,7 @@ function setComicInteractionLocked(locked: boolean) {
   comicStudioView.setInteractionLocked(locked);
 }
 function currentComicOwnerKey() {
-  return `${authUser?.id || "anonymous"}:${currentProjectId}`;
+  return `${authWorkspace.user?.id || "anonymous"}:${currentProjectId}`;
 }
 function resetComicConversationState(clearPlan = true) {
   comicState.reset(currentComicOwnerKey(), clearPlan);
@@ -1625,8 +1524,8 @@ const comicStudioLifecycle = new ComicStudioLifecycleController({
   getStoredOwnerKey: () => comicState.ownerKey,
   setStoredOwnerKey: (owner) => { comicState.ownerKey = owner; },
   hasProject: () => Boolean(currentProjectId),
-  hasAuthenticatedContext: () => Boolean(authUser && currentProjectId),
-  ensureProject: ensureCurrentUserProject,
+  hasAuthenticatedContext: () => Boolean(authWorkspace.user && currentProjectId),
+  ensureProject: () => authWorkspace.ensureCurrentProject(),
   resetConversation: resetComicConversationState,
   invalidateSession: () => comicSessionController.invalidate(),
   restoreSession: (force) => restoreComicSession(force),
@@ -1889,7 +1788,7 @@ assetLibraryFeature = new AssetLibraryFeature({
   preview: openAssetPreview,
   closePanels: closeWorkspacePanels,
   openPanel: () => openWorkspacePanel("#assets-panel", "#open-assets"),
-  invalidateShowcase: () => homeShowcase.invalidate(),
+  invalidateShowcase: () => authWorkspace.invalidateShowcase(),
   deleteCachedImage: (url) => { imageCache.delete(url); },
   selectNode: (id) => { selection.selectedId = id; },
   save: scheduleSave,
@@ -2030,17 +1929,17 @@ function loadGenerationCapabilities(redraw = false) {
 }
 const applicationBootstrap = new ApplicationBootstrapController<AuthUser>({
   apiFetch,
-  setUser: (user) => { authUser = user; },
-  user: () => authUser,
-  setReady: () => { authReady = true; },
-  renderUser: renderAuthenticatedUser,
-  touchSession: () => sessionActivity.touch(),
+  setUser: (user) => authWorkspace.setUser(user),
+  user: () => authWorkspace.user,
+  setReady: () => authWorkspace.markReady(),
+  renderUser: () => authWorkspace.renderUser(),
+  touchSession: () => authWorkspace.touch(),
   loadCapabilities: () => loadGenerationCapabilities(),
-  synchronizeCanvas: () => synchronizeCanvasAfterAuthentication(true),
+  synchronizeCanvas: () => authWorkspace.synchronize(true),
   loadAssets: () => loadAssets(false),
-  status: setWorkspaceBootStatus,
-  randomizeTheme: workspaceRoute.randomizeTheme,
-  applyRoute: applyAppRoute,
+  status: (message, visible) => authWorkspace.status(message, visible),
+  randomizeTheme: authWorkspace.randomizeTheme,
+  applyRoute: () => authWorkspace.applyRoute(),
   notifyError: (message) => showToast(message, "error"),
 });
 window.addEventListener("resize", resize);
