@@ -109,6 +109,7 @@ import {
 import { filterAssets } from "../ui/asset-panel";
 import { AssetLibraryView } from "../ui/asset-library-view";
 import { AssetTouchController } from "../ui/asset-touch-controller";
+import { AssetPreviewController } from "../ui/asset-preview";
 import { SquarePanelView } from "../ui/square-panel";
 import { WorkspacePanelController } from "../ui/toolbar";
 import {
@@ -7019,10 +7020,13 @@ panelBackdrop.addEventListener("click", closeWorkspacePanels);
 const assetUpload = document.querySelector<HTMLInputElement>("#asset-upload")!,
   assetGrid = document.querySelector<HTMLElement>("#asset-grid")!,
   assetCount = document.querySelector<HTMLElement>("#asset-count")!;
-const assetPreview = document.querySelector<HTMLElement>("#asset-preview")!,
-  previewImage = document.querySelector<HTMLImageElement>("#preview-image")!,
-  previewVideo = document.querySelector<HTMLVideoElement>("#preview-video")!,
-  previewName = document.querySelector<HTMLElement>("#preview-name")!;
+const assetPreviewController = new AssetPreviewController({
+  modal: document.querySelector<HTMLElement>("#asset-preview")!,
+  image: document.querySelector<HTMLImageElement>("#preview-image")!,
+  video: document.querySelector<HTMLVideoElement>("#preview-video")!,
+  name: document.querySelector<HTMLElement>("#preview-name")!,
+  closeButton: document.querySelector<HTMLElement>("#close-preview")!,
+});
 let contextUploadPosition: Point | null = null;
 let imageNodeAssetTargetId: number | null = null;
 let draggingAsset: {
@@ -7498,15 +7502,7 @@ function openAssetPreview(
   name: string,
   kind: "image" | "video" = "image",
 ) {
-  previewName.textContent = name;
-  previewImage.hidden = kind === "video";
-  previewVideo.hidden = kind !== "video";
-  if (kind === "video") previewVideo.src = url;
-  else {
-    previewImage.src = url;
-    previewImage.alt = name;
-  }
-  assetPreview.classList.add("open");
+  assetPreviewController.open(url, name, kind);
 }
 async function downloadNodeImage(node: FlowNode) {
   if (!node.mediaUrl) return;
@@ -7546,18 +7542,6 @@ async function downloadNodeImage(node: FlowNode) {
     );
   }
 }
-function closeAssetPreview() {
-  assetPreview.classList.remove("open");
-  previewImage.removeAttribute("src");
-  previewVideo.pause();
-  previewVideo.removeAttribute("src");
-}
-document
-  .querySelector("#close-preview")!
-  .addEventListener("click", closeAssetPreview);
-assetPreview.addEventListener("click", (event) => {
-  if (event.target === assetPreview) closeAssetPreview();
-});
 document
   .querySelector("#asset-context-place")!
   .addEventListener("click", () => {
@@ -7690,8 +7674,8 @@ window.addEventListener("keydown", (event) => {
     closeNodeInfo();
     return;
   }
-  if (event.key === "Escape" && assetPreview.classList.contains("open")) {
-    closeAssetPreview();
+  if (event.key === "Escape" && assetPreviewController.isOpen) {
+    assetPreviewController.close();
     return;
   }
   if (event.key !== "Delete" && event.key !== "Backspace") return;
