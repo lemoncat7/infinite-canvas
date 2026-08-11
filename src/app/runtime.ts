@@ -125,6 +125,7 @@ import {
 } from "../ui/custom-api-controller";
 import { PromptAgentControls } from "../ui/prompt-agent-controls";
 import { PromptAgentContextController } from "../ui/prompt-agent-context";
+import { PromptAgentAnimationController } from "../ui/prompt-agent-animation";
 import { createComicStudioShell } from "../ui/comic-studio-shell";
 import { ComicSidePanelController } from "../ui/comic-side-panel";
 import { ComicStudioView } from "../ui/comic-studio";
@@ -4319,31 +4320,11 @@ const comicStudioView = new ComicStudioView(
   positionComicBriefPanel,
 );
 const promptAgentModelSelect = promptAgentControls.modelSelect;
-const promptAgentBurst = document.createElement("div");
-promptAgentBurst.className = "agent-particle-burst";
-promptAgentBurst.innerHTML = Array.from({ length: 28 }, () => "<i></i>").join(
-  "",
-);
-promptAgentTrigger.append(promptAgentBurst);
-promptAgentBurst
-  .querySelectorAll<HTMLElement>("i")
-  .forEach((particle, index) => {
-    const angle = index * 2.399 + (index % 4) * 0.19,
-      distance = 34 + ((index * 17) % 86);
-    particle.style.setProperty("--hx", `${Math.cos(angle) * distance}px`);
-    particle.style.setProperty(
-      "--hy",
-      `${Math.sin(angle) * distance * 0.72}px`,
-    );
-    particle.style.setProperty("--delay", `${-(index % 14) * 61}ms`);
-    particle.style.setProperty("--duration", `${720 + (index % 7) * 34}ms`);
-  });
 let promptAgentResult: PromptAgentResult | null = null,
   promptAgentAppliedNodeId = 0,
   promptAgentUndo: (() => void) | null = null;
 let promptAgentRequestController: AbortController | null = null,
-  promptAgentRequestVersion = 0,
-  promptAgentFormTimer = 0;
+  promptAgentRequestVersion = 0;
 function clearPromptAgentResult() {
   promptAgentResult = null;
   promptAgentUndo = null;
@@ -4355,8 +4336,7 @@ function clearPromptAgentResult() {
   article.querySelector<HTMLElement>("[data-agent-summary]")!.textContent = "";
 }
 function closePromptAgent() {
-  window.clearTimeout(promptAgentFormTimer);
-  promptAgentFormTimer = 0;
+  promptAgentAnimation.cancelFormation();
   promptAgentRequestController?.abort();
   promptAgentRequestController = null;
   promptAgentRequestVersion++;
@@ -4387,107 +4367,6 @@ function cancelPromptAgentRequest() {
     .querySelector(".agent-submit")
     ?.classList.remove("is-running");
 }
-function dispersePromptAgent() {
-  if (promptAgentRequestController) {
-    showToast("提示词生成中，请等待完成", "warning");
-    return;
-  }
-  if (
-    !promptAgentPanel.classList.contains("open") ||
-    promptAgentPanel.classList.contains("gathering")
-  )
-    return;
-  const panelRect = promptAgentPanel.getBoundingClientRect(),
-    ghost = promptAgentPanel.cloneNode(true) as HTMLElement;
-  ghost.removeAttribute("id");
-  ghost
-    .querySelectorAll("[id]")
-    .forEach((element) => element.removeAttribute("id"));
-  ghost.classList.add("agent-disperse-ghost", "gathering");
-  Object.assign(ghost.style, {
-    left: `${panelRect.left}px`,
-    top: `${panelRect.top}px`,
-    right: "auto",
-    bottom: "auto",
-    width: `${panelRect.width}px`,
-    height: `${panelRect.height}px`,
-  });
-  document.body.append(ghost);
-  const target = { x: panelRect.width / 2, y: panelRect.height / 2 },
-    materials = [
-      ...ghost.querySelectorAll<HTMLElement>("[data-agent-context-node]"),
-    ];
-  materials.forEach((material, index) => {
-    const rect = material.getBoundingClientRect();
-    material.style.setProperty(
-      "--gather-x",
-      `${target.x - (rect.left - panelRect.left + rect.width / 2)}px`,
-    );
-    material.style.setProperty(
-      "--gather-y",
-      `${target.y - (rect.top - panelRect.top + rect.height / 2)}px`,
-    );
-    material.style.setProperty("--gather-delay", `${index * 18}ms`);
-    material.classList.add("is-gathering");
-  });
-  closePromptAgent();
-  window.setTimeout(
-    () => {
-      const field = document.createElement("div");
-      field.className = "agent-disperse-field";
-      field.style.left = `${panelRect.left}px`;
-      field.style.top = `${panelRect.top}px`;
-      field.style.width = `${panelRect.width}px`;
-      field.style.height = `${panelRect.height}px`;
-      field.innerHTML = Array.from({ length: 82 }, (_, index) => {
-        const column = (index * 37) % 100,
-          row = (index * 61) % 100,
-          angle = index * 2.399963,
-          distance = 28 + (index % 11) * 5,
-          dx = Math.cos(angle) * distance,
-          dy = Math.sin(angle) * distance * 0.72,
-          size = 2 + (index % 4);
-        return `<i style="left:${column}%;top:${row}%;width:${size}px;height:${size}px;--scatter-x:${dx}px;--scatter-y:${dy}px;--particle-delay:${(index % 9) * 8}ms"></i>`;
-      }).join("");
-      document.body.append(field);
-      ghost.classList.add("dispersing");
-      requestAnimationFrame(() => field.classList.add("active"));
-      window.setTimeout(() => {
-        field.remove();
-        ghost.remove();
-      }, 680);
-    },
-    Math.max(190, materials.length * 18 + 150),
-  );
-}
-function dispersePromptAgentDirect() {
-  if (promptAgentRequestController) {
-    showToast("提示词生成中，请等待完成", "warning");
-    return;
-  }
-  if (!promptAgentPanel.classList.contains("open")) return;
-  const panelRect = promptAgentPanel.getBoundingClientRect();
-  closePromptAgent();
-  const field = document.createElement("div");
-  field.className = "agent-disperse-field";
-  field.style.left = `${panelRect.left}px`;
-  field.style.top = `${panelRect.top}px`;
-  field.style.width = `${panelRect.width}px`;
-  field.style.height = `${panelRect.height}px`;
-  field.innerHTML = Array.from({ length: 82 }, (_, index) => {
-    const column = (index * 37) % 100,
-      row = (index * 61) % 100,
-      angle = index * 2.399963,
-      distance = 32 + (index % 11) * 6,
-      dx = Math.cos(angle) * distance,
-      dy = Math.sin(angle) * distance * 0.72,
-      size = 2 + (index % 4);
-    return `<i style="left:${column}%;top:${row}%;width:${size}px;height:${size}px;--scatter-x:${dx}px;--scatter-y:${dy}px;--particle-delay:${(index % 9) * 8}ms"></i>`;
-  }).join("");
-  document.body.append(field);
-  requestAnimationFrame(() => field.classList.add("active"));
-  window.setTimeout(() => field.remove(), 680);
-}
 function playAgentMeteor() {
   const node = nodes.find((item) => item.id === promptAgentAppliedNodeId);
   if (!node) return;
@@ -4499,56 +4378,14 @@ function playAgentMeteor() {
     end = {
       x: innerWidth / 2 + camera.x + (node.x + node.width / 2) * camera.zoom,
       y: innerHeight / 2 + camera.y + (node.y + node.height / 2) * camera.zoom,
-    },
-    dx = end.x - start.x,
-    dy = end.y - start.y,
-    distance = Math.hypot(dx, dy),
-    meteor = document.createElement("div");
-  meteor.className = "agent-meteor";
-  meteor.style.left = `${start.x}px`;
-  meteor.style.top = `${start.y}px`;
-  meteor.style.width = `${distance}px`;
-  meteor.style.rotate = `${Math.atan2(dy, dx)}rad`;
-  meteor.style.setProperty("--distance", `${distance}px`);
-  meteor.innerHTML = Array.from(
-    { length: 18 },
-    (_, index) =>
-      `<i style="--delay:${index * 13}ms;--lane:${((index % 5) - 2) * 3}px"></i>`,
-  ).join("");
-  document.body.append(meteor);
+    };
   const element = nodeLayer.querySelector<HTMLElement>(
     `.flow-node[data-id="${node.id}"]`,
   );
-  element?.classList.add("agent-materializing");
-  window.setTimeout(() => {
-    meteor.remove();
-    element?.classList.remove("agent-materializing");
-  }, 900);
-}
-function positionPromptAgentParticles() {
-  promptAgentBurst.style.left = "50%";
-  promptAgentBurst.style.top = "50%";
+  promptAgentAnimation.playMeteor(start, end, element);
 }
 function positionPromptAgentCapsule() {
-  const trigger = promptAgentTrigger.getBoundingClientRect(),
-    width = promptAgentPanel.offsetWidth || 330,
-    left = Math.max(
-      10,
-      Math.min(
-        innerWidth - width - 10,
-        trigger.left + trigger.width / 2 - width / 2,
-      ),
-    );
-  promptAgentPanel.style.right = "auto";
-  promptAgentPanel.style.left = `${left}px`;
-  promptAgentPanel.style.bottom = `${Math.max(82, innerHeight - trigger.top + 12)}px`;
-}
-function stopPromptAgentHover() {
-  promptAgentBurst.classList.remove("hover-active");
-}
-function playPromptAgentHover() {
-  positionPromptAgentParticles();
-  promptAgentBurst.classList.add("hover-active");
+  promptAgentAnimation.position();
 }
 const promptAgentContextController = new PromptAgentContextController({
   panel: promptAgentPanel,
@@ -4564,59 +4401,22 @@ function selectedPromptAgentNodes() {
 function renderPromptAgentContext(reset = false) {
   promptAgentContextController.render(reset);
 }
-function formPromptAgent() {
-  window.clearTimeout(promptAgentFormTimer);
-  promptAgentContextSelection.clear();
-  renderPromptAgentContext(false);
-  positionPromptAgentCapsule();
-  const trigger = promptAgentTrigger.getBoundingClientRect(),
-    panel = promptAgentPanel.getBoundingClientRect(),
-    originX = Math.max(
-      0,
-      Math.min(panel.width, trigger.left + trigger.width / 2 - panel.left),
-    ),
-    originY = Math.max(
-      0,
-      Math.min(panel.height, trigger.top + trigger.height / 2 - panel.top),
-    );
-  promptAgentPanel.style.setProperty("--agent-origin-x", `${originX}px`);
-  promptAgentPanel.style.setProperty("--agent-origin-y", `${originY}px`);
-  positionPromptAgentParticles();
-  promptAgentBurst.classList.add("hover-active");
-  promptAgentPanel.classList.add("forming");
-  promptAgentTrigger.classList.add("active");
-  promptAgentFormTimer = window.setTimeout(() => {
-    promptAgentFormTimer = 0;
-    promptAgentPanel.classList.remove("forming");
-    promptAgentPanel.classList.add("open");
+const promptAgentAnimation = new PromptAgentAnimationController({
+  trigger: promptAgentTrigger,
+  panel: promptAgentPanel,
+  isBusy: () => Boolean(promptAgentRequestController),
+  onBusy: () => showToast("提示词生成中，请等待完成", "warning"),
+  onClose: closePromptAgent,
+  onCancel: cancelPromptAgentRequest,
+  onOpen: () => {
+    promptAgentContextSelection.clear();
+    renderPromptAgentContext(false);
     promptAgentSelecting = true;
-    promptAgentPanel.querySelector("textarea")?.focus();
     draw();
-  }, 40);
-}
-promptAgentTrigger.addEventListener("pointerenter", playPromptAgentHover);
-promptAgentTrigger.addEventListener("pointerleave", stopPromptAgentHover);
-promptAgentTrigger.addEventListener("click", (event) => {
-  event.stopPropagation();
-  const touchToggle =
-    matchMedia("(pointer: coarse)").matches || innerWidth <= 800;
-  if (touchToggle && promptAgentPanel.classList.contains("open")) {
-    cancelPromptAgentRequest();
-    dispersePromptAgentDirect();
-    return;
-  }
-  if (promptAgentPanel.classList.contains("forming")) {
-    window.clearTimeout(promptAgentFormTimer);
-    promptAgentFormTimer = 0;
-    promptAgentPanel.classList.remove("forming");
-    promptAgentPanel.classList.add("open");
-    promptAgentSelecting = true;
-    promptAgentPanel.querySelector("textarea")?.focus();
-    draw();
-    return;
-  }
-  if (!promptAgentPanel.classList.contains("open")) formPromptAgent();
+  },
 });
+function dispersePromptAgent() { promptAgentAnimation.disperse(true); }
+function dispersePromptAgentDirect() { promptAgentAnimation.disperse(false); }
 let comicPlan: ComicPlan | null = null,
   comicSubmitting = false,
   comicOriginalIdea = "",
