@@ -104,6 +104,10 @@ import { ComicSidePanelController } from "../ui/comic-side-panel";
 import { ComicStudioView } from "../ui/comic-studio";
 import { ComicLabelController } from "../ui/comic-labels";
 import { buildComicWorkflow } from "../nodes/comic-workflow";
+import {
+  planComicWorkflowLayout,
+  promptAgentStepPosition,
+} from "../nodes/prompt-agent-workflow";
 import { createNodeView } from "../nodes/node-view-factory";
 import { syncNodeMediaView } from "../nodes/node-media-view";
 import { syncImageNodePanel } from "../nodes/image-node-sync";
@@ -6569,102 +6573,17 @@ function applyPromptAgentPlan(result: PromptAgentResult) {
           ? current.y + 80
           : world({ x: innerWidth / 2, y: innerHeight / 2 }).y,
       },
-      stageRows = {
-        character: 0,
-        voice: 0,
-        prop: 0,
-        scene: 0,
-        storyboard: 0,
-        tts: 0,
-        video: 0,
-      },
-      comicPositions = new Map<number, Point>();
-    if (result.layout === "comic-workflow") {
-      const columnGap = 350,
-        rowGap = 290,
-        storyX = base.x + columnGap * 4,
-        videoX = storyX + columnGap * 4,
-        assetStages = ["character", "voice", "prop", "scene"] as const;
-      assetStages.forEach((stage, column) =>
-        planned.forEach((step, index) => {
-          if (step.stage === stage)
-            comicPositions.set(index, {
-              x: base.x + column * columnGap,
-              y: base.y + stageRows[stage]++ * rowGap,
-            });
-        }),
-      );
-      const assigned = new Set<number>(),
-        collectStoryboard = (index: number, found: Set<number>) => {
-          for (const raw of planned[index]?.dependsOn || []) {
-            const dependency = Number(raw) - 1;
-            if (dependency < 0 || dependency >= index) continue;
-            if (planned[dependency]?.stage === "storyboard")
-              found.add(dependency);
-            collectStoryboard(dependency, found);
-          }
-        };
-      let workflowY = base.y;
-      planned.forEach((step, index) => {
-        if (step.stage !== "video" && step.kind !== "video") return;
-        const ancestry = new Set<number>();
-        collectStoryboard(index, ancestry);
-        const chain = [...ancestry]
-          .filter((value) => !assigned.has(value))
-          .sort((a, b) => a - b);
-        chain.forEach((value) => assigned.add(value));
-        const rows = Math.max(1, Math.ceil(chain.length / 4));
-        chain.forEach((value, chainIndex) =>
-          comicPositions.set(value, {
-            x: storyX + (chainIndex % 4) * columnGap,
-            y: workflowY + Math.floor(chainIndex / 4) * rowGap,
-          }),
-        );
-        comicPositions.set(index, {
-          x: videoX,
-          y: workflowY + ((rows - 1) * rowGap) / 2,
-        });
-        workflowY += rows * rowGap + 70;
-      });
-      const remaining = planned
-        .map((step, index) => ({ step, index }))
-        .filter(
-          ({ step, index }) =>
-            step.stage === "storyboard" && !assigned.has(index),
-        );
-      remaining.forEach(({ index }, positionIndex) =>
-        comicPositions.set(index, {
-          x: storyX + (positionIndex % 4) * columnGap,
-          y: workflowY + Math.floor(positionIndex / 4) * rowGap,
-        }),
-      );
-      planned.forEach((step, index) => {
-        if (step.stage === "tts")
-          comicPositions.set(index, {
-            x: videoX + columnGap,
-            y: base.y + stageRows.tts++ * rowGap,
-          });
-      });
-    }
+      comicLayout = planComicWorkflowLayout(planned, base);
     planned.forEach((step, index) => {
-      const storyboard = result.layout === "storyboard",
-        shotIndex = Math.floor(index / 2),
-        stage = step.stage || "storyboard",
+      const stage = step.stage || "storyboard",
         comicWorkflow = result.layout === "comic-workflow",
-        position = comicWorkflow
-          ? comicPositions.get(index) || {
-              x: base.x + 4 * 350,
-              y: base.y + stageRows[stage]++ * 290,
-            }
-          : storyboard
-            ? {
-                x: base.x + Math.floor(shotIndex / 3) * 900 + (index % 2) * 390,
-                y: base.y + (shotIndex % 3) * 300,
-              }
-            : {
-                x: base.x + Math.floor(index / 3) * 390,
-                y: base.y + (index % 3) * 270,
-              };
+        position = promptAgentStepPosition({
+          index,
+          step,
+          layout: result.layout,
+          base,
+          comic: comicLayout,
+        });
       addNode(step.kind, position, true);
       const created = nodes.find((node) => node.id === selection.selectedId);
       if (!created) return;
