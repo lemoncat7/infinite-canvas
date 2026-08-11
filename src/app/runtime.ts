@@ -26,11 +26,8 @@ import { GenerationGraph } from "../nodes/generation-graph";
 import { decodePromptClipboardText, normalizePromptText } from "../nodes/prompt-text";
 import { downloadNodeImage as downloadNodeImageFile } from "../nodes/node-download";
 import { PromptNodeController } from "../nodes/prompt-node";
+import { CanvasNodeEditorFeature } from "../nodes/canvas-node-editor-feature";
 import { TtsFeature } from "../services/tts-feature";
-import {
-  canGenerateNode as evaluateCanGenerateNode,
-  generationBlockedReason as evaluateGenerationBlockedReason,
-} from "../nodes/generation-eligibility";
 import { apiFetch } from "../services/api";
 import { AppUpdateController } from "../services/app-update-controller";
 import { GenerationCapabilitiesController } from "../services/generation-capabilities-controller";
@@ -47,14 +44,12 @@ import { inferVoiceConfig } from "../nodes/voice-node";
 import { bindNodeConfigPanel } from "../ui/node-editor";
 import { WorkspaceAssetsFeature } from "../ui/workspace-assets-feature";
 import { CanvasToolbarController } from "../ui/canvas-toolbar-controller";
-import { NodeInfoController } from "../ui/node-info-controller";
 import { WorkspaceOverlayController } from "../ui/workspace-overlay-controller";
 import { WorkspaceKeyboardController } from "../ui/workspace-keyboard-controller";
 import { CanvasTaskFeature } from "../ui/canvas-task-feature";
 import { TopbarMenuCoordinator } from "../ui/topbar-menu-coordinator";
 import { QuickNodeMenuController } from "../ui/quick-node-menu-controller";
 import { AppearanceController } from "../ui/appearance-controller";
-import { NodeEditorStateController } from "../ui/node-editor-state-controller";
 import { CanvasGuideController, type CanvasGuideMessage } from "../ui/canvas-guide-controller";
 import { ToastController, type ToastType } from "../ui/toast-controller";
 import {
@@ -81,6 +76,7 @@ let canvasRender: CanvasRenderFeature;
 let generationCapabilities: GenerationCapabilities =
   createDefaultGenerationCapabilities();
 let canvasGeneration: CanvasGenerationFeature;
+let nodeEditorFeature: CanvasNodeEditorFeature;
 function loadTtsProviders() {
   return ttsFeature.loadProviders();
 }
@@ -696,23 +692,14 @@ function addMediaNode(
 }
 
 function enterTextEdit(node: FlowNode, element: HTMLElement) {
-  promptNodeEditor.beginEdit(node, element, {
-    onInput: () => setSaveState("editing", "编辑中…"),
-    onFinish: () => {
-      scheduleSave();
-      updateEditor();
-      draw();
-    },
-  });
+  nodeEditorFeature.beginTextEdit(node, element);
 }
 
-const nodeInfoModal = document.querySelector<HTMLElement>("#node-info-modal")!;
-const nodeInfoController = new NodeInfoController(nodeInfoModal, scheduleSave);
 function openNodeInfo(node: FlowNode) {
-  nodeInfoController.open(node);
+  nodeEditorFeature.openInfo(node);
 }
 function closeNodeInfo() {
-  nodeInfoController.close();
+  nodeEditorFeature.closeInfo();
 }
 
 function defaultNodeCopy(kind: NodeKind) {
@@ -778,23 +765,17 @@ async function deleteSelectedNode() {
 }
 
 function selectedNode() {
-  return nodes.find((node) => node.id === selection.selectedId);
+  return nodeEditorFeature.selected();
 }
 function canGenerateNode(node: FlowNode) {
-  return evaluateCanGenerateNode(node, {
-    availableCredits:
-      Number(authWorkspace.user?.credits ?? 0) - Number(authWorkspace.user?.reservedCredits ?? 0),
-    hasConnectedVoice: Boolean(connectedVoiceNode(node)),
-  });
+  return nodeEditorFeature.canGenerate(node);
 }
 function generationBlockedReason(node: FlowNode) {
-  return evaluateGenerationBlockedReason(node, {
-    availableCredits:
-      Number(authWorkspace.user?.credits ?? 0) - Number(authWorkspace.user?.reservedCredits ?? 0),
-    hasConnectedVoice: Boolean(connectedVoiceNode(node)),
-  });
+  return nodeEditorFeature.blockedReason(node);
 }
-const nodeEditorState = new NodeEditorStateController({
+nodeEditorFeature = new CanvasNodeEditorFeature({
+  nodes,
+  promptEditor: promptNodeEditor,
   titleInput,
   promptInput,
   modelInput,
@@ -802,21 +783,24 @@ const nodeEditorState = new NodeEditorStateController({
   jobLabel,
   jobProgress,
   nodeLayer,
-  selectedNode,
-  selectedId: () => selection.selectedId,
+  infoModal: document.querySelector<HTMLElement>("#node-info-modal")!,
+  getSelectedId: () => selection.selectedId,
+  getAvailableCredits: () =>
+    Number(authWorkspace.user?.credits ?? 0) - Number(authWorkspace.user?.reservedCredits ?? 0),
+  hasConnectedVoice: (node) => Boolean(connectedVoiceNode(node)),
   activelyGenerating: nodeIsActivelyGenerating,
-  canGenerate: canGenerateNode,
   pixiActive: canvasRender.active,
+  setEditingState: () => setSaveState("editing", "编辑中…"),
   draw,
   save: scheduleSave,
   updateTasks: updateTaskMonitor,
 });
 function updateEditor() {
-  nodeEditorState.update();
+  nodeEditorFeature.update();
 }
 
 function updateNodeJobProgressUi(node: FlowNode) {
-  nodeEditorState.updateProgress(node);
+  nodeEditorFeature.updateProgress(node);
 }
 
 function scheduleSave(recordHistory = true) {
@@ -1164,7 +1148,7 @@ new WorkspaceKeyboardController({
     return true;
   },
   closeNodeInfo: () => {
-    if (!nodeInfoModal.classList.contains("open")) return false;
+    if (!document.querySelector<HTMLElement>("#node-info-modal")!.classList.contains("open")) return false;
     closeNodeInfo();
     return true;
   },
