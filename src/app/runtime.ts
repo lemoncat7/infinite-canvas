@@ -38,8 +38,7 @@ import {
   findOutputPosition,
   removeResultNode,
 } from "../nodes/generation-node-lifecycle";
-import { MediaLifecycleController } from "../canvas/media-lifecycle-controller";
-import { NodeMediaRenderer } from "../canvas/node-media-renderer";
+import { CanvasMediaFeature } from "../canvas/canvas-media-feature";
 import type {
   FlowLink,
   FlowNode,
@@ -574,17 +573,21 @@ function cacheDetachedPixiNode(id: number, element: HTMLElement) {
 function schedulePixiEditorWarmup() {
   pixiEditorCache.scheduleWarmup();
 }
-const mediaLifecycle = new MediaLifecycleController({
+const canvasMedia = new CanvasMediaFeature({
   mobile: innerWidth <= 780,
+  nodes,
   nodeLayer,
+  theme: () => colorTheme,
   suspendRenderer: () => pixiRenderer?.suspend(),
   resumeRenderer: () => pixiRenderer?.resume(),
   clearNodeStates: () => nodeDomStates.clear(),
+  invalidateNode: (id) => { nodeDomStates.delete(id); },
   resize,
   draw,
+  refreshAppearance: refreshAppearanceButton,
 });
-const pendingMediaLoads = mediaLifecycle.pendingLoads;
-const imageCache = mediaLifecycle.cache;
+const pendingMediaLoads = canvasMedia.pendingLoads;
+const imageCache = canvasMedia.cache;
 document.addEventListener("selectstart", (event) => {
   if (document.body.classList.contains("home-mode")) return;
   const target = event.target instanceof Element ? event.target : null;
@@ -1229,27 +1232,14 @@ function defaultNodeCopy(kind: NodeKind) {
 }
 
 function paintNodeMedia(target: HTMLCanvasElement, url: string) {
-  nodeMediaRenderer.paint(target, url);
+  canvasMedia.paint(target, url);
 }
 function paintNodeVideo(target: HTMLCanvasElement, url: string) {
   paintNodeMedia(target, url);
 }
-function repaintMediaUrl(url: string) {
-  nodeMediaRenderer.repaintUrl(url);
-}
 function repaintAllMedia() {
-  nodeMediaRenderer.repaintAll();
+  canvasMedia.repaintAll();
 }
-
-const nodeMediaRenderer = new NodeMediaRenderer({
-  lifecycle: mediaLifecycle,
-  nodes,
-  nodeLayer,
-  theme: () => colorTheme,
-  invalidateNode: (id) => nodeDomStates.delete(id),
-  draw,
-  refreshAppearance: refreshAppearanceButton,
-});
 
 function finishDomConnection(event: PointerEvent) {
   if (!connection.active) return;
