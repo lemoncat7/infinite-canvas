@@ -36,7 +36,7 @@ import {
   removeResultNode,
 } from "../nodes/generation-node-lifecycle";
 import { MediaLifecycleController } from "../canvas/media-lifecycle-controller";
-import { NodeMediaRenderer, mediaThumbnailUrl } from "../canvas/node-media-renderer";
+import { NodeMediaRenderer } from "../canvas/node-media-renderer";
 import type {
   FlowLink,
   FlowNode,
@@ -103,6 +103,7 @@ import { TaskMonitorController } from "../ui/task-monitor-controller";
 import { TopbarMenuCoordinator } from "../ui/topbar-menu-coordinator";
 import { QuickNodeMenuController } from "../ui/quick-node-menu-controller";
 import { HomeSceneController } from "../ui/home-scene-controller";
+import { HomeShowcaseController } from "../ui/home-showcase-controller";
 import { AppearanceController } from "../ui/appearance-controller";
 import { NodeEditorStateController } from "../ui/node-editor-state-controller";
 import { CanvasGuideController, type CanvasGuideMessage } from "../ui/canvas-guide-controller";
@@ -763,7 +764,11 @@ const homePreview = document.querySelector<HTMLElement>("#home-preview")!;
 let authUser: AuthUser | null = null;
 let customApiModels: CustomApiModel[] = [];
 let authReady = false;
-let showcaseLoaded = false;
+const homeShowcase = new HomeShowcaseController(
+  homeGallery,
+  homePreview,
+  document.querySelector<HTMLElement>(".home-showcase")!,
+);
 const sessionActivity = new SessionActivityController({
   isAuthenticated: () => Boolean(authUser),
   logout: (message) => logoutToHome(message),
@@ -817,7 +822,7 @@ function applyAppRoute() {
   const wasHome = document.body.classList.contains("home-mode");
   if (home && !wasHome) randomizeHomeTheme();
   document.body.classList.toggle("home-mode", home);
-  if (home && !showcaseLoaded) void loadShowcase();
+  if (home && !homeShowcase.loaded) void homeShowcase.load();
   if (!home) requestAnimationFrame(resize);
   if (authReady && location.hash === "#/canvas" && !authUser) openAuth("login");
 }
@@ -871,70 +876,6 @@ async function synchronizeCanvasAfterAuthentication(force = false) {
 async function enterWorkspace() {
   await workspaceSession.enter();
 }
-async function loadShowcase() {
-  showcaseLoaded = true;
-  try {
-    const response = await apiFetch("/api/showcase");
-    if (!response.ok) throw new Error(String(response.status));
-    const assets = (await response.json()) as Array<{
-      id: string;
-      name: string;
-      mimeType: string;
-      createdAt: string;
-      author: string;
-      url: string;
-      thumbnailUrl?: string;
-    }>;
-    if (!assets.length) return;
-    homeGallery.innerHTML = "";
-    for (const asset of assets) {
-      const video = asset.mimeType.startsWith("video/"),
-        card = document.createElement("article");
-      card.className = "home-gallery-card";
-      card.tabIndex = 0;
-      card.innerHTML = `<img src="${asset.thumbnailUrl || mediaThumbnailUrl(asset.url)}" alt="${escapeHtml(asset.name)}" loading="lazy" decoding="async"><i>${video ? "▶" : "⌕"}</i><footer><strong>${escapeHtml(asset.name)}</strong><small>${escapeHtml(asset.author || "Flow 创作者")}</small></footer>`;
-      const open = () => openHomePreview(asset);
-      card.addEventListener("click", open);
-      card.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") open();
-      });
-      homeGallery.append(card);
-    }
-  } catch {
-    homeGallery.innerHTML =
-      '<div class="home-gallery-empty"><i>◇</i><b>作品暂时无法加载</b><span>稍后刷新页面再试</span></div>';
-  }
-}
-function openHomePreview(asset: {
-  name: string;
-  mimeType: string;
-  author: string;
-  url: string;
-}) {
-  const image = homePreview.querySelector<HTMLImageElement>("img")!,
-    video = homePreview.querySelector<HTMLVideoElement>("video")!,
-    isVideo = asset.mimeType.startsWith("video/");
-  image.hidden = isVideo;
-  video.hidden = !isVideo;
-  if (isVideo) {
-    video.src = asset.url;
-    void video.play().catch(() => {});
-  } else {
-    image.src = asset.url;
-    image.alt = asset.name;
-  }
-  homePreview.querySelector<HTMLElement>("strong")!.textContent = asset.name;
-  homePreview.querySelector<HTMLElement>("footer span")!.textContent =
-    asset.author || "Flow 创作者";
-  homePreview.classList.add("open");
-}
-function closeHomePreview() {
-  const video = homePreview.querySelector<HTMLVideoElement>("video")!;
-  video.pause();
-  video.removeAttribute("src");
-  homePreview.querySelector<HTMLImageElement>("img")!.removeAttribute("src");
-  homePreview.classList.remove("open");
-}
 document.querySelector("#home-login")!.addEventListener("click", () => {
   if (!authUser) openAuth("login");
 });
@@ -944,24 +885,7 @@ document
 document
   .querySelector("#home-start")!
   .addEventListener("click", requestWorkspace);
-const showcaseSection = document.querySelector<HTMLElement>(".home-showcase")!;
-const showcaseObserver = new IntersectionObserver(
-  (entries) => {
-    if (entries.some((entry) => entry.isIntersecting)) {
-      showcaseSection.classList.add("revealed");
-      showcaseObserver.disconnect();
-    }
-  },
-  { threshold: 0.12 },
-);
-showcaseObserver.observe(showcaseSection);
 new HomeSceneController(homePage, homeLoginModal, homePreview);
-homePreview
-  .querySelector(":scope > button")!
-  .addEventListener("click", closeHomePreview);
-homePreview.addEventListener("click", (event) => {
-  if (event.target === homePreview) closeHomePreview();
-});
 const workspaceUserMenu = document.querySelector<HTMLElement>(
   "#workspace-user-menu",
 )!;
@@ -2649,7 +2573,7 @@ const assetContextController = new AssetContextController({
     openAssetPreview(asset.url, asset.name, asset.kind),
   onCloseWorkspace: closeWorkspacePanels,
   onVisibilityChanged: () => {
-    showcaseLoaded = false;
+    homeShowcase.invalidate();
   },
   onDeleted: (asset) => imageCache.delete(asset.url),
   reloadAssets: () => loadAssets(),
