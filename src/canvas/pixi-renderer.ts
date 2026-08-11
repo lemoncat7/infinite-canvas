@@ -174,6 +174,8 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       subtitle: Text;
       body: Text;
       meta: Text;
+      hint: Text;
+      markers: Text[];
       media: Sprite;
       mediaUrl?: string;
       mediaRequest: number;
@@ -444,7 +446,27 @@ export class PixiCanvasRenderer implements CanvasRenderer {
               fontSize: 10,
             },
           }),
+          hint = new Text({
+            style: {
+              fill: snapshot.dark ? 0x8fa09d : 0x78827f,
+              fontFamily: "system-ui, sans-serif",
+              fontSize: 9,
+            },
+          }),
+          markers = Array.from(
+            { length: 3 },
+            (_, index) =>
+              new Text({
+                text: String(index + 1),
+                style: {
+                  fill: snapshot.dark ? 0xe4e4e7 : 0x3f3f46,
+                  fontFamily: "system-ui, sans-serif",
+                  fontSize: 15,
+                },
+              }),
+          ),
           media = new Sprite(Texture.EMPTY);
+        markers.forEach((marker) => marker.anchor.set(0.5));
         title.position.set(14, 13);
         icon.anchor.set(0.5);
         subtitle.position.set(14, 34);
@@ -463,6 +485,8 @@ export class PixiCanvasRenderer implements CanvasRenderer {
           subtitle,
           body,
           meta,
+          hint,
+          ...markers,
           mediaMask,
         );
         this.cards.addChild(container);
@@ -477,6 +501,8 @@ export class PixiCanvasRenderer implements CanvasRenderer {
           subtitle,
           body,
           meta,
+          hint,
+          markers,
           media,
           mediaRequest: 0,
           key: "",
@@ -543,6 +569,9 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       view.subtitle.text = presentation.subtitle;
       view.body.text = presentation.body.replace(/\s+/g, " ").slice(0, 92);
       view.meta.text = presentation.meta;
+      view.hint.text = "";
+      view.hint.visible = false;
+      view.markers.forEach((marker) => (marker.visible = false));
       // Keep the textual card presentation until the asynchronous texture is
       // actually attached. Hiding it merely because a URL exists produces a
       // blank light shell while images decode, reload, or miss the LRU cache.
@@ -602,7 +631,33 @@ export class PixiCanvasRenderer implements CanvasRenderer {
           .circle(0, node.height / 2, 5)
           .circle(node.width, node.height / 2, 5)
           .fill({ color: node.accent });
-      if (!mediaOnly && node.kind === "prompt") {
+      if (!mediaOnly && node.kind === "image" && !node.mediaUrl) {
+        view.icon.position.set(node.width / 2, node.height / 2 - 49);
+        view.title.anchor.set(0.5);
+        view.title.position.set(node.width / 2, node.height / 2 - 8);
+        view.title.style.fontSize = 13;
+        view.subtitle.visible = false;
+        view.body.anchor.set(0.5);
+        view.body.position.set(node.width / 2, node.height / 2 + 18);
+        view.body.style.fontSize = 10;
+        view.body.style.align = "center";
+        view.meta.visible = false;
+        const buttonY = node.height / 2 + 52;
+        view.detail
+          .roundRect(node.width / 2 - 64, buttonY, 56, 30, 9)
+          .roundRect(node.width / 2 + 8, buttonY, 66, 30, 9)
+          .fill({ color: snapshot.dark ? 0xffffff : 0x687772, alpha: 0.035 })
+          .stroke({
+            color: snapshot.dark ? 0x344247 : 0xd2d9d5,
+            alpha: 0.9,
+            width: 1,
+          });
+        view.hint.text = "↑ 上传        ▦ 资产库";
+        view.hint.visible = true;
+        view.hint.anchor.set(0.5);
+        view.hint.position.set(node.width / 2, buttonY + 10);
+        view.hint.style.fontSize = 10;
+      } else if (!mediaOnly && node.kind === "prompt") {
         view.title.style.fontSize = 16;
         view.title.style.fontWeight = "700";
         view.title.anchor.set(0);
@@ -622,7 +677,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
           frameWidth = (node.width - 44 - frameGap * 2) / 3;
         for (let index = 0; index < 3; index++)
           view.detail
-            .roundRect(14 + index * (frameWidth + frameGap), frameTop, frameWidth, 58, 10)
+            .roundRect(14 + index * (frameWidth + frameGap), frameTop, frameWidth, 72, 10)
             .fill({
               color: snapshot.dark ? 0xffffff : 0x74827d,
               alpha: snapshot.dark ? 0.045 : 0.075,
@@ -632,6 +687,18 @@ export class PixiCanvasRenderer implements CanvasRenderer {
               alpha: 0.7,
               width: 1,
             });
+        const pillY = frameTop + 85,
+          pillWidths = [38, 47, 43, 42],
+          pillGap = 7,
+          totalPillWidth = pillWidths.reduce((sum, width) => sum + width, 0) + pillGap * 3;
+        let pillX = (node.width - totalPillWidth) / 2;
+        pillWidths.forEach((width) => {
+          view.detail
+            .roundRect(pillX, pillY, width, 24, 12)
+            .fill({ color: snapshot.dark ? 0xffffff : 0x74827d, alpha: 0.055 })
+            .stroke({ color: snapshot.dark ? 0x344247 : 0xd8dfdb, width: 1 });
+          pillX += width + pillGap;
+        });
         view.detail
           .moveTo(14, node.height - 48)
           .lineTo(node.width - 14, node.height - 48)
@@ -640,19 +707,26 @@ export class PixiCanvasRenderer implements CanvasRenderer {
             alpha: 0.72,
             width: 1,
           });
-        view.icon.text = "1      2      3";
-        view.icon.visible = true;
-        view.icon.position.set(node.width / 2, frameTop + 29);
-        view.icon.style.fontSize = 15;
+        view.icon.visible = false;
+        view.markers.forEach((marker, index) => {
+          marker.visible = true;
+          marker.position.set(
+            14 + frameWidth / 2 + index * (frameWidth + frameGap),
+            frameTop + 36,
+          );
+        });
         view.title.anchor.set(0.5);
         view.title.position.set(node.width / 2, 14);
         view.subtitle.anchor.set(0.5);
         view.subtitle.position.set(node.width / 2, 36);
         view.body.anchor.set(0.5);
-        view.body.position.set(node.width / 2, 137);
+        view.body.position.set(node.width / 2, node.height - 28);
+        view.body.style.fontSize = 9;
         view.body.style.align = "center";
         view.meta.anchor.set(0.5);
-        view.meta.position.set(node.width / 2, node.height - 31);
+        view.meta.text = `${node.videoSettings?.seconds ?? 5} 秒      ${node.videoSettings?.referenceMode === "keyframes" ? "关键帧" : "参考图"}      ${node.videoSettings?.resolution ?? "720p"}      ${node.videoSettings?.aspectRatio ?? "16:9"}`;
+        view.meta.style.fontSize = 9;
+        view.meta.position.set(node.width / 2, pillY + 6);
       } else if (!mediaOnly && node.kind === "voice") {
         view.detail
           .moveTo(18, node.height - 48)
@@ -667,13 +741,12 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         view.body.style.align = "center";
         view.meta.anchor.set(0.5);
         view.meta.position.set(node.width / 2, 124);
+        view.hint.text = "角色声音配置将在关联的 TTS 节点中复用";
+        view.hint.visible = true;
+        view.hint.anchor.set(0.5);
+        view.hint.position.set(node.width / 2, node.height - 24);
       } else if (!mediaOnly && node.kind === "tts") {
         view.detail
-          .roundRect(18, 78, node.width - 36, 74, 10)
-          .fill({
-            color: snapshot.dark ? 0xffffff : 0x71827c,
-            alpha: snapshot.dark ? 0.035 : 0.055,
-          })
           .moveTo(18, node.height - 48)
           .lineTo(node.width - 18, node.height - 48)
           .stroke({ color: snapshot.dark ? 0x344247 : 0xd8dfdb, width: 1 });
@@ -685,7 +758,11 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         view.body.position.set(node.width / 2, 96);
         view.body.style.align = "center";
         view.meta.anchor.set(0.5);
-        view.meta.position.set(node.width / 2, node.height - 31);
+        view.meta.position.set(node.width / 2, 124);
+        view.hint.text = node.status === "running" ? "正在生成语音" : "连接语音配置卡片后即可生成";
+        view.hint.visible = true;
+        view.hint.anchor.set(0.5);
+        view.hint.position.set(node.width / 2, node.height - 24);
       } else if (!mediaOnly && node.kind === "audio") {
         const centerY = node.height / 2 + 4,
           bars = [12, 26, 18, 38, 30, 16, 34, 22, 42, 20, 31, 14, 27, 18];
