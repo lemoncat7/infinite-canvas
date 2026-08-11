@@ -19,6 +19,7 @@ import { TouchPinchController } from "../canvas/touch-pinch-controller";
 import { CameraViewportController } from "../canvas/camera-viewport-controller";
 import { normalizeCanvasDocument } from "../canvas/document-normalizer";
 import { submitCanvasChanges } from "../canvas/sync-client";
+import { repairRestoredCanvas } from "../canvas/restoration";
 import { LinkInteractionView } from "../canvas/link-interaction-view";
 import { GenerationPoller } from "../services/generation-poller";
 import { GenerationWorkflow } from "../services/generation-workflow";
@@ -4414,60 +4415,7 @@ async function loadCanvas(keepLoadingStatus = false) {
       nextId = nodes.length ? Math.max(...nodes.map((node) => node.id)) + 1 : 1;
       canvasNodeIdBlockEnd = 0;
     }
-    nodes
-      .filter(
-        (node) =>
-          node.kind === "image" &&
-          node.title.startsWith("分镜 ") &&
-          node.status === "failed" &&
-          !node.jobId &&
-          links.some(
-            (link) =>
-              link.to === node.id &&
-              nodes.some(
-                (source) =>
-                  source.id === link.from && source.status === "failed",
-              ),
-          ),
-      )
-      .forEach((node) => {
-        node.status = "waiting";
-        node.agentAuto = true;
-      });
-    let repositionedResult = false;
-    nodes
-      .filter(
-        (node) =>
-          node.kind === "video" && node.role === "result" && node.sourceNodeId,
-      )
-      .forEach((node) => {
-        const source = nodes.find((item) => item.id === node.sourceNodeId);
-        if (source && Math.abs(node.y - source.y) > 780) {
-          const position = findOutputPosition(source, nodes, node.id);
-          node.x = position.x;
-          node.y = position.y;
-          repositionedResult = true;
-        }
-      });
-    nodes
-      .filter(
-        (node) =>
-          node.kind === "video" &&
-          node.status === "failed" &&
-          !node.mediaUrl &&
-          links.some(
-            (link) =>
-              link.to === node.id &&
-              nodes.some(
-                (source) => source.id === link.from && source.kind === "video",
-              ),
-          ),
-      )
-      .forEach((node) => {
-        node.role = "result";
-        node.sourceNodeId = links.find((link) => link.to === node.id)?.from;
-        removeFailedResult(node);
-      });
+    const { repositionedResult } = repairRestoredCanvas(nodes, links);
     if (document.camera) {
       Object.assign(camera, document.camera);
       cameraViewport.syncTarget();
