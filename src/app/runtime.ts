@@ -1,12 +1,11 @@
 import "../style.css";
 import { CanvasPerformanceMonitor } from "../canvas/performance-monitor";
 import { CanvasPaintCoordinator } from "../canvas/canvas-paint-coordinator";
-import { CanvasSnapshotController } from "../canvas/canvas-snapshot-controller";
+import { CanvasPersistenceFeature } from "../canvas/canvas-persistence-feature";
 import { CanvasConnectionFeature } from "../canvas/canvas-connection-feature";
 import { CanvasStore } from "../canvas/store";
 import {
   applyCanvasOperations,
-  normalizeCanvasLinks,
   type CanvasSyncOperation,
   type CanvasSyncSnapshot,
 } from "../canvas/sync";
@@ -14,10 +13,6 @@ import { CanvasSelectionController } from "../canvas/selection-controller";
 import { CanvasConnectionController } from "../canvas/connection-controller";
 import { CanvasInteractionController } from "../canvas/interaction-controller";
 import { CanvasInputFeature } from "../canvas/canvas-input-feature";
-import { CanvasClearController } from "../canvas/clear-controller";
-import { CanvasClearResultApplier } from "../canvas/clear-result-applier";
-import { CanvasSaveCoordinator } from "../canvas/save-coordinator";
-import { CanvasLoadCoordinator } from "../canvas/load-coordinator";
 import { BatchSelectionController } from "../canvas/batch-selection-controller";
 import { CanvasHistoryController } from "../canvas/history-controller";
 import { LinkInteractionView } from "../canvas/link-interaction-view";
@@ -162,6 +157,7 @@ const promptNodeEditor = new PromptNodeController();
 let contextPosition: Point = { x: 0, y: 0 };
 const connection = new CanvasConnectionController();
 let connectionFeature: CanvasConnectionFeature;
+let canvasPersistence: CanvasPersistenceFeature;
 let currentProjectId = localStorage.getItem("flow-project-id") ?? "default";
 const canvasNodeIds = new CanvasNodeIdAllocator({
   projectId: () => currentProjectId,
@@ -178,13 +174,13 @@ function captureCanvasSnapshot(
   version?: number,
   updatedAt?: string,
 ): CanvasSyncSnapshot {
-  return canvasSnapshots.capture(version, updatedAt);
+  return canvasPersistence.capture(version, updatedAt);
 }
 function applySynchronizedCanvas(
   snapshot: CanvasSyncSnapshot,
   preserveSelection = true,
 ) {
-  canvasSnapshots.apply(snapshot, preserveSelection);
+  canvasPersistence.apply(snapshot, preserveSelection);
 }
 async function reserveCanvasNodeIds(projectId = currentProjectId) {
   return canvasNodeIds.reserve(projectId);
@@ -601,11 +597,11 @@ const authWorkspace: AuthWorkspaceFeature = new AuthWorkspaceFeature({
   links,
   getProjectId: () => currentProjectId,
   setProjectId: (id) => { currentProjectId = id; },
-  getLoadedProjectId: () => canvasSaveCoordinator.loadedProjectId,
-  isSaveBlocked: () => canvasSaveCoordinator.blocked,
-  getServerVersion: () => canvasSaveCoordinator.serverVersion,
+  getLoadedProjectId: () => canvasPersistence.loadedProjectId,
+  isSaveBlocked: () => canvasPersistence.blocked,
+  getServerVersion: () => canvasPersistence.serverVersion,
   ensureRenderer: ensurePixiRenderer,
-  stopSave: (logout) => canvasSaveCoordinator.stopAndReset(logout),
+  stopSave: (logout) => canvasPersistence.stopAndReset(logout),
   resetNodeLease: () => canvasNodeIds.reset(),
   loadCanvas: (keepStatus) => loadCanvas(keepStatus),
   loadAssets: () => loadAssets(false),
@@ -942,10 +938,10 @@ function updateNodeJobProgressUi(node: FlowNode) {
 }
 
 function scheduleSave(recordHistory = true) {
-  canvasSaveCoordinator.schedule(queueCanvasHistory, recordHistory);
+  canvasPersistence.schedule(queueCanvasHistory, recordHistory);
 }
 
-function saveCanvas() { return canvasSaveCoordinator.save(); }
+function saveCanvas() { return canvasPersistence.save(); }
 function setSaveState(
   state: "editing" | "saving" | "saved" | "error",
   label: string,
@@ -954,27 +950,31 @@ function setSaveState(
   saveState.textContent = label;
 }
 
-const canvasSnapshots = new CanvasSnapshotController({
+canvasPersistence = new CanvasPersistenceFeature({
+  clientId: canvasSyncClientId,
   nodes,
   links,
   camera,
-  selectedId: () => selection.selectedId,
-  setSelectedId: (id) => { selection.selectedId = id; },
-  serverVersion: () => canvasSaveCoordinator.serverVersion,
-  serverUpdatedAt: () => canvasSaveCoordinator.serverUpdatedAt,
-  syncCameraTarget: () => cameraViewport.syncTarget(),
-  ensureNodeIdAtLeast: (value) => canvasNodeIds.ensureAtLeast(value),
-  updateEditor,
-  draw,
-});
-
-const canvasSaveCoordinator: CanvasSaveCoordinator = new CanvasSaveCoordinator({
-  clientId: canvasSyncClientId,
   authenticated: () => Boolean(authWorkspace.user),
-  projectId: () => currentProjectId,
-  capture: captureCanvasSnapshot,
-  applyMerged: applySynchronizedCanvas,
-  setState: setSaveState,
+  getProjectId: () => currentProjectId,
+  getSelectedId: () => selection.selectedId,
+  setSelectedId: (id) => { selection.selectedId = id; },
+  normalizePrompt: normalizePromptText,
+  syncCamera: () => cameraViewport.syncTarget(),
+  ensureNodeIdAtLeast: (value) => canvasNodeIds.ensureAtLeast(value),
+  clearViews: () => {
+    nodeLayer.replaceChildren();
+    nodeViews.clearEditors();
+  },
+  cancelPolling: () => generationPoller.cancelAll(),
+  getLease: () => ({ nextId: canvasNodeIds.nextId, end: canvasNodeIds.end }),
+  restoreLease: (nextId, end) => canvasNodeIds.restore(nextId, end),
+  resetLease: (value) => canvasNodeIds.reset(value),
+  needsLease: () => canvasNodeIds.needsLease(),
+  reserveIds: (projectId) => reserveCanvasNodeIds(projectId),
+  setBootStatus: (message) => authWorkspace.status(message),
+  hideBootStatus: (version, delay) => authWorkspace.hideStatus(version, delay),
+  hideConflictGuide: () => hideCanvasGuide("canvas-save-conflict"),
   showConflict: (emptyGuard) => showCanvasGuide({
     key: "canvas-save-conflict",
     title: emptyGuard ? "已保护服务器画布" : "服务器画布已有新版本",
@@ -982,47 +982,19 @@ const canvasSaveCoordinator: CanvasSaveCoordinator = new CanvasSaveCoordinator({
     tone: "offline",
     priority: 110,
   }),
-  reload: () => loadCanvas(),
-});
-
-const canvasLoadCoordinator = new CanvasLoadCoordinator({
-  save: canvasSaveCoordinator,
-  nodes,
-  links,
-  camera,
-  projectId: () => currentProjectId,
-  normalizePrompt: normalizePromptText,
-  clearViews: () => {
-    nodeLayer.replaceChildren();
-    nodeViews.clearEditors();
-  },
-  cancelPolling: () => generationPoller.cancelAll(),
-  getLease: () => ({ nextId: canvasNodeIds.nextId, end: canvasNodeIds.end }),
-  restoreLease: (leasedNextId, leasedEnd) => {
-    canvasNodeIds.restore(leasedNextId, leasedEnd);
-  },
-  resetLease: (value) => {
-    canvasNodeIds.reset(value);
-  },
-  needsLease: () => canvasNodeIds.needsLease(),
-  reserveIds: reserveCanvasNodeIds,
-  syncCamera: () => cameraViewport.syncTarget(),
-  setBootStatus: (message) => authWorkspace.status(message),
-  hideBootStatus: (version, delay) => authWorkspace.hideStatus(version, delay),
-  hideConflictGuide: () => hideCanvasGuide("canvas-save-conflict"),
-  clearSelection: () => { selection.selectedId = 0; },
-  setSavedState: () => setSaveState("saved", "已自动保存"),
-  setOfflineState: () => setSaveState("error", "离线模式"),
-  update: updateEditor,
+  setState: setSaveState,
+  updateEditor,
   draw,
   resetHistory: resetCanvasHistory,
-  capture: captureCanvasSnapshot,
-  scheduleSave,
+  queueHistory: queueCanvasHistory,
   pollJob,
-  runAgentWorkflow,
+  runWorkflow: runAgentWorkflow,
+  clearButton: document.querySelector<HTMLElement>("#dock-clear")!,
+  notifyClear: (count) => showToast(`已清除画布内容，保留 ${count} 个标签`, "success"),
+  toast: (message, tone, detail) => showToast(message, tone, detail),
 });
 function loadCanvas(keepLoadingStatus = false) {
-  return canvasLoadCoordinator.load(keepLoadingStatus);
+  return canvasPersistence.load(keepLoadingStatus);
 }
 
 const ttsFeature = new TtsFeature({
@@ -1252,49 +1224,19 @@ comicStudioFeature = new ComicStudioFeature({
   clientLog,
   toast: (message, tone, detail) => showToast(message, tone, detail),
 });
-const canvasClearResultApplier = new CanvasClearResultApplier({
-  nodes,
-  links,
-  camera,
-  normalizeLinks: normalizeCanvasLinks,
-  applySnapshot: (version, updatedAt) =>
-    canvasSaveCoordinator.applyAuthoritativeSnapshot(
-      captureCanvasSnapshot(
-        version,
-        updatedAt || canvasSaveCoordinator.serverUpdatedAt,
-      ),
-    ),
-  clearSelection: () => { selection.selectedId = 0; },
-  resetHistory: () => resetCanvasHistory(false),
-  updateEditor,
-  markSaved: () => setSaveState("saved", "已自动保存"),
-  draw,
-  notify: (count) => showToast(`已清除画布内容，保留 ${count} 个标签`, "success"),
-});
-new CanvasClearController({
-  button: document.querySelector<HTMLElement>("#dock-clear")!,
-  getNodeCount: () => nodes.length,
-  getProjectId: () => currentProjectId,
-  getServerVersion: () => canvasSaveCoordinator.serverVersion,
-  prepareForClear: () => canvasSaveCoordinator.prepareExclusiveMutation(),
-  applyResult: (result) => canvasClearResultApplier.apply(result),
-  recoverCanvas: () => loadCanvas(),
-  toast: (message, tone, detail) => showToast(message, tone, detail),
-});
-
 const projectDialog = document.querySelector<HTMLElement>("#project-dialog")!;
 const askProjectDialog = createProjectDialog(projectDialog);
 const workspaceAssets = new WorkspaceAssetsFeature({
   nodes,
   getProjectId: () => currentProjectId,
   setProjectId: (id) => { currentProjectId = id; },
-  getLoadedProjectId: () => canvasSaveCoordinator.loadedProjectId,
+  getLoadedProjectId: () => canvasPersistence.loadedProjectId,
   center: () => world({ x: innerWidth / 2, y: innerHeight / 2 }),
   addMedia: addMediaNode,
   selectNode: (id) => { selection.selectedId = id; },
   saveCanvas,
   scheduleSave,
-  stopSave: () => canvasSaveCoordinator.stopAndReset(),
+  stopSave: () => canvasPersistence.stopAndReset(),
   resetNodeLease: () => canvasNodeIds.reset(),
   loadCanvas: () => loadCanvas(),
   closeComic: () => comicStudioFeature.close(),
