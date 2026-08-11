@@ -650,6 +650,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         view.hint.position.set(node.width / 2, buttonY + 10);
         view.hint.style.fontSize = 10;
       } else if (!mediaOnly && node.kind === "prompt") {
+        view.body.text = node.body || "暂无描述";
         view.title.style.fontSize = 16;
         view.title.style.fontWeight = "700";
         view.title.anchor.set(0);
@@ -661,6 +662,8 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         view.body.style.fontSize = 11;
         view.body.style.lineHeight = 18;
         view.body.style.align = "left";
+        view.body.style.breakWords = true;
+        view.body.style.whiteSpace = "pre-line";
         view.body.style.wordWrapWidth = Math.max(80, node.width - 44);
         view.meta.visible = false;
       } else if (!mediaOnly && node.kind === "video" && node.role !== "result") {
