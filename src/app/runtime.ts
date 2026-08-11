@@ -127,7 +127,7 @@ const canvasTasks = new CanvasTaskFeature<AuthUser>({
   nodes,
   links,
   resetButton,
-  canGenerate: canGenerateNode,
+  canGenerate: (node) => nodeEditorFeature.canGenerate(node),
   modelName: modelDisplayName,
   projectId: () => currentProjectId,
   cancelPoll: (jobId) => generationRuntime.cancel(jobId),
@@ -172,17 +172,6 @@ const canvasHistory = new CanvasHistoryFeature({
   toast: (message) => showToast(message, "warning"),
   showGuide: showCanvasGuide,
 });
-function resetCanvasHistory(restore = true) { canvasHistory.reset(restore); }
-function queueCanvasHistory() { canvasHistory.queue(); }
-function updateHistoryControls() { canvasHistory.refreshControls(); }
-function undoCanvas() { return canvasHistory.undo(); }
-function redoCanvas() { return canvasHistory.redo(); }
-function startAllEmptyImages() {
-  canvasTasks.startAllEmpty();
-}
-function updateTaskMonitor() {
-  canvasTasks.update();
-}
 function closeTopbarMenus(
   except?: "workspace" | "task" | "user" | "notifications" | "presence",
 ) {
@@ -203,7 +192,7 @@ const canvasBatch = new CanvasBatchFeature({
   viewportWidth: () => innerWidth,
   generationActive: canvasHasActiveGeneration,
   enqueue: (ids) => generationRuntime.enqueue(ids),
-  exitMode: exitMultiSelectMode,
+  exitMode: () => marqueeController.exit(),
   updateEditor,
   draw,
   save: scheduleSave,
@@ -231,7 +220,7 @@ const ttsFeature = new TtsFeature({
   updateEditor,
   draw,
   save: scheduleSave,
-  reloadAssets: () => loadAssets(false),
+  reloadAssets: () => assetRuntime.load(false),
   toast: (message, tone) => showToast(message, tone),
 });
 const canvasInput = new CanvasInputFeature({
@@ -248,10 +237,10 @@ const canvasInput = new CanvasInputFeature({
   setEditing: () => setSaveState("editing", "编辑中…"),
   updateEditor,
   syncDraggedElements: (ids) => nodeViews.syncDraggedElements(ids, nodes),
-  refreshBatchSelection,
-  clearBatchSelection,
-  toggleBatchNode,
-  refreshCanvasModeHint,
+  refreshBatchSelection: () => canvasBatch.refresh(),
+  clearBatchSelection: () => canvasBatch.clear(),
+  toggleBatchNode: (id) => canvasBatch.toggle(id),
+  refreshCanvasModeHint: () => canvasBatch.refreshModeHint(),
   showCanvasModeNotice,
   getAgentIds: () => creationSuite.prompt.selectedIds,
   renderAgentSelection: () => creationSuite.prompt.renderContext(false),
@@ -262,7 +251,7 @@ const canvasInput = new CanvasInputFeature({
     startConnectionAutoPan(event.clientX, event.clientY);
     draw(syncDom);
   },
-  finishConnection: finishDomConnection,
+  finishConnection: (event) => connectionFeature.finish(event),
   cancelConnection: () => {
     connection.cancel();
     stopConnectionAutoPan();
@@ -270,7 +259,7 @@ const canvasInput = new CanvasInputFeature({
   hitNode,
   moveNode: (id, dx, dy) => canvasStore.moveNodeById(id, dx, dy),
   panCamera: (dx, dy) => canvasStore.panCamera(dx, dy),
-  closeQuickMenu: closeQuickNodeMenu,
+  closeQuickMenu: () => canvasControls.closeQuickMenu(),
   screen: (point) => worldToScreen(point, camera, { width: innerWidth, height: innerHeight }),
   world: (point) => screenToWorld(point, camera, { width: innerWidth, height: innerHeight }),
 });
@@ -314,21 +303,21 @@ const nodeViews = new CanvasNodeViewFeature({
   normalizePrompt: normalizePromptText,
   displayModelName: modelDisplayName,
   decodePrompt: (value = "") => decodePromptClipboardText(value),
-  canGenerate: canGenerateNode,
+  canGenerate: (node) => nodeEditorFeature.canGenerate(node),
   updateEditor,
   draw,
   scheduleSave,
-  commitHistory: queueCanvasHistory,
+  commitHistory: () => canvasHistory.queue(),
   setEditingState: () => setSaveState("editing", "编辑中…"),
   editPrompt: enterTextEdit,
   previewMedia: (node) =>
-    openAssetPreview(node.mediaUrl!, node.title, node.kind as "image" | "video"),
+    assetRuntime.openPreview(node.mediaUrl!, node.title, node.kind as "image" | "video"),
   beginConnection: (nodeId, point) => connection.begin(nodeId, "right", point),
   showInfo: openNodeInfo,
   focusEditor: () => promptInput.focus(),
   generate,
-  downloadImage: downloadNodeImage,
-  deleteNode: () => { void deleteSelectedNode(); },
+  downloadImage: (node) => assetRuntime.downloadNodeImage(node),
+  deleteNode: () => { void nodeLifecycleFeature.deleteSelected(); },
   confirmClearImage: async () => Boolean(await assetRuntime.ask({
     title: "清除当前卡片的图片？",
     description: "资产库中的原图不会删除。原提示词、当前描述、模型、图像设置和参考连线都会保留。",
@@ -336,8 +325,8 @@ const nodeViews = new CanvasNodeViewFeature({
   })),
   removeCachedImage: (url) => imageCache.delete(url),
   notifyImageCleared: (message) => showToast(message, "success"),
-  beginImageUpload: beginImageNodeUpload,
-  beginImageLibrary: beginImageNodeLibrary,
+  beginImageUpload: (nodeId) => assetRuntime.beginNodeUpload(nodeId),
+  beginImageLibrary: (nodeId) => assetRuntime.beginNodeLibrary(nodeId),
   previewVoice: (node) => ttsFeature.preview(node),
   generateTts: (node) => ttsFeature.generate(node),
   copyPrompt: copyOriginalPrompt,
@@ -356,7 +345,7 @@ const canvasMedia = new CanvasMediaFeature({
   invalidateNode: (id) => nodeViews.invalidateState(id),
   resize,
   draw,
-  refreshAppearance: refreshAppearanceButton,
+  refreshAppearance: () => canvasControls.refreshAppearance(),
 });
 const pendingMediaLoads = canvasMedia.pendingLoads;
 const imageCache = canvasMedia.cache;
@@ -420,7 +409,7 @@ const accountSession = new AccountSessionFeature({
     stopSave: (logout) => canvasPersistence.stopAndReset(logout),
     resetNodeLease: () => canvasNodeIds.reset(),
     loadCanvas: (keepStatus) => loadCanvas(keepStatus),
-    loadAssets: () => loadAssets(false),
+    loadAssets: () => assetRuntime.load(false),
     apiFetch,
     resize,
     clearSelection: () => { selection.selectedId = 0; },
@@ -550,8 +539,8 @@ canvasRender = new CanvasRenderFeature({
   rebuildIndexes: rebuildPaintIndexes,
   syncDom: () => nodeViews.sync(),
   warmEditors: () => nodeViews.scheduleWarmup(),
-  updateTasks: updateTaskMonitor,
-  updateHistory: updateHistoryControls,
+  updateTasks: () => canvasTasks.update(),
+  updateHistory: () => canvasHistory.refreshControls(),
   log: clientLog,
 });
 function paint() { canvasRender.paint(); }
@@ -571,12 +560,12 @@ nodeLifecycleFeature = new CanvasNodeLifecycleFeature({
   updateEditor,
   save: scheduleSave,
   draw,
-  cascadeIds: cascadeSelectionIds,
+  cascadeIds: (seed) => canvasBatch.cascade(seed),
   confirmDelete: async (input) => Boolean(await assetRuntime.ask(input)),
   notify: (message, tone) => showToast(message, tone),
   guide: showCanvasGuide,
   hideGuide: hideCanvasGuide,
-  undo: undoCanvas,
+  undo: () => canvasHistory.undo(),
 });
 function addNode(
   kind: NodeKind = "image",
@@ -605,22 +594,6 @@ function closeNodeInfo() {
   nodeEditorFeature.closeInfo();
 }
 
-function finishDomConnection(event: PointerEvent) {
-  connectionFeature.finish(event);
-}
-async function deleteSelectedNode() {
-  await nodeLifecycleFeature.deleteSelected();
-}
-
-function selectedNode() {
-  return nodeEditorFeature.selected();
-}
-function canGenerateNode(node: FlowNode) {
-  return nodeEditorFeature.canGenerate(node);
-}
-function generationBlockedReason(node: FlowNode) {
-  return nodeEditorFeature.blockedReason(node);
-}
 nodeEditorFeature = new CanvasNodeEditorFeature({
   nodes,
   promptEditor: promptNodeEditor,
@@ -641,7 +614,7 @@ nodeEditorFeature = new CanvasNodeEditorFeature({
   setEditingState: () => setSaveState("editing", "编辑中…"),
   draw,
   save: scheduleSave,
-  updateTasks: updateTaskMonitor,
+  updateTasks: () => canvasTasks.update(),
 });
 function updateEditor() {
   nodeEditorFeature.update();
@@ -652,7 +625,7 @@ function updateNodeJobProgressUi(node: FlowNode) {
 }
 
 function scheduleSave(recordHistory = true) {
-  canvasPersistence.schedule(queueCanvasHistory, recordHistory);
+  canvasPersistence.schedule(() => canvasHistory.queue(), recordHistory);
 }
 
 function saveCanvas() { return canvasPersistence.save(); }
@@ -699,10 +672,10 @@ canvasPersistence = new CanvasPersistenceFeature({
   setState: setSaveState,
   updateEditor,
   draw,
-  resetHistory: resetCanvasHistory,
-  queueHistory: queueCanvasHistory,
-  pollJob,
-  runWorkflow: runAgentWorkflow,
+  resetHistory: (restore) => canvasHistory.reset(restore),
+  queueHistory: () => canvasHistory.queue(),
+  pollJob: (node) => generationRuntime.poll(node),
+  runWorkflow: () => generationRuntime.run(),
   clearButton: document.querySelector<HTMLElement>("#dock-clear")!,
   notifyClear: (count) => showToast(`已清除画布内容，保留 ${count} 个标签`, "success"),
   toast: (message, tone, detail) => showToast(message, tone, detail),
@@ -719,8 +692,8 @@ generationRuntime = new CanvasGenerationRuntimeFeature({
     jobLabel,
     getSelectedId: () => selection.selectedId,
     setSelectedId: (id) => { selection.selectedId = id; },
-    selectedNode,
-    blockedReason: generationBlockedReason,
+    selectedNode: () => nodeEditorFeature.selected(),
+    blockedReason: (node) => nodeEditorFeature.blockedReason(node),
     normalizePrompt: normalizePromptText,
     getProjectId: () => currentProjectId,
     allocateNodeId: allocateCanvasNodeId,
@@ -738,14 +711,14 @@ generationRuntime = new CanvasGenerationRuntimeFeature({
     setUser: (user) => authWorkspace.setUser(user),
     renderUser: () => authWorkspace.renderUser(),
     refreshModelMenus: refreshNodeModelMenus,
-    loadAssets: () => loadAssets(false),
-    renderAssets,
+    loadAssets: () => assetRuntime.load(false),
+    renderAssets: () => assetRuntime.render(),
     isAssetPanelOpen: () => Boolean(
       document.querySelector("#assets-panel")?.classList.contains("open"),
     ),
     toast: (message, tone, detail) => showToast(message, tone, detail),
   },
-  canGenerate: canGenerateNode,
+  canGenerate: (node) => nodeEditorFeature.canGenerate(node),
   onProgress: (node, _job, changed) => {
     if (changed) updateNodeJobProgressUi(node);
   },
@@ -757,26 +730,6 @@ generationRuntime = new CanvasGenerationRuntimeFeature({
 });
 function generate(sourceOverride?: FlowNode) {
   return generationRuntime.generate(sourceOverride);
-}
-function runAgentWorkflow() { generationRuntime.run(); }
-function pollJob(node: FlowNode) { generationRuntime.poll(node); }
-function refreshBatchSelection() {
-  canvasBatch.refresh();
-}
-function clearBatchSelection() {
-  canvasBatch.clear();
-}
-function toggleBatchNode(id: number) {
-  canvasBatch.toggle(id);
-}
-function refreshCanvasModeHint() {
-  canvasBatch.refreshModeHint();
-}
-function enterMultiSelectMode() { marqueeController.enter(); }
-function exitMultiSelectMode() { marqueeController.exit(); }
-function resetMarqueeRightGesture() { marqueeController.resetRightGesture(); }
-function cascadeSelectionIds(seed: Set<number>) {
-  return canvasBatch.cascade(seed);
 }
 
 const canvasControls: CanvasControlsFeature = new CanvasControlsFeature({
@@ -799,7 +752,7 @@ const canvasControls: CanvasControlsFeature = new CanvasControlsFeature({
     zoomBy: cameraViewport.smoothBy,
     addNode: (kind) => addNode(kind),
     generate: () => { void generate(); },
-    deleteSelected: () => { void deleteSelectedNode(); },
+    deleteSelected: () => { void nodeLifecycleFeature.deleteSelected(); },
   },
   quickMenu: {
     canvas,
@@ -811,17 +764,17 @@ const canvasControls: CanvasControlsFeature = new CanvasControlsFeature({
       draw();
     },
     previewNode: (node) =>
-      openAssetPreview(node.mediaUrl!, node.title, node.kind as "image" | "video"),
+      assetRuntime.openPreview(node.mediaUrl!, node.title, node.kind as "image" | "video"),
     editPromptNode: (node) => {
       const element = nodeLayer.querySelector<HTMLElement>(`.flow-node[data-id="${node.id}"]`);
       if (element) enterTextEdit(node, element);
     },
     multiSelectActive: () => selection.multiSelectMode,
-    exitMultiSelect: exitMultiSelectMode,
-    enterMultiSelect: enterMultiSelectMode,
+    exitMultiSelect: () => marqueeController.exit(),
+    enterMultiSelect: () => marqueeController.enter(),
     toWorld: world,
     addNode: (kind, position) => addNode(kind, position),
-    uploadAt: openAssetUploadAt,
+    uploadAt: (position) => assetRuntime.openUploadAt(position),
   },
   appearance: {
     pendingMedia: () => pendingMediaLoads.size,
@@ -836,8 +789,6 @@ const canvasControls: CanvasControlsFeature = new CanvasControlsFeature({
   },
 });
 const quickNodeMenu = canvasControls.quickMenu;
-function closeQuickNodeMenu() { canvasControls.closeQuickMenu(); }
-function refreshAppearanceButton() { canvasControls.refreshAppearance(); }
 creationSuite = new CanvasCreationSuiteFeature({
   prompt: {
     nodes,
@@ -851,7 +802,7 @@ creationSuite = new CanvasCreationSuiteFeature({
     updateEditor,
     persist: scheduleSave,
     draw,
-    runWorkflow: runAgentWorkflow,
+    runWorkflow: () => generationRuntime.run(),
     loadVoices: (providerId) => { void ttsFeature.loadVoices(providerId); },
     decodePrompt: decodePromptClipboardText,
     toast: (message, tone) => showToast(message, tone),
@@ -863,8 +814,8 @@ creationSuite = new CanvasCreationSuiteFeature({
     hasAuthenticatedContext: () => Boolean(authWorkspace.user && currentProjectId),
     ensureProject: () => authWorkspace.ensureCurrentProject(),
     isMultiSelect: () => selection.multiSelectMode,
-    exitMultiSelect: exitMultiSelectMode,
-    resetMarqueeGesture: resetMarqueeRightGesture,
+    exitMultiSelect: () => marqueeController.exit(),
+    resetMarqueeGesture: () => marqueeController.resetRightGesture(),
     createLabel: () => {
       const center = world({ x: innerWidth / 2, y: innerHeight / 2 });
       const rightEdge = nodes.length
@@ -875,7 +826,7 @@ creationSuite = new CanvasCreationSuiteFeature({
     },
     persistCanvas: scheduleSave,
     draw,
-    startEmptyImages: startAllEmptyImages,
+    startEmptyImages: () => canvasTasks.startAllEmpty(),
     showGuide: showCanvasGuide,
     hideGuide: (key) => hideCanvasGuide(key),
     clientLog,
@@ -906,31 +857,6 @@ assetRuntime = new WorkspaceAssetsRuntimeFeature({
   registerWorkspaceMenu: (close) => topbarMenus.register("workspace", close),
   toast: (message, tone, detail) => showToast(message, tone, detail),
 });
-function openAssetUploadAt(position: Point | null = null) {
-  assetRuntime.openUploadAt(position);
-}
-function beginImageNodeUpload(nodeId: number) {
-  assetRuntime.beginNodeUpload(nodeId);
-}
-async function beginImageNodeLibrary(nodeId: number) {
-  await assetRuntime.beginNodeLibrary(nodeId);
-}
-async function loadAssets(render = true) {
-  await assetRuntime.load(render);
-}
-function renderAssets() {
-  assetRuntime.render();
-}
-function openAssetPreview(
-  url: string,
-  name: string,
-  kind: "image" | "video" = "image",
-) {
-  assetRuntime.openPreview(url, name, kind);
-}
-async function downloadNodeImage(node: FlowNode) {
-  await assetRuntime.downloadNodeImage(node);
-}
 function escapeHtml(value: string) {
   const element = document.createElement("span");
   element.textContent = value;
@@ -960,7 +886,7 @@ const workspaceRuntime = new WorkspaceRuntimeFeature<AuthUser>({
     touchSession: () => authWorkspace.touch(),
     loadCapabilities: () => Promise.resolve(),
     synchronizeCanvas: () => authWorkspace.synchronize(true),
-    loadAssets: () => loadAssets(false),
+    loadAssets: () => assetRuntime.load(false),
     status: (message, visible) => authWorkspace.status(message, visible),
     randomizeTheme: authWorkspace.randomizeTheme,
     applyRoute: () => authWorkspace.applyRoute(),
@@ -968,13 +894,13 @@ const workspaceRuntime = new WorkspaceRuntimeFeature<AuthUser>({
   },
   overlay: {
     quickMenu: quickNodeMenu,
-    closeQuickMenu: closeQuickNodeMenu,
+    closeQuickMenu: () => canvasControls.closeQuickMenu(),
     closeAssetContextIfOutside: (target) => assetRuntime.closeContextIfOutside(target),
   },
   keyboard: {
     closeQuickMenu: () => {
       if (!quickNodeMenu.classList.contains("open")) return false;
-      closeQuickNodeMenu();
+      canvasControls.closeQuickMenu();
       return true;
     },
     closeNodeInfo: () => {
@@ -987,9 +913,9 @@ const workspaceRuntime = new WorkspaceRuntimeFeature<AuthUser>({
       assetRuntime.closePreview();
       return true;
     },
-    undo: () => { void undoCanvas(); },
-    redo: () => { void redoCanvas(); },
-    deleteSelected: () => { void deleteSelectedNode(); },
+    undo: () => { void canvasHistory.undo(); },
+    redo: () => { void canvasHistory.redo(); },
+    deleteSelected: () => { void nodeLifecycleFeature.deleteSelected(); },
   },
 });
 workspaceRuntime.start(resize, updateEditor);
