@@ -19,6 +19,7 @@ export class CanvasConnectionFeature {
     world: (point: Point) => Point;
     screen: (point: Point) => Point;
     portWorld: (node: FlowNode, side: PortSide) => Point;
+    save: () => void;
     draw: (syncDom?: boolean) => void;
     notify: (message: string) => void;
   }) {
@@ -67,4 +68,35 @@ export class CanvasConnectionFeature {
   }
   startAutoPan(x: number, y: number) { this.autoPan.start(x, y); }
   stopAutoPan() { this.autoPan.stop(); }
+
+  finish(event: PointerEvent) {
+    const { connection, nodes, links } = this.options;
+    if (!connection.active) return;
+    const snappedNode = connection.snap
+      ? nodes.find((node) => node.id === connection.snap!.nodeId)
+      : undefined;
+    const target = snappedNode
+      ? { node: snappedNode, side: connection.snap!.side }
+      : this.hitPort(
+          event.clientX,
+          event.clientY,
+          connection.snapRadius,
+          connection.active.nodeId,
+        );
+    if (target) {
+      const next = this.directedLink(
+        connection.active.nodeId,
+        connection.active.side,
+        target.node.id,
+        target.side,
+      );
+      if (next && !links.some((link) => link.from === next.from && link.to === next.to)) {
+        links.push(next);
+        this.options.save();
+      }
+    }
+    connection.cancel();
+    this.stopAutoPan();
+    this.options.draw();
+  }
 }

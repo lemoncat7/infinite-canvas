@@ -574,6 +574,7 @@ connectionFeature = new CanvasConnectionFeature({
   world,
   screen,
   portWorld,
+  save: scheduleSave,
   draw,
   notify: (message) => showToast(message, "warning"),
 });
@@ -729,36 +730,7 @@ function repaintAllMedia() {
 }
 
 function finishDomConnection(event: PointerEvent) {
-  if (!connection.active) return;
-  const snappedNode = connection.snap
-    ? nodes.find((node) => node.id === connection.snap!.nodeId)
-    : undefined;
-  const target = snappedNode
-    ? { node: snappedNode, side: connection.snap!.side }
-    : hitPort(
-        event.clientX,
-        event.clientY,
-        connection.snapRadius,
-        connection.active.nodeId,
-      );
-  if (target) {
-    const next = connectionFeature.directedLink(
-      connection.active.nodeId,
-      connection.active.side,
-      target.node.id,
-      target.side,
-    );
-    if (
-      next &&
-      !links.some((link) => link.from === next.from && link.to === next.to)
-    ) {
-      links.push(next);
-      scheduleSave();
-    }
-  }
-  connection.cancel();
-  stopConnectionAutoPan();
-  draw();
+  connectionFeature.finish(event);
 }
 async function deleteSelectedNode() {
   await nodeLifecycle.deleteSelected();
