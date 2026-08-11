@@ -89,6 +89,11 @@ import { ComicStudioView } from "../ui/comic-studio";
 import { ComicLabelController } from "../ui/comic-labels";
 import { buildComicWorkflow } from "../nodes/comic-workflow";
 import { createNodeView } from "../nodes/node-view-factory";
+import { syncNodeMediaView } from "../nodes/node-media-view";
+import { syncImageNodePanel } from "../nodes/image-node-sync";
+import { syncVideoNodePanel } from "../nodes/video-node-sync";
+import { syncVoiceTtsAudioPanels } from "../nodes/voice-node-sync";
+import { syncVideoReferenceView } from "../nodes/video-reference-view";
 import { bindVoiceNodePanels } from "../nodes/voice-node-view";
 import { bindVideoNodePanel } from "../nodes/video-node-view";
 import {
@@ -3853,707 +3858,67 @@ function syncDomNodes() {
                 : node.kind === "audio"
                   ? "AUDIO"
                   : "IMAGE";
-    const voicePanel = element.querySelector<HTMLElement>(
-        ".voice-config-panel",
-      )!,
-      ttsPanel = element.querySelector<HTMLElement>(".tts-config-panel")!,
-      audioPanel = element.querySelector<HTMLElement>(".audio-result-panel")!;
-    voicePanel.hidden = true;
-    ttsPanel.hidden = node.kind !== "tts";
-    audioPanel.hidden = node.kind !== "audio";
-    if (node.kind === "voice") {
-      void loadTtsProviders();
-      const providerId = node.voiceSettings?.providerId || "easyvoice-local";
-      void loadTtsVoices(providerId);
-      const roleName = voicePanel.querySelector<HTMLInputElement>(
-          '[data-voice-field="roleName"]',
-        )!,
-        provider = voicePanel.querySelector<HTMLSelectElement>(
-          '[data-voice-field="provider"]',
-        )!,
-        voice = voicePanel.querySelector<HTMLSelectElement>(
-          '[data-voice-field="voiceId"]',
-        )!,
-        speed = voicePanel.querySelector<HTMLInputElement>(
-          '[data-voice-field="speed"]',
-        )!,
-        pitch = voicePanel.querySelector<HTMLInputElement>(
-          '[data-voice-field="pitch"]',
-        )!,
-        volume = voicePanel.querySelector<HTMLInputElement>(
-          '[data-voice-field="volume"]',
-        )!;
-      const providerOptions = ttsProviders.length
-          ? ttsProviders
-          : [
-              {
-                provider: "easyvoice-local",
-                name: "EasyVoice 中文语音",
-                available: true,
-                local: true,
-                streaming: true,
-                formats: ["mp3"],
-                emotion: false,
-                voiceCloning: false,
-              },
-            ],
-        providerSignature = providerOptions
-          .map((item) => `${item.provider}:${item.available}`)
-          .join("|");
-      if (provider.dataset.providerSignature !== providerSignature) {
-        provider.dataset.providerSignature = providerSignature;
-        provider.innerHTML =
-          '<option value="easyvoice-local">EasyVoice 中文语音</option>';
-      }
-      const voices = ttsVoicesByProvider.get(providerId) || [],
-        voiceSignature = `${providerId}:${voices.map((item) => item.id).join("|")}`;
-      if (voices.length && voice.dataset.voiceSignature !== voiceSignature) {
-        voice.dataset.voiceSignature = voiceSignature;
-        voice.innerHTML = voices
-          .filter((item) => !item.language || item.language === "zh-CN")
-          .map(
-            (item) =>
-              `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`,
-          )
-          .join("");
-      }
-      if (document.activeElement !== roleName)
-        roleName.value = node.voiceSettings?.roleName || "";
-      if (document.activeElement !== provider)
-        provider.value = node.voiceSettings?.providerId || "easyvoice-local";
-      if (document.activeElement !== voice)
-        voice.value = node.voiceSettings?.voiceId || "zh-CN-XiaoxiaoNeural";
-      if (document.activeElement !== speed)
-        speed.value = String(node.voiceSettings?.defaultSpeed ?? 1);
-      if (document.activeElement !== pitch)
-        pitch.value = String(node.voiceSettings?.pitch ?? 0);
-      if (document.activeElement !== volume)
-        volume.value = String(node.voiceSettings?.volume ?? 1);
-      const selectedVoice = voices.find(
-          (item) =>
-            item.id === (node.voiceSettings?.voiceId || "zh-CN-XiaoxiaoNeural"),
-        ),
-        voiceName =
-          selectedVoice?.name ||
-          voice.selectedOptions[0]?.text ||
-          "晓晓 · 温暖女声",
-        speedValue = node.voiceSettings?.defaultSpeed ?? 1,
-        pitchValue = node.voiceSettings?.pitch ?? 0,
-        volumeValue = node.voiceSettings?.volume ?? 1,
-        voicePicker = voicePanel.querySelector<HTMLElement>(
-          ".voice-model-picker",
-        ),
-        voiceMenu = voicePanel.querySelector<HTMLElement>(".voice-model-menu");
-      if (voicePicker)
-        voicePicker.querySelector<HTMLElement>("summary b")!.textContent =
-          voiceName;
-      if (voiceMenu) {
-        const availableVoices = voices.length
-          ? voices
-          : Array.from(voice.options).map((option) => ({
-              id: option.value,
-              name: option.textContent || option.value,
-              language: "zh-CN",
-            }));
-        voiceMenu.innerHTML =
-          '<small class="voice-menu-heading"><span>选择角色音色</span><em>可滚动</em></small>' +
-          availableVoices
-            .map(
-              (item) =>
-                `<button type="button" data-voice-option="${escapeHtml(item.id)}" class="${item.id === voice.value ? "active" : ""}"><span><b>${escapeHtml(item.name.split(" · ")[0])}</b><small>${escapeHtml(item.name.split(" · ").slice(1).join(" · ") || "中文音色")}</small></span><em class="model-price voice">中文</em><i>✓</i></button>`,
-            )
-            .join("");
-      }
-      voicePanel.querySelector<HTMLOutputElement>(
-        '[data-voice-output="speed"]',
-      )!.value = `${speedValue.toFixed(2).replace(/0$/, "")}×`;
-      voicePanel.querySelector<HTMLOutputElement>(
-        '[data-voice-output="pitch"]',
-      )!.value = `${pitchValue > 0 ? "+" : ""}${pitchValue}Hz`;
-      voicePanel.querySelector<HTMLOutputElement>(
-        '[data-voice-output="volume"]',
-      )!.value = `${Math.round(volumeValue * 100)}%`;
-      for (const input of [speed, pitch, volume]) {
-        const min = Number(input.min),
-          max = Number(input.max),
-          value = Number(input.value);
-        input.style.setProperty(
-          "--voice-range-progress",
-          `${Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100))}%`,
-        );
-      }
-      const emptyState =
-          element.querySelector<HTMLElement>(".image-empty-state")!,
-        roleLabel = node.voiceSettings?.roleName?.trim() || "未设置角色",
-        content = `<header class="video-node-heading"><div><b>${escapeHtml(roleLabel)}</b><small>固定角色跨镜头声音</small></div></header><div class="voice-node-lines"><b>${escapeHtml(voiceName)}</b><small>${speedValue.toFixed(2).replace(/0$/, "")}× 语速 · ${pitchValue > 0 ? "+" : ""}${pitchValue}Hz 音调 · ${Math.round(volumeValue * 100)}% 音量</small></div><p>角色声音配置将在关联的 TTS 节点中复用</p>`;
-      const renderKey = `voice-card:${content}`;
-      if (emptyState.dataset.renderKey !== renderKey) {
-        emptyState.dataset.renderKey = renderKey;
-        emptyState.innerHTML = content;
-      }
-    }
-    if (node.kind === "tts") {
-      const voiceSource = links
-          .filter((link) => link.to === node.id)
-          .map((link) => nodes.find((item) => item.id === link.from))
-          .find((item) => item?.kind === "voice"),
-        sourceLabel = ttsPanel.querySelector<HTMLElement>("[data-tts-source]")!,
-        voiceReadout = ttsPanel.querySelector<HTMLElement>(
-          "[data-tts-voice-label]",
-        )!,
-        text = ttsPanel.querySelector<HTMLTextAreaElement>("[data-tts-text]")!,
-        emotion = ttsPanel.querySelector<HTMLSelectElement>(
-          '[data-tts-field="emotion"]',
-        )!,
-        format = ttsPanel.querySelector<HTMLSelectElement>(
-          '[data-tts-field="format"]',
-        )!,
-        button = ttsPanel.querySelector<HTMLButtonElement>(
-          "[data-tts-generate]",
-        )!;
-      const sourceVoices =
-          ttsVoicesByProvider.get(
-            voiceSource?.voiceSettings?.providerId || "easyvoice-local",
-          ) || [],
-        sourceVoiceName =
-          sourceVoices.find(
-            (item) => item.id === voiceSource?.voiceSettings?.voiceId,
-          )?.name ||
-          voiceSource?.voiceSettings?.voiceId ||
-          "默认音色";
-      sourceLabel.textContent = voiceSource
-        ? "根据关联角色声音生成中文语音"
-        : "连接语音配置后即可生成";
-      voiceReadout.textContent = voiceSource
-        ? `${voiceSource.voiceSettings?.roleName || "角色"} · ${sourceVoiceName}`
-        : "关联音色";
-      sourceLabel.classList.toggle("ready", Boolean(voiceSource));
-      if (document.activeElement !== text) text.value = node.body;
-      if (document.activeElement !== emotion)
-        emotion.value = node.ttsSettings?.emotion || "中性";
-      if (document.activeElement !== format)
-        format.value = node.ttsSettings?.format || "mp3";
-      ttsPanel
-        .querySelectorAll<HTMLButtonElement>("[data-tts-emotion]")
-        .forEach((item) =>
-          item.classList.toggle(
-            "active",
-            item.dataset.ttsEmotion === emotion.value,
-          ),
-        );
-      ttsPanel
-        .querySelectorAll<HTMLButtonElement>("[data-tts-format]")
-        .forEach((item) =>
-          item.classList.toggle(
-            "active",
-            item.dataset.ttsFormat === format.value,
-          ),
-        );
-      renderComposerSubmit(button, locked, !voiceSource || !node.body.trim());
-      const emptyState =
-          element.querySelector<HTMLElement>(".image-empty-state")!,
-        voiceLabel = voiceSource
-          ? `${voiceSource.voiceSettings?.roleName || "角色"} · ${sourceVoices.find((item) => item.id === voiceSource.voiceSettings?.voiceId)?.name || "默认音色"}`
-          : "尚未连接角色声音",
-        defaultTextPreview = "填写这一镜的对白、旁白或系统播报",
-        rawTextPreview = node.body.trim() || defaultTextPreview,
-        textPreview =
-          rawTextPreview.length > defaultTextPreview.length
-            ? `${rawTextPreview.slice(0, defaultTextPreview.length)}…`
-            : rawTextPreview,
-        content = `<header class="video-node-heading"><div><b>TTS 文本生成</b><small>${escapeHtml(voiceLabel)}</small></div></header><div class="voice-node-lines tts-node-text${node.body.trim() ? "" : " empty"}" title="${escapeHtml(rawTextPreview)}"><b>${escapeHtml(textPreview)}</b><small>${escapeHtml(node.ttsSettings?.emotion || "中性")} · ${escapeHtml((node.ttsSettings?.format || "mp3").toUpperCase())}</small></div><p>${locked ? "正在生成语音" : voiceSource ? "选中卡片，在下方调整文本与表达" : "连接语音配置卡片后即可生成"}</p>`;
-      const renderKey = `tts-card:${content}`;
-      if (emptyState.dataset.renderKey !== renderKey) {
-        emptyState.dataset.renderKey = renderKey;
-        emptyState.innerHTML = content;
-      }
-    }
-    if (node.kind === "audio") {
-      const audioMedia = element.querySelector<HTMLElement>(".node-media")!;
-      if (audioPanel.parentElement !== audioMedia)
-        audioMedia.append(audioPanel);
-      const audio = audioPanel.querySelector<HTMLAudioElement>("audio")!,
-        title = audioPanel.querySelector<HTMLElement>("[data-audio-title]")!,
-        meta = audioPanel.querySelector<HTMLElement>("[data-audio-meta]")!,
-        download = audioPanel.querySelector<HTMLButtonElement>(
-          "[data-audio-download]",
-        )!,
-        toggle = audioPanel.querySelector<HTMLButtonElement>(
-          "[data-audio-toggle]",
-        )!;
-      if (
-        node.mediaUrl &&
-        audio.src !== new URL(node.mediaUrl, location.href).href
-      )
-        audio.src = node.mediaUrl;
-      if (!node.mediaUrl) audio.removeAttribute("src");
-      title.textContent = node.title || "音频结果";
-      meta.textContent = node.mediaUrl
-        ? `${(node.ttsSettings?.format || "mp3").toUpperCase()}${node.ttsSettings?.duration ? ` · ${node.ttsSettings.duration.toFixed(1)} 秒` : ""}`
-        : "等待生成";
-      download.disabled = !node.mediaUrl;
-      toggle.disabled = !node.mediaUrl;
-      toggle.querySelector("span")!.textContent = audio.paused ? "▶" : "Ⅱ";
-      toggle.setAttribute("aria-label", audio.paused ? "播放音频" : "暂停音频");
-    }
-    if (node.kind === "video") {
-      const emptyState =
-        element.querySelector<HTMLElement>(".image-empty-state")!;
-      if (node.role === "result") {
-        const content =
-          "<span>▶</span><b>正在生成视频</b><small>完成后可在这里双击播放</small>";
-        if (emptyState.dataset.renderKey !== "video-result") {
-          emptyState.dataset.renderKey = "video-result";
-          emptyState.innerHTML = content;
-        }
-      } else {
-        const referenceLinks = links
-          .filter((link) => link.to === node.id)
-          .map((link) => ({
-            link,
-            source: nodes.find((item) => item.id === link.from),
-          }))
-          .filter(
-            (item): item is { link: FlowLink; source: FlowNode } =>
-              item.source?.kind === "image",
-          )
-          .sort(
-            (left, right) =>
-              (left.link.inputOrder ?? Number.MAX_SAFE_INTEGER) -
-                (right.link.inputOrder ?? Number.MAX_SAFE_INTEGER) ||
-              left.source.y - right.source.y ||
-              left.source.x - right.source.x ||
-              left.source.id - right.source.id,
-          );
-        const totalReferences = referenceLinks.length,
-          readyReferences = referenceLinks.filter((item) =>
-            Boolean(item.source.mediaUrl),
-          ).length;
-        const agnesKeyframes =
-            node.model?.startsWith("agnes-") && totalReferences > 1,
-          mode = agnesKeyframes
-            ? "关键帧动画"
-            : totalReferences > 1
-              ? "多图生视频"
-              : totalReferences === 1
-                ? "图生视频"
-                : "文生视频";
-        const settings = node.videoSettings ?? {};
-        const frames = referenceLinks
-          .map(({ source }, index) => {
-            const selected =
-              videoReferenceSwapSelection?.videoId === node.id &&
-              videoReferenceSwapSelection.sourceId === source.id;
-            return source.mediaUrl
-              ? `<i class="has-image${selected ? " swap-selected" : ""}" data-video-reference-source="${source.id}" title="参考图 ${index + 1} · 点击选择交换"><canvas class="reference-image" width="180" height="120" data-reference-url="${escapeHtml(source.mediaUrl)}"></canvas><b>${index + 1}</b></i>`
-              : `<i class="is-waiting${selected ? " swap-selected" : ""}" data-video-reference-source="${source.id}" title="参考图 ${index + 1} · 点击选择交换"><span>${index + 1}</span><small>等待</small></i>`;
-          })
-          .join("");
-        const placeholders = totalReferences
-          ? ""
-          : "<i><span>1</span></i><i><span>2</span></i><i><span>3</span></i>";
-        const content = `<header class="video-node-heading"><div><b>视频生成</b><small>${mode}${totalReferences ? ` · ${readyReferences} / ${totalReferences} 张已就绪` : ""}</small></div></header><div class="video-storyboard" style="--frame-count:${totalReferences || 3}">${frames}${placeholders}<em>→</em></div><div class="video-node-summary"><em>${settings.seconds ?? "5"} 秒</em><em>${agnesKeyframes || settings.referenceMode === "keyframes" ? "关键帧" : "参考图"}</em><em>${settings.resolution ?? "720p"}</em><em>${settings.aspectRatio ?? "16:9"}</em></div><p>${node.body.trim() ? escapeHtml(node.body.trim()) : totalReferences ? (readyReferences === totalReferences ? "参考图已就绪，在下方描述画面运动" : `正在等待 ${totalReferences - readyReferences} 张参考图完成`) : "连接图片，或直接输入视频描述"}</p>`;
-        const renderKey = `video-generator:${content}`;
-        if (emptyState.dataset.renderKey !== renderKey) {
-          emptyState.dataset.renderKey = renderKey;
-          emptyState.innerHTML = content;
-        }
-        emptyState
-          .querySelectorAll<HTMLElement>("[data-video-reference-source]")
-          .forEach((frame) => {
-            frame.onpointerdown = (event) => {
-              event.preventDefault();
-              event.stopPropagation();
-            };
-            frame.onclick = (event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              const sourceId = Number(frame.dataset.videoReferenceSource);
-              if (!sourceId) return;
-              if (
-                videoReferenceSwapSelection?.videoId === node.id &&
-                videoReferenceSwapSelection.sourceId === sourceId
-              ) {
-                videoReferenceSwapSelection = null;
-                showToast("已取消素材交换", "info");
-                draw();
-                return;
-              }
-              if (
-                !videoReferenceSwapSelection ||
-                videoReferenceSwapSelection.videoId !== node.id
-              ) {
-                videoReferenceSwapSelection = { videoId: node.id, sourceId };
-                showToast(
-                  `已选择参考图 ${referenceLinks.findIndex((item) => item.source.id === sourceId) + 1}`,
-                  "info",
-                  "再点击另一张素材即可交换顺序。",
-                );
-                draw();
-                return;
-              }
-              const first = links.find(
-                  (link) =>
-                    link.to === node.id &&
-                    link.from === videoReferenceSwapSelection!.sourceId,
-                ),
-                second = links.find(
-                  (link) => link.to === node.id && link.from === sourceId,
-                );
-              if (!first || !second) {
-                videoReferenceSwapSelection = null;
-                draw();
-                return;
-              }
-              referenceLinks.forEach(
-                (item, index) => (item.link.inputOrder = index + 1),
-              );
-              const firstOrder = first.inputOrder!,
-                secondOrder = second.inputOrder!;
-              first.inputOrder = secondOrder;
-              second.inputOrder = firstOrder;
-              videoReferenceSwapSelection = null;
-              scheduleSave();
-              queueCanvasHistory();
-              showToast(
-                `参考图 ${firstOrder} 与参考图 ${secondOrder} 已交换`,
-                "success",
-              );
-              draw();
-            };
-          });
-        if (onscreen)
-          emptyState
-            .querySelectorAll<HTMLCanvasElement>("[data-reference-url]")
-            .forEach((canvas) => {
-              if (canvas.dataset.paintedUrl !== canvas.dataset.referenceUrl) {
-                canvas.dataset.paintedUrl = canvas.dataset.referenceUrl;
-                paintNodeMedia(canvas, canvas.dataset.referenceUrl!);
-              }
-            });
-      }
-    }
+    syncVoiceTtsAudioPanels({
+      element,
+      node,
+      nodes,
+      links,
+      providers: ttsProviders,
+      voicesByProvider: ttsVoicesByProvider,
+      ensureProviders: loadTtsProviders,
+      ensureVoices: loadTtsVoices,
+      escapeHtml,
+      renderSubmit: renderComposerSubmit,
+      locked,
+    });
+    syncVideoReferenceView({
+      element,
+      node,
+      nodes,
+      links,
+      onscreen,
+      getSwap: () => videoReferenceSwapSelection,
+      setSwap: (value) => {
+        videoReferenceSwapSelection = value;
+      },
+      escapeHtml,
+      notify: (message, type, detail) => showToast(message, type, detail),
+      scheduleSave,
+      commitHistory: queueCanvasHistory,
+      draw,
+      paintImage: paintNodeMedia,
+    });
     renderNodeToolbar(element, node, locked);
-    element.querySelector<HTMLElement>(".node-info-popover")!.textContent =
-      `${node.kind === "prompt" ? "标签" : node.kind === "image" ? "图片" : node.kind === "video" ? "视频" : node.kind === "voice" ? "语音配置" : node.kind === "tts" ? "TTS 文本" : node.kind === "audio" ? "音频" : "便签"}节点 · ${node.body.length} 字 · ${Math.round((node.fontScale ?? 1) * 100)}%`;
-    const imagePanel = element.querySelector<HTMLElement>(
-      ".image-config-panel",
-    )!;
-    const imagePanelOpen = node.kind === "image" && node.id === selection.selectedId;
-    imagePanel.classList.toggle("open", imagePanelOpen);
-    if (!imagePanelOpen)
-      imagePanel
-        .querySelectorAll<HTMLDetailsElement>("details[open]")
-        .forEach((details) => (details.open = false));
-    const videoPanel = element.querySelector<HTMLElement>(
-      ".video-config-panel",
-    )!;
-    const videoPanelOpen =
-      node.kind === "video" && node.role !== "result" && node.id === selection.selectedId;
-    videoPanel.classList.toggle("open", videoPanelOpen);
-    if (!videoPanelOpen)
-      videoPanel
-        .querySelectorAll<HTMLDetailsElement>("details[open]")
-        .forEach((details) => (details.open = false));
-    const videoResultPrompt = element.querySelector<HTMLElement>(
-      ".video-result-prompt",
-    )!;
-    videoResultPrompt.classList.toggle(
-      "open",
-      node.kind === "video" && node.role === "result" && node.id === selection.selectedId,
-    );
-    videoResultPrompt.querySelector<HTMLElement>("p")!.textContent =
-      node.generationPrompt || "暂无生成提示词";
-    if (node.kind === "image") {
-      if (node.model === "z-image-turbo" || node.model === "flux1-kontext-dev")
-        node.model = "gpt-image-2";
-      const model = imagePanel.querySelector<HTMLSelectElement>(
-          '[data-image-field="model"]',
-        )!,
-        description = imagePanel.querySelector<HTMLTextAreaElement>(
-          '[data-image-field="description"]',
-        )!;
-      if (document.activeElement !== model)
-        model.value = node.model ?? "gpt-image-2";
-      imagePanel.querySelector<HTMLElement>(
-        "[data-image-model-label]",
-      )!.textContent = modelDisplayName(node.model ?? "gpt-image-2");
-      description.placeholder = node.mediaUrl
-        ? "描述你想如何修改这张图片"
-        : "描述要生成的图片内容";
-      if (document.activeElement !== description) description.value = node.body;
-      const originalPrompt = imagePanel.querySelector<HTMLElement>(
-          ".image-original-prompt",
-        )!,
-        originalPromptValue = normalizePromptText(
-          node.originalPrompt || node.generationPrompt,
-        );
-      originalPrompt.classList.toggle(
-        "visible",
-        Boolean(originalPromptValue || node.mediaUrl),
-      );
-      originalPrompt.querySelector<HTMLElement>("p")!.textContent =
-        originalPromptValue || "导入图片，无生成提示词";
-      for (const key of ["size", "quality", "background"] as const) {
-        const input = imagePanel.querySelector<HTMLSelectElement>(
-          `[data-image-field="${key}"]`,
-        )!;
-        if (document.activeElement !== input)
-          input.value = node.imageSettings?.[key] ?? "auto";
-      }
-      imagePanel
-        .querySelectorAll<HTMLElement>("[data-image-setting]")
-        .forEach((button) =>
-          button.classList.toggle(
-            "active",
-            node.imageSettings?.[
-              button.dataset.imageSetting as "size" | "quality" | "background"
-            ] === button.dataset.value ||
-              ((!node.imageSettings?.[
-                button.dataset.imageSetting as "size" | "quality" | "background"
-              ] ||
-                node.imageSettings?.[
-                  button.dataset.imageSetting as
-                    "size" | "quality" | "background"
-                ] === "auto") &&
-                button.dataset.value === "auto"),
-          ),
-        );
-      const sizeLabel =
-        (
-          {
-            auto: "自动尺寸",
-            "1024x1024": "1:1",
-            "1344x1008": "4:3",
-            "1008x1344": "3:4",
-            "1536x1024": "3:2",
-            "1024x1536": "2:3",
-            "1536x864": "16:9",
-            "864x1536": "9:16",
-          } as Record<string, string>
-        )[node.imageSettings?.size ?? "auto"] ?? node.imageSettings?.size;
-      const qualityLabel =
-        (
-          {
-            auto: "自动质量",
-            high: "高质量",
-            medium: "标准质量",
-            low: "低质量",
-          } as Record<string, string>
-        )[node.imageSettings?.quality ?? "auto"] ?? node.imageSettings?.quality;
-      imagePanel.querySelector<HTMLElement>(
-        "[data-image-settings-label]",
-      )!.textContent = `${qualityLabel} · ${sizeLabel}`;
-      const generateButton = imagePanel.querySelector<HTMLButtonElement>(
-        "[data-image-generate]",
-      )!;
-      renderComposerSubmit(generateButton, locked);
-      element
-        .querySelectorAll<HTMLButtonElement>(
-          "[data-image-upload],[data-image-library]",
-        )
-        .forEach((button) => {
-          button.disabled = locked;
-          button.title = locked ? "生成期间不可更换素材" : "";
-        });
-    }
-    if (node.kind === "video") {
-      const supportsNativeKeyframes = node.model?.startsWith("agnes-") === true,
-        imageInputCount = links.filter(
-          (link) =>
-            link.to === node.id &&
-            nodes.find((item) => item.id === link.from)?.kind === "image",
-        ).length;
-      if (
-        node.role !== "result" &&
-        supportsNativeKeyframes &&
-        imageInputCount > 1 &&
-        node.videoSettings?.referenceMode !== "keyframes"
-      ) {
-        node.videoSettings = {
-          ...(node.videoSettings || {}),
-          referenceMode: "keyframes",
-        };
-        scheduleSave();
-      } else if (
-        node.role !== "result" &&
-        (!supportsNativeKeyframes || imageInputCount < 2) &&
-        node.videoSettings?.referenceMode === "keyframes"
-      ) {
-        node.videoSettings.referenceMode = "references";
-        scheduleSave();
-      }
-      const results = nodes.filter(
-          (item) =>
-            item.kind === "video" &&
-            item.role === "result" &&
-            item.sourceNodeId === node.id,
-        ),
-        queuedCount = results.filter((item) => item.status === "queued").length,
-        runningCount = results.filter(
-          (item) => item.status === "running",
-        ).length,
-        succeededCount = results.filter(
-          (item) => item.status === "succeeded" && Boolean(item.mediaUrl),
-        ).length;
-      element.querySelector<HTMLElement>(
-        ".video-generation-count",
-      )!.textContent =
-        node.role === "result"
-          ? node.status === "queued"
-            ? "任务排队中"
-            : node.status === "running"
-              ? Number(node.progress ?? 0) > 0
-                ? `生成中 ${Math.round(node.progress ?? 0)}%`
-                : node.model?.startsWith("agnes-")
-                  ? "云端处理中"
-                  : "生成中 · 等待进度"
-              : node.status === "failed"
-                ? "生成失败"
-                : node.videoResult?.seconds || node.videoResult?.size
-                  ? `实际 ${node.videoResult.seconds ? `${node.videoResult.seconds}秒` : ""}${node.videoResult.seconds && node.videoResult.size ? " · " : ""}${node.videoResult.size || ""}`
-                  : "生成结果"
-          : `排队 ${queuedCount} · 生成中 ${runningCount} · 已生成 ${succeededCount}`;
-      element.querySelector<HTMLElement>(".video-result-model")!.textContent =
-        modelDisplayName(node.model) || "未知模型";
-      const description = videoPanel.querySelector<HTMLTextAreaElement>(
-          "[data-video-description]",
-        )!,
-        cleanVideoDescription = decodePromptClipboardText(node.body);
-      if (cleanVideoDescription !== node.body) {
-        node.body = cleanVideoDescription;
-        scheduleSave();
-      }
-      if (document.activeElement !== description) description.value = node.body;
-      videoPanel.querySelector<HTMLInputElement>("[data-video-model]")!.value =
-        node.model ?? "agnes-video-v2.0";
-      videoPanel
-        .querySelectorAll<HTMLButtonElement>("[data-video-model-option]")
-        .forEach((option) =>
-          option.classList.toggle(
-            "active",
-            option.dataset.videoModelOption ===
-              (node.model ?? "agnes-video-v2.0"),
-          ),
-        );
-      videoPanel.querySelector<HTMLElement>(
-        ".video-model-picker summary b",
-      )!.textContent = modelDisplayName(node.model ?? "agnes-video-v2.0");
-      videoPanel.querySelector<HTMLOutputElement>(
-        "[data-video-seconds]",
-      )!.value = `${node.videoSettings?.seconds ?? "5"} 秒`;
-      const seedField =
-        videoPanel.querySelector<HTMLInputElement>("[data-video-seed]")!;
-      if (document.activeElement !== seedField)
-        seedField.value = Number.isSafeInteger(node.videoSettings?.seed)
-          ? String(node.videoSettings!.seed)
-          : "";
-      videoPanel.querySelector<HTMLElement>(
-        ".video-settings-picker summary b",
-      )!.textContent =
-        `${node.videoSettings?.seconds ?? "5"}秒 · ${node.videoSettings?.referenceMode === "keyframes" ? "连续帧" : "参考图"} · ${node.videoSettings?.resolution ?? "720p"} · ${node.videoSettings?.aspectRatio ?? "16:9"}`;
-      videoPanel
-        .querySelectorAll<HTMLButtonElement>("[data-video-setting]")
-        .forEach((button) => {
-          const key = button.dataset.videoSetting as
-              "seconds" | "resolution" | "aspectRatio" | "referenceMode",
-            value =
-              key === "referenceMode"
-                ? (node.videoSettings?.referenceMode ?? "references")
-                : node.videoSettings?.[key],
-            keyframes =
-              key === "referenceMode" && button.dataset.value === "keyframes",
-            references =
-              key === "referenceMode" && button.dataset.value === "references",
-            unsupported =
-              (keyframes &&
-                (!supportsNativeKeyframes || imageInputCount < 2)) ||
-              (references && supportsNativeKeyframes && imageInputCount > 1);
-          button.disabled = unsupported;
-          button.title = unsupported
-            ? keyframes
-              ? "关键帧动画需要 Agnes 和至少两张有序图片"
-              : "Agnes 官方接口不支持多图自由参考，请使用关键帧动画"
-            : keyframes
-              ? "Agnes 原生关键帧动画，严格按卡片中的图片编号排序"
-              : "";
-          button.classList.toggle("model-unavailable", unsupported);
-          button.classList.toggle("active", value === button.dataset.value);
-        });
-      const button = videoPanel.querySelector<HTMLButtonElement>(
-        "[data-video-generate]",
-      )!;
-      renderComposerSubmit(button, locked, !canGenerateNode(node));
-    }
-    const media = element.querySelector<HTMLElement>(".node-media")!,
-      mediaCanvas =
-        element.querySelector<HTMLCanvasElement>(".node-media-canvas")!;
-    if (node.kind === "audio") {
-      media.dataset.hasMedia = "true";
-      mediaCanvas.width = 2;
-      mediaCanvas.height = 2;
-      const video =
-        element.querySelector<HTMLVideoElement>(".node-media-video")!;
-      video.hidden = true;
-      video.removeAttribute("src");
-    } else if (node.mediaUrl && onscreen) {
-      media.dataset.hasMedia = "true";
-      const desiredWidth = Math.max(
-          180,
-          Math.min(480, Math.round(node.width * 1.35)),
-        ),
-        desiredHeight = Math.max(
-          140,
-          Math.min(420, Math.round(node.height * 1.35)),
-        ),
-        canvasResized =
-          mediaCanvas.width !== desiredWidth ||
-          mediaCanvas.height !== desiredHeight;
-      if (canvasResized) {
-        mediaCanvas.width = desiredWidth;
-        mediaCanvas.height = desiredHeight;
-      }
-      if (media.dataset.sourceKey !== node.mediaUrl || canvasResized) {
-        media.dataset.sourceKey = node.mediaUrl;
-        const video =
-          element.querySelector<HTMLVideoElement>(".node-media-video")!;
-        if (node.kind === "video") {
-          media.style.removeProperty("background-image");
-          video.hidden = true;
-          video.removeAttribute("src");
-          paintNodeVideo(mediaCanvas, node.mediaUrl);
-        } else {
-          media.style.removeProperty("background-image");
-          video.hidden = true;
-          video.removeAttribute("src");
-          paintNodeMedia(mediaCanvas, node.mediaUrl);
-        }
-      }
-    } else {
-      delete media.dataset.hasMedia;
-      delete media.dataset.sourceKey;
-      media.style.removeProperty("background-image");
-      const video =
-        element.querySelector<HTMLVideoElement>(".node-media-video")!;
-      video.hidden = true;
-      video.removeAttribute("src");
-      if (mediaCanvas.width !== 2 || mediaCanvas.height !== 2) {
-        mediaCanvas.width = 2;
-        mediaCanvas.height = 2;
-      }
-    }
-    const progress = element.querySelector<HTMLElement>(".node-progress i")!,
-      progressTrack = element.querySelector<HTMLElement>(".node-progress")!,
-      waitingWithoutProgress =
-        locked &&
-        (workflowWaiting ||
-          node.status === "queued" ||
-          Number(node.progress ?? 0) <= 0);
-    progress.style.width = waitingWithoutProgress
-      ? "100%"
-      : `${node.progress ?? 0}%`;
-    progressTrack.classList.toggle("visible", locked);
-    progressTrack.classList.toggle("indeterminate", waitingWithoutProgress);
+    syncImageNodePanel({
+      element,
+      node,
+      selected: node.id === selection.selectedId,
+      locked,
+      normalizePrompt: normalizePromptText,
+      displayModelName: modelDisplayName,
+      renderSubmit: renderComposerSubmit,
+    });
+    syncVideoNodePanel({
+      element,
+      node,
+      nodes,
+      links,
+      scheduleSave,
+      displayModelName: modelDisplayName,
+      decodePrompt: decodePromptClipboardText,
+      canGenerate: canGenerateNode,
+      renderSubmit: renderComposerSubmit,
+      locked,
+    });
+    syncNodeMediaView({
+      element,
+      node,
+      onscreen,
+      locked,
+      workflowWaiting,
+      paintImage: paintNodeMedia,
+      paintVideo: paintNodeVideo,
+    });
   }
 }
 
