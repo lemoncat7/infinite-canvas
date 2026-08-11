@@ -1,8 +1,6 @@
 import "../style.css";
-import { CanvasRenderFeature } from "../canvas/canvas-render-feature";
-import { CanvasRenderState } from "../canvas/canvas-render-state";
 import { CanvasPersistenceFeature } from "../canvas/canvas-persistence-feature";
-import { CanvasConnectionFeature } from "../canvas/canvas-connection-feature";
+import { CanvasRenderingRuntimeFeature } from "../canvas/canvas-rendering-runtime-feature";
 import { CanvasInputFeature } from "../canvas/canvas-input-feature";
 import { CanvasBatchFeature } from "../canvas/canvas-batch-feature";
 import { CanvasHistoryFeature } from "../canvas/canvas-history-feature";
@@ -46,14 +44,9 @@ import { createDefaultGenerationCapabilities } from "./state";
 import { WorkspaceRuntimeFeature } from "./workspace-runtime-feature";
 import { AccountSessionFeature } from "./account-session-feature";
 import { escapeRuntimeHtml, RuntimeFoundation } from "./runtime-foundation";
-import {
-  connectionControlPoint,
-  nodePortPosition,
-  screenToWorld,
-  worldToScreen,
-} from "../canvas/camera-controller";
+import { screenToWorld, worldToScreen } from "../canvas/camera-controller";
 
-let canvasRender: CanvasRenderFeature;
+let renderingRuntime: CanvasRenderingRuntimeFeature;
 
 let generationCapabilities: GenerationCapabilities =
   createDefaultGenerationCapabilities();
@@ -73,7 +66,6 @@ const {
   store: canvasStore, camera, nodes, links, interaction, pointer, selection,
   promptEditor: promptNodeEditor, connection,
 } = foundation;
-let connectionFeature: CanvasConnectionFeature;
 let canvasPersistence: CanvasPersistenceFeature;
 const canvasNodeIds = foundation.nodeIds;
 let backgroundMode = foundation.backgroundMode;
@@ -207,7 +199,7 @@ const canvasInput = new CanvasInputFeature({
     startConnectionAutoPan(event.clientX, event.clientY);
     draw(syncDom);
   },
-  finishConnection: (event) => connectionFeature.finish(event),
+  finishConnection: (event) => renderingRuntime.connection.finish(event),
   cancelConnection: () => {
     connection.cancel();
     stopConnectionAutoPan();
@@ -295,8 +287,8 @@ const canvasMedia = new CanvasMediaFeature({
   nodes,
   nodeLayer,
   theme: () => colorTheme,
-  suspendRenderer: () => canvasRender.suspend(),
-  resumeRenderer: () => canvasRender.resume(),
+  suspendRenderer: () => renderingRuntime.render.suspend(),
+  resumeRenderer: () => renderingRuntime.render.resume(),
   clearNodeStates: () => nodeViews.clearStates(),
   invalidateNode: (id) => nodeViews.invalidateState(id),
   resize,
@@ -361,7 +353,7 @@ const accountSession = new AccountSessionFeature({
     getLoadedProjectId: () => canvasPersistence.loadedProjectId,
     isSaveBlocked: () => canvasPersistence.blocked,
     getServerVersion: () => canvasPersistence.serverVersion,
-    ensureRenderer: () => canvasRender.ensure(),
+    ensureRenderer: () => renderingRuntime.render.ensure(),
     stopSave: (logout) => canvasPersistence.stopAndReset(logout),
     resetNodeLease: () => canvasNodeIds.reset(),
     loadCanvas: (keepStatus) => loadCanvas(keepStatus),
@@ -405,13 +397,8 @@ function refreshNodeModelMenus() {
 }
 authWorkspace.applyRoute();
 
-const viewportSize = () => ({ width: innerWidth, height: innerHeight });
-const screen = (point: Point) =>
-  worldToScreen(point, camera, viewportSize());
-const world = (point: Point) =>
-  screenToWorld(point, camera, viewportSize());
-const portWorld = nodePortPosition;
-const controlPoint = connectionControlPoint;
+const screen = (point: Point) => renderingRuntime.screen(point);
+const world = (point: Point) => renderingRuntime.world(point);
 function nodeIsActivelyGenerating(node: FlowNode | undefined) {
   return nodeLifecycleFeature.isActive(node);
 }
@@ -427,80 +414,48 @@ function imageInputOrder(link: FlowLink) {
 function orderedTargetLinks(targetId: number) {
   return nodeLifecycleFeature.orderedTargetLinks(targetId);
 }
-connectionFeature = new CanvasConnectionFeature({
-  nodes,
-  links,
-  camera,
-  spatialIndex: nodeViews.spatialIndex,
-  connection,
-  world,
-  screen,
-  portWorld,
-  save: scheduleSave,
-  draw,
-  notify: (message) => showToast(message, "warning"),
-});
-canvasStore.subscribe((change) => {
-  if (change.type === "node-position")
-    change.nodeIds.forEach((id) => {
-      const node = nodes.find((candidate) => candidate.id === id);
-      if (node) nodeViews.spatialIndex.update(node);
-    });
-  else if (change.type === "structure") nodeViews.spatialIndex.rebuild(nodes);
-});
-function rebuildPaintIndexes() {
-  connectionFeature.rebuild();
-}
 function canvasInteractionActive() {
   return Boolean(pointer.down || domPointer.drag || interaction.marquee?.active || touchPinch.active);
 }
 function hitNode(sx: number, sy: number) {
-  return connectionFeature.hitNode(sx, sy);
+  return renderingRuntime.connection.hitNode(sx, sy);
 }
 function hitPort(sx: number, sy: number, radius = 12, excludeNodeId?: number) {
-  return connectionFeature.hitPort(sx, sy, radius, excludeNodeId);
+  return renderingRuntime.connection.hitPort(sx, sy, radius, excludeNodeId);
 }
 function updateConnectionPointer(sx: number, sy: number) {
-  connectionFeature.updatePointer(sx, sy);
+  renderingRuntime.connection.updatePointer(sx, sy);
 }
-function stopConnectionAutoPan() { connectionFeature.stopAutoPan(); }
-function startConnectionAutoPan(sx: number, sy: number) { connectionFeature.startAutoPan(sx, sy); }
+function stopConnectionAutoPan() { renderingRuntime.connection.stopAutoPan(); }
+function startConnectionAutoPan(sx: number, sy: number) { renderingRuntime.connection.startAutoPan(sx, sy); }
 function hitLink(sx: number, sy: number, tolerance = 9) {
-  return connectionFeature.hitLink(sx, sy, tolerance);
+  return renderingRuntime.connection.hitLink(sx, sy, tolerance);
 }
-const canvasRenderState = new CanvasRenderState({
+renderingRuntime = new CanvasRenderingRuntimeFeature({
   nodes,
   links,
   camera,
-  connectionFeature,
-  connection,
-  domNodeIds: () => [...nodeViews.mountedIds],
-  selectedId: () => selection.selectedId,
-  batchIds: selection.batchIds,
-  agentIds: () => creationSuite.prompt.selectedIds,
-  dark: () => colorTheme === "dark",
-  backgroundMode: () => backgroundMode,
-  screen,
-  portWorld,
-});
-canvasRender = new CanvasRenderFeature({
+  store: canvasStore,
+  connectionController: connection,
+  selection,
+  interaction,
+  nodeViews,
   viewport: nodeViewport,
   zoomSlider,
   zoomPercent,
   nodeCount,
-  viewportSize: () => ({ width: innerWidth, height: innerHeight }),
-  camera: () => camera,
   interacting: canvasInteractionActive,
-  state: canvasRenderState.snapshot,
-  rebuildIndexes: rebuildPaintIndexes,
-  syncDom: () => nodeViews.sync(),
-  warmEditors: () => nodeViews.scheduleWarmup(),
+  agentIds: () => creationSuite.prompt.selectedIds,
+  dark: () => colorTheme === "dark",
+  backgroundMode: () => backgroundMode,
+  save: scheduleSave,
   updateTasks: () => canvasTasks.update(),
   updateHistory: () => canvasHistory.refreshControls(),
+  notify: (message) => showToast(message, "warning"),
   log: clientLog,
 });
-function paint() { canvasRender.paint(); }
-function draw(syncDom = true) { canvasRender.draw(syncDom); }
+function paint() { renderingRuntime.render.paint(); }
+function draw(syncDom = true) { renderingRuntime.render.draw(syncDom); }
 function resize() {
   draw();
 }
@@ -566,7 +521,7 @@ nodeEditorFeature = new CanvasNodeEditorFeature({
     Number(authWorkspace.user?.credits ?? 0) - Number(authWorkspace.user?.reservedCredits ?? 0),
   hasConnectedVoice: (node) => Boolean(ttsFeature.connectedVoice(node)),
   activelyGenerating: nodeIsActivelyGenerating,
-  pixiActive: canvasRender.active,
+  pixiActive: renderingRuntime.render.active,
   setEditingState: () => setSaveState("editing", "编辑中…"),
   draw,
   save: scheduleSave,
