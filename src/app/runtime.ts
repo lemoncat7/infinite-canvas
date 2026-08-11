@@ -145,6 +145,7 @@ import { BoundNodeViewFactory } from "../nodes/bound-node-view-factory";
 import { BoundNodeDomSynchronizer } from "../nodes/bound-node-dom-synchronizer";
 import { createDefaultGenerationCapabilities } from "./state";
 import { WorkspaceSessionController } from "./workspace-session-controller";
+import { ProjectSwitchController } from "./project-switch-controller";
 import {
   connectionControlPoint,
   nodePortPosition,
@@ -2866,6 +2867,20 @@ async function beginImageNodeLibrary(nodeId: number) {
 }
 const projectDialog = document.querySelector<HTMLElement>("#project-dialog")!;
 const askProjectDialog = createProjectDialog(projectDialog);
+const projectSwitchController = new ProjectSwitchController({
+  currentProjectId: () => currentProjectId,
+  setCurrentProjectId: (id) => { currentProjectId = id; },
+  loadedProjectId: () => canvasSaveCoordinator.loadedProjectId,
+  save: saveCanvas,
+  stopSave: () => canvasSaveCoordinator.stopAndReset(),
+  resetNodeLease: () => { canvasNodeIdBlockEnd = 0; },
+  closeComic: closeComicStudio,
+  resetComic: () => resetComicConversationState(true),
+  unlinkComicLabel: () => { comicState.linkedLabelId = 0; },
+  loadCanvas: () => loadCanvas(),
+  loadAssets: () => loadAssets(),
+  closePanels: closeWorkspacePanels,
+});
 const projectController = new ProjectController({
   list: document.querySelector<HTMLElement>("#project-list")!,
   count: document.querySelector<HTMLElement>("#project-count")!,
@@ -2875,28 +2890,12 @@ const projectController = new ProjectController({
   ask: askProjectDialog,
   getCurrentProjectId: () => currentProjectId,
   switchProject,
-  deleteCurrentProject: async (nextProjectId) => {
-    currentProjectId = nextProjectId;
-    localStorage.setItem("flow-project-id", nextProjectId);
-    await Promise.all([loadCanvas(), loadAssets()]);
-  },
+  deleteCurrentProject: (nextProjectId) =>
+    projectSwitchController.selectAfterDelete(nextProjectId),
   toast: (message, type, detail) => showToast(message, type, detail),
 });
 async function switchProject(projectId: string) {
-  if (projectId === currentProjectId) {
-    closeWorkspacePanels();
-    return;
-  }
-  if (canvasSaveCoordinator.loadedProjectId === currentProjectId) await saveCanvas();
-  closeComicStudio();
-  await canvasSaveCoordinator.stopAndReset();
-  canvasNodeIdBlockEnd = 0;
-  currentProjectId = projectId;
-  localStorage.setItem("flow-project-id", projectId);
-  resetComicConversationState(true);
-  comicState.linkedLabelId = 0;
-  await Promise.all([loadCanvas(), loadAssets()]);
-  closeWorkspacePanels();
+  await projectSwitchController.switch(projectId);
 }
 async function loadAssets(render = true) {
   await assetLibraryController.load(render);
