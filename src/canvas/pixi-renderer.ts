@@ -376,9 +376,6 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       activeCardIds = new Set<number>(),
       margin = 520;
     for (const node of snapshot.nodes) {
-      // A full DOM card and its lightweight Pixi fallback must never be
-      // visible together. Links stay in Pixi; only the duplicate card skips.
-      if (domNodeIds.has(node.id)) continue;
       const screenX = node.x * snapshot.camera.zoom + offsetX,
         screenY = node.y * snapshot.camera.zoom + offsetY,
         visible =
@@ -387,6 +384,17 @@ export class PixiCanvasRenderer implements CanvasRenderer {
           screenY + node.height * snapshot.camera.zoom > -margin &&
           screenY < innerHeight + margin;
       if (!visible) continue;
+      // Preserve the already decoded Pixi thumbnail while the selected DOM
+      // editor temporarily owns the card. Releasing it here caused the image
+      // to flash blank when generation dismissed the editor.
+      if (domNodeIds.has(node.id)) {
+        const hiddenView = this.cardViews.get(node.id);
+        if (hiddenView) {
+          activeCardIds.add(node.id);
+          hiddenView.container.visible = false;
+        }
+        continue;
+      }
       activeCardIds.add(node.id);
       let view = this.cardViews.get(node.id);
       if (!view) {
