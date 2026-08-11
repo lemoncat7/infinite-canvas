@@ -46,6 +46,14 @@ export class CanvasInputFeature {
     screen: (point: Point) => Point;
     world: (point: Point) => Point;
   }) {
+    document.addEventListener("selectstart", (event) => {
+      if (document.body.classList.contains("home-mode")) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest(
+        'input,textarea,[contenteditable="true"],.image-original-prompt p,.video-result-prompt p,[data-agent-prompt],.app-toast details em,code',
+      )) return;
+      event.preventDefault();
+    });
     this.cameraViewport = new CameraViewportController({
       camera: options.camera,
       nodes: options.nodes,

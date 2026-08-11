@@ -29,7 +29,7 @@ import { apiFetch } from "../services/api";
 import { AppUpdateController } from "../services/app-update-controller";
 import { GenerationCapabilitiesController } from "../services/generation-capabilities-controller";
 import { CanvasGenerationRuntimeFeature } from "../services/canvas-generation-runtime-feature";
-import { ClientDiagnostics } from "../services/client-diagnostics";
+import { RuntimeDiagnosticsFeature } from "./runtime-diagnostics-feature";
 import {
   clipVideoPrompt,
   composeStoryboardPrompt,
@@ -133,26 +133,7 @@ let backgroundMode: "dots" | "lines" | "blank" = "lines";
 let colorTheme: "light" | "dark" =
   localStorage.getItem("flow-theme") === "light" ? "light" : "dark";
 document.body.dataset.theme = colorTheme;
-const clientDiagnostics = new ClientDiagnostics();
-const clientLog = (event: string, details: unknown = {}) =>
-  clientDiagnostics.log(event, details);
-clientDiagnostics.bindGlobalErrors();
-const interruptedThemeTransition = sessionStorage.getItem(
-  "flow-theme-transition-inflight",
-);
-if (interruptedThemeTransition) {
-  sessionStorage.removeItem("flow-theme-transition-inflight");
-  try {
-    clientLog(
-      "theme-transition-interrupted",
-      JSON.parse(interruptedThemeTransition),
-    );
-  } catch {
-    clientLog("theme-transition-interrupted", {
-      raw: interruptedThemeTransition,
-    });
-  }
-}
+const clientLog = new RuntimeDiagnosticsFeature().log;
 function syncDraggedNodeElements(ids: Iterable<number>) {
   for (const id of ids) {
     const node = nodes.find((item) => item.id === id),
@@ -376,17 +357,6 @@ const canvasMedia = new CanvasMediaFeature({
 });
 const pendingMediaLoads = canvasMedia.pendingLoads;
 const imageCache = canvasMedia.cache;
-document.addEventListener("selectstart", (event) => {
-  if (document.body.classList.contains("home-mode")) return;
-  const target = event.target instanceof Element ? event.target : null;
-  if (
-    target?.closest(
-      'input,textarea,[contenteditable="true"],.image-original-prompt p,.video-result-prompt p,[data-agent-prompt],.app-toast details em,code',
-    )
-  )
-    return;
-  event.preventDefault();
-});
 function modelDisplayName(value?: string) {
   if (!value?.startsWith("custom:")) return value || "";
   return (
