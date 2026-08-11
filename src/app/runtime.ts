@@ -142,6 +142,7 @@ import {
 import { BoundNodeViewFactory } from "../nodes/bound-node-view-factory";
 import { BoundNodeDomSynchronizer } from "../nodes/bound-node-dom-synchronizer";
 import { createDefaultGenerationCapabilities } from "./state";
+import { WorkspaceSessionController } from "./workspace-session-controller";
 import {
   connectionControlPoint,
   nodePortPosition,
@@ -858,76 +859,41 @@ function renderAuthenticatedUser() {
     connectNotificationStream();
   } else disconnectNotificationStream();
 }
+const workspaceSession = new WorkspaceSessionController({
+  nodes,
+  links,
+  authenticated: () => Boolean(authUser),
+  currentProjectId: () => currentProjectId,
+  setCurrentProjectId: (id) => { currentProjectId = id; },
+  loginMode: () => authModalController.mode,
+  loadedProjectId: () => canvasSaveCoordinator.loadedProjectId,
+  saveBlocked: () => canvasSaveCoordinator.blocked,
+  serverVersion: () => canvasSaveCoordinator.serverVersion,
+  ensureRenderer: ensurePixiRenderer,
+  stopSave: (logout) => canvasSaveCoordinator.stopAndReset(logout),
+  resetNodeLease: () => { canvasNodeIdBlockEnd = 0; },
+  loadCanvas: (keepStatus) => loadCanvas(keepStatus),
+  loadAssets: () => loadAssets(false),
+  loadModels: () => loadCustomApiModels(),
+  apiFetch,
+  status: setWorkspaceBootStatus,
+  hideStatus: hideWorkspaceBootStatusAfter,
+  applyRoute: applyAppRoute,
+  clearSelection: () => { selection.selectedId = 0; },
+  clearToken: () => userMenuController.clearToken(),
+  closeUserMenu: () => userMenuController.close(),
+  renderUser: renderAuthenticatedUser,
+  clearUser: () => { authUser = null; },
+  notify: (message, type, detail) => showToast(message, type, detail),
+});
 async function ensureCurrentUserProject() {
-  const response = await apiFetch("/api/projects");
-  if (!response.ok) return false;
-  const projects = (await response.json()) as Array<{ id: string }>;
-  if (!projects.length) return false;
-  if (!projects.some((project) => project.id === currentProjectId)) {
-    currentProjectId = projects[0].id;
-    localStorage.setItem("flow-project-id", currentProjectId);
-  }
-  return true;
+  return workspaceSession.ensureCurrentProject();
 }
 async function synchronizeCanvasAfterAuthentication(force = false) {
-  if (!authUser) return false;
-  if (
-    !force &&
-    location.hash !== "#/canvas" &&
-    authModalController.mode === "login"
-  )
-    return ensureCurrentUserProject();
-  await ensurePixiRenderer();
-  await canvasSaveCoordinator.stopAndReset();
-  canvasNodeIdBlockEnd = 0;
-  setWorkspaceBootStatus("正在同步账号与项目");
-  if (!(await ensureCurrentUserProject())) return false;
-  setWorkspaceBootStatus("正在恢复画布与任务");
-  await loadCanvas(true);
-  return (
-    canvasSaveCoordinator.loadedProjectId === currentProjectId &&
-    !canvasSaveCoordinator.blocked &&
-    canvasSaveCoordinator.serverVersion > 0
-  );
+  return workspaceSession.synchronize(force);
 }
 async function enterWorkspace() {
-  if (!authUser) return;
-  document.body.classList.add(
-    "home-mode",
-    "workspace-loading",
-    "workspace-preparing",
-  );
-  setWorkspaceBootStatus("正在同步账号与项目");
-  const ready =
-    canvasSaveCoordinator.loadedProjectId === currentProjectId &&
-    !canvasSaveCoordinator.blocked &&
-    canvasSaveCoordinator.serverVersion > 0;
-  let finalStatus = workspaceBootStatusVersion,
-    completed = false;
-  try {
-    await ensurePixiRenderer();
-    if (!ready && !(await synchronizeCanvasAfterAuthentication(true)))
-      throw new Error("画布尚未完整同步，请检查网络后重试");
-    setWorkspaceBootStatus("正在加载资产索引与创作模型");
-    await Promise.all([loadAssets(false), loadCustomApiModels()]);
-    completed = true;
-    finalStatus = setWorkspaceBootStatus("工作区已准备完成");
-  } catch (error) {
-    showToast(
-      error instanceof Error ? error.message : "工作区加载失败",
-      "error",
-    );
-    finalStatus = setWorkspaceBootStatus("工作区加载失败");
-  } finally {
-    if (completed) {
-      location.hash = "#/canvas";
-      document.body.classList.remove("workspace-preparing");
-      applyAppRoute();
-    }
-    hideWorkspaceBootStatusAfter(finalStatus, completed ? 360 : 1800);
-    document.body.classList.remove("workspace-loading");
-    if (!completed) document.body.classList.remove("workspace-preparing");
-  }
+  await workspaceSession.enter();
 }
 async function loadShowcase() {
   showcaseLoaded = true;
@@ -1025,18 +991,7 @@ const workspaceUserMenu = document.querySelector<HTMLElement>(
 )!;
 topbarMenus.register("user", () => workspaceUserMenu.classList.remove("open"));
 async function logoutToHome(message?: string) {
-  await canvasSaveCoordinator.stopAndReset(true);
-  await apiFetch("/api/auth/logout", { method: "POST" }).catch(() => {});
-  authUser = null;
-  userMenuController.clearToken();
-  nodes.splice(0);
-  links.splice(0);
-  selection.selectedId = 0;
-  userMenuController.close();
-  renderAuthenticatedUser();
-  location.hash = "#/";
-  applyAppRoute();
-  if (message) showToast(message, "warning");
+  await workspaceSession.logout(message);
 }
 const userMenuController = new UserMenuController({
   menu: workspaceUserMenu,
