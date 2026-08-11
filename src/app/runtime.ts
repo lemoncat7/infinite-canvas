@@ -19,6 +19,7 @@ import { CameraViewportController } from "../canvas/camera-viewport-controller";
 import { CanvasClearController } from "../canvas/clear-controller";
 import { CanvasSaveCoordinator } from "../canvas/save-coordinator";
 import { CanvasLoadCoordinator } from "../canvas/load-coordinator";
+import { BatchSelectionController } from "../canvas/batch-selection-controller";
 import { LinkInteractionView } from "../canvas/link-interaction-view";
 import { GenerationPoller } from "../services/generation-poller";
 import { GenerationWorkflow } from "../services/generation-workflow";
@@ -3327,74 +3328,25 @@ function refreshCanvasModeHint() {
 function enterMultiSelectMode() { marqueeController.enter(); }
 function exitMultiSelectMode() { marqueeController.exit(); }
 function resetMarqueeRightGesture() { marqueeController.resetRightGesture(); }
+const batchSelectionController = new BatchSelectionController({
+  toolbar: batchToolbar,
+  nodes,
+  links,
+  batchIds: selection.batchIds,
+  selectedId: () => selection.selectedId,
+  clearSelectedId: () => { selection.selectedId = 0; },
+  generationActive: canvasHasActiveGeneration,
+  enqueue: (ids) => generationWorkflow.enqueue(ids),
+  clearSelection: clearBatchSelection,
+  exitMode: exitMultiSelectMode,
+  update: updateEditor,
+  save: scheduleSave,
+  toast: (message, tone, detail) => showToast(message, tone, detail),
+  confirm: (message) => window.confirm(message),
+});
 function cascadeSelectionIds(seed: Set<number>) {
-  const result = new Set(seed);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const link of links) {
-      if (!result.has(link.from) || result.has(link.to)) continue;
-      const incoming = links.filter((item) => item.to === link.to);
-      if (!incoming.length || incoming.some((item) => !result.has(item.from)))
-        continue;
-      result.add(link.to);
-      changed = true;
-    }
-  }
-  return result;
+  return batchSelectionController.cascade(seed);
 }
-function deleteBatchSelection() {
-  if (!selection.batchIds.size) return;
-  if (canvasHasActiveGeneration()) {
-    showToast("画布正在生成，任务完成后即可批量删除", "warning");
-    return;
-  }
-  const targets = cascadeSelectionIds(selection.batchIds),
-    cascadeCount = targets.size - selection.batchIds.size;
-  if (
-    !window.confirm(
-      `删除 ${selection.batchIds.size} 个选中节点${cascadeCount ? `，并清理 ${cascadeCount} 个仅依赖它们的下游节点` : ""}？`,
-    )
-  )
-    return;
-  for (let index = nodes.length - 1; index >= 0; index--)
-    if (targets.has(nodes[index].id)) nodes.splice(index, 1);
-  for (let index = links.length - 1; index >= 0; index--)
-    if (targets.has(links[index].from) || targets.has(links[index].to))
-      links.splice(index, 1);
-  if (targets.has(selection.selectedId)) selection.selectedId = 0;
-  clearBatchSelection();
-  updateEditor();
-  scheduleSave();
-  showToast(`已删除 ${targets.size} 个节点`, "success");
-}
-function generateBatchSelection() {
-  const result = generationWorkflow.enqueue(selection.batchIds);
-  if (!result.candidates) {
-    showToast("选中区域没有可生成的任务节点", "warning");
-    return;
-  }
-  showToast(
-    `${result.candidates} 个任务已进入依赖队列`,
-    "success",
-    `${result.ready} 个可立即排队${result.waiting ? ` · ${result.waiting} 个等待上游` : ""}${result.skipped ? ` · ${result.skipped} 个不可生成` : ""}`,
-  );
-}
-batchToolbar
-  .querySelector("[data-batch-generate]")!
-  .addEventListener("click", () => {
-    generateBatchSelection();
-    exitMultiSelectMode();
-  });
-batchToolbar
-  .querySelector("[data-batch-delete]")!
-  .addEventListener("click", () => {
-    deleteBatchSelection();
-    exitMultiSelectMode();
-  });
-batchToolbar
-  .querySelector("[data-batch-clear]")!
-  .addEventListener("click", exitMultiSelectMode);
 
 const linkHoverHint = document.querySelector<HTMLElement>("#link-hover-hint")!;
 const touchLinkAction = document.querySelector<HTMLButtonElement>("#touch-link-action")!;
