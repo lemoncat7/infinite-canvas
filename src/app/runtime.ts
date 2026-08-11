@@ -47,7 +47,8 @@ import {
   renameProject,
   type ProjectSummary,
 } from "../services/projects";
-import { fetchComicSession, streamComicDialogue } from "../services/comic";
+import { streamComicDialogue } from "../services/comic";
+import { ComicSessionController } from "../services/comic-session";
 import {
   composeImageGenerationPrompt as buildImageGenerationPrompt,
 } from "../nodes/image-node";
@@ -8985,8 +8986,6 @@ let comicPlan: ComicPlan | null = null,
 function setComicInteractionLocked(locked: boolean) {
   comicStudioView.setInteractionLocked(locked);
 }
-let comicRestoreKey = "",
-  comicRestoreTimer = 0;
 function currentComicOwnerKey() {
   return `${authUser?.id || "anonymous"}:${currentProjectId}`;
 }
@@ -9108,88 +9107,80 @@ function renderComicLabelMenu() {
       }),
     );
 }
-async function restoreComicSession(force = false) {
-  if (!currentProjectId) return;
-  const key = currentComicOwnerKey();
-  if (!force && comicRestoreKey === key) return;
-  comicRestoreKey = key;
-  try {
-    const trackedSessionId = comicSubmitting ? comicSessionId : "";
-    const saved = await fetchComicSession(currentProjectId, trackedSessionId);
-    if (saved === null) {
-      comicSubmitting = false;
-      setComicInteractionLocked(false);
-      comicOriginalIdea = "";
-      comicLinkedLabelId = 0;
-      resetComicConversationState(true);
-      renderComicLabelState();
-      comicStudio
-        .querySelectorAll(".comic-message:not(.comic-welcome)")
-        .forEach((message) => message.remove());
-      comicStudio.querySelector<HTMLElement>(".comic-plan")!.hidden = true;
-      comicStudio
-        .querySelector<HTMLOutputElement>("[data-comic-status]")!
-        .classList.remove("visible", "generating");
-      return;
-    }
-    if (!saved) return;
-    if (key !== currentComicOwnerKey()) return;
-    comicSessionId = String(saved.id || "");
-    comicBrief = saved.brief || null;
-    comicPendingRevision = String(saved.pendingRevision || "");
-    comicPlan = saved.plan || null;
-    comicReady = saved.phase === "ready";
-    if (comicPlan) renderComicPlan(comicPlan);
-    renderComicBrief();
-    const status = comicStudio.querySelector<HTMLOutputElement>(
-        "[data-comic-status]",
-      )!,
-      running = saved.generationStatus === "running";
-    comicSubmitting = running;
-    setComicInteractionLocked(running);
-    if (running) {
-      status.classList.add("visible", "generating");
-      const amount = saved.generationReceivedBytes
-        ? ` · 已接收 ${(Number(saved.generationReceivedBytes) / 1024).toFixed(1)} KB`
-        : "";
-      status.textContent = `${saved.generationStage || "正在生成完整剧本"} · ${Number(saved.generationProgress) || 0}%${amount}`;
-      status.style.setProperty(
-        "--comic-progress",
-        `${Number(saved.generationProgress) || 0}%`,
-      );
-      window.clearTimeout(comicRestoreTimer);
-      comicRestoreTimer = window.setTimeout(() => {
-        comicRestoreKey = "";
-        void restoreComicSession(true);
-      }, 2500);
-    } else if (
-      saved.generationStatus === "interrupted" ||
-      saved.generationStatus === "failed"
-    ) {
-      const baseMessage =
-          saved.generationError || "上一次漫剧生成已中断，请重新生成",
-        message = saved.hasGenerationCheckpoint
-          ? `${baseMessage} 再次点击生成将从已校验检查点继续。`
-          : baseMessage;
-      status.textContent = message;
-      status.classList.add("visible");
-      showToast(message, "warning");
-    } else if (saved.generationStatus === "succeeded" && comicPlan) {
-      status.textContent = "完整剧本已恢复";
-      status.classList.add("visible");
-      window.setTimeout(
-        () => status.classList.remove("visible", "generating"),
-        2200,
-      );
-    }
-  } catch {
-    /* 网络恢复后再次打开会重试 */
+function clearRestoredComicSession() {
+  comicSubmitting = false;
+  setComicInteractionLocked(false);
+  comicOriginalIdea = "";
+  comicLinkedLabelId = 0;
+  resetComicConversationState(true);
+  renderComicLabelState();
+  comicStudio
+    .querySelectorAll(".comic-message:not(.comic-welcome)")
+    .forEach((message) => message.remove());
+  comicStudio.querySelector<HTMLElement>(".comic-plan")!.hidden = true;
+  comicStudio
+    .querySelector<HTMLOutputElement>("[data-comic-status]")!
+    .classList.remove("visible", "generating");
+}
+function applyRestoredComicSession(saved: import("../services/comic").ComicSessionSnapshot) {
+  comicSessionId = String(saved.id || "");
+  comicBrief = saved.brief || null;
+  comicPendingRevision = String(saved.pendingRevision || "");
+  comicPlan = saved.plan || null;
+  comicReady = saved.phase === "ready";
+  if (comicPlan) renderComicPlan(comicPlan);
+  renderComicBrief();
+  const status = comicStudio.querySelector<HTMLOutputElement>(
+      "[data-comic-status]",
+    )!,
+    running = saved.generationStatus === "running";
+  comicSubmitting = running;
+  setComicInteractionLocked(running);
+  if (running) {
+    status.classList.add("visible", "generating");
+    const amount = saved.generationReceivedBytes
+      ? ` · 已接收 ${(Number(saved.generationReceivedBytes) / 1024).toFixed(1)} KB`
+      : "";
+    status.textContent = `${saved.generationStage || "正在生成完整剧本"} · ${Number(saved.generationProgress) || 0}%${amount}`;
+    status.style.setProperty(
+      "--comic-progress",
+      `${Number(saved.generationProgress) || 0}%`,
+    );
+  } else if (
+    saved.generationStatus === "interrupted" ||
+    saved.generationStatus === "failed"
+  ) {
+    const baseMessage =
+        saved.generationError || "上一次漫剧生成已中断，请重新生成",
+      message = saved.hasGenerationCheckpoint
+        ? `${baseMessage} 再次点击生成将从已校验检查点继续。`
+        : baseMessage;
+    status.textContent = message;
+    status.classList.add("visible");
+    showToast(message, "warning");
+  } else if (saved.generationStatus === "succeeded" && comicPlan) {
+    status.textContent = "完整剧本已恢复";
+    status.classList.add("visible");
+    window.setTimeout(
+      () => status.classList.remove("visible", "generating"),
+      2200,
+    );
   }
+}
+const comicSessionController = new ComicSessionController({
+  getProjectId: () => currentProjectId,
+  getOwnerKey: currentComicOwnerKey,
+  getTrackedSessionId: () => (comicSubmitting ? comicSessionId : ""),
+  onEmpty: clearRestoredComicSession,
+  onSnapshot: applyRestoredComicSession,
+});
+function restoreComicSession(force = false) {
+  return comicSessionController.restore(force);
 }
 async function restoreComicAfterReconnect() {
   if (!comicStudio.classList.contains("open") || !authUser || !currentProjectId)
     return;
-  comicRestoreKey = "";
+  comicSessionController.invalidate();
   await restoreComicSession(true);
 }
 function openComicStudio() {
@@ -9201,7 +9192,7 @@ function openComicStudio() {
   closePromptAgent();
   if (comicSessionOwnerKey && comicSessionOwnerKey !== currentComicOwnerKey()) {
     resetComicConversationState(true);
-    comicRestoreKey = "";
+    comicSessionController.invalidate();
   }
   comicSessionOwnerKey = currentComicOwnerKey();
   comicStudio.classList.add("open");
@@ -9526,7 +9517,7 @@ async function requestComicPlan() {
     // A browser/proxy stream can disconnect while the server-side generation
     // continues. Reconcile with the persisted session before reporting failure
     // or unlocking the editor, otherwise users can accidentally submit twice.
-    comicRestoreKey = "";
+    comicSessionController.invalidate();
     await restoreComicSession(true);
     if (comicSubmitting) {
       status.classList.add("visible", "generating");
