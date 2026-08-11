@@ -4055,7 +4055,7 @@ function syncDomNodes() {
     const locked =
       (nodeIsActivelyGenerating(node) || workflowWaiting) &&
       !(node.kind === "video" && node.role !== "result");
-    const className = `flow-node kind-${node.kind}${node.role === "result" || node.kind === "audio" ? " node-result" : " node-generator"}${node.id === selectedId ? " selected" : ""}${batchSelectedIds.has(node.id) ? " batch-selected" : ""}${promptAgentSelecting && promptAgentContextSelection.has(node.id) ? " agent-reference" : ""}${locked ? " generating" : ""}${workflowWaiting ? " workflow-waiting" : ""}`;
+    const className = `flow-node pixi-card-editor kind-${node.kind}${node.role === "result" || node.kind === "audio" ? " node-result" : " node-generator"}${node.id === selectedId ? " selected" : ""}${batchSelectedIds.has(node.id) ? " batch-selected" : ""}${promptAgentSelecting && promptAgentContextSelection.has(node.id) ? " agent-reference" : ""}${locked ? " generating" : ""}${workflowWaiting ? " workflow-waiting" : ""}`;
     if (element.className !== className) element.className = className;
     element.style.transform = `translate(${node.x}px, ${node.y}px)`;
     element.style.width = `${node.width}px`;

@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
 
 const projectId = "canvas-stress-project";
 
@@ -19,6 +20,9 @@ function stressCanvas(count = 400) {
       accent: "#7da9df",
       status: "idle",
       progress: 0,
+      ...(index === 0
+        ? { mediaUrl: "/api/assets/test-image/content/test.png" }
+        : {}),
     };
   });
   return {
@@ -42,6 +46,17 @@ async function mockApi(page: Page, count = 400, preserveLocalCanvas = false) {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
+    if (
+      path === "/api/assets/test-image/thumbnail" ||
+      path === "/api/assets/test-image/content/test.png"
+    ) {
+      await route.fulfill({
+        status: 200,
+        contentType: "image/png",
+        body: readFileSync("public/brand/viora-mark.png"),
+      });
+      return;
+    }
     let body: unknown = {};
     if (path === "/api/users/me")
       body = {
@@ -102,13 +117,23 @@ test("400 nodes stay GPU-virtualized and recover WebGL context", async ({
 }) => {
   const { canvas } = await mockApi(page);
   (canvas.nodes[0] as (typeof canvas.nodes)[number] & { mediaUrl?: string })
-    .mediaUrl = "/api/assets/delayed-test/content";
+    .mediaUrl = "/api/assets/test-image/content/test.png";
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  const thumbnailLoaded = page.waitForResponse((response) =>
+    response.url().includes("/api/assets/test-image/thumbnail"),
+  );
   await page.goto("/?canvasPerf=1#/canvas");
   await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
   await expect(page.locator("body")).toHaveClass(/renderer-pixi/);
   await expect(page.locator("#node-layer > .flow-node")).toHaveCount(0);
+  await thumbnailLoaded;
+  await page.waitForTimeout(250);
+  if (process.env.CANVAS_VISUAL_AUDIT)
+    await page.screenshot({
+      path: "test-results/canvas-unselected.png",
+      fullPage: true,
+    });
   await page.mouse.click(460, 350);
   await expect(page.locator('.flow-node[data-id="1"].selected')).toHaveCount(1);
   const mediaPlaceholderColors = await page
@@ -126,12 +151,6 @@ test("400 nodes stay GPU-virtualized and recover WebGL context", async ({
   expect(mediaPlaceholderColors).toBeGreaterThan(1);
   const visibleDomCards = await page.locator("#node-layer > .flow-node").count();
   expect(visibleDomCards).toBe(1);
-  if (process.env.CANVAS_VISUAL_AUDIT)
-    await page.screenshot({
-      path: "test-results/canvas-unselected.png",
-      fullPage: true,
-    });
-
   if (process.env.CANVAS_VISUAL_AUDIT)
     await page.screenshot({
       path: "test-results/canvas-selected.png",

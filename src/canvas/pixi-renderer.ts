@@ -372,8 +372,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       });
       this.setActiveLinkAnimation(activeCount > 0);
     }
-    const selectedIds = new Set(snapshot.selectedIds),
-      domNodeIds = new Set(snapshot.domNodeIds);
+    const selectedIds = new Set(snapshot.selectedIds);
     const offsetX = innerWidth / 2 + snapshot.camera.x,
       offsetY = innerHeight / 2 + snapshot.camera.y,
       activeCardIds = new Set<number>(),
@@ -387,17 +386,6 @@ export class PixiCanvasRenderer implements CanvasRenderer {
           screenY + node.height * snapshot.camera.zoom > -margin &&
           screenY < innerHeight + margin;
       if (!visible) continue;
-      // Preserve the already decoded Pixi thumbnail while the selected DOM
-      // editor temporarily owns the card. Releasing it here caused the image
-      // to flash blank when generation dismissed the editor.
-      if (domNodeIds.has(node.id)) {
-        const hiddenView = this.cardViews.get(node.id);
-        if (hiddenView) {
-          activeCardIds.add(node.id);
-          hiddenView.container.visible = false;
-        }
-        continue;
-      }
       activeCardIds.add(node.id);
       let view = this.cardViews.get(node.id);
       if (!view) {
@@ -532,11 +520,15 @@ export class PixiCanvasRenderer implements CanvasRenderer {
               view.media.visible = true;
               if (this.lastSnapshot) this.render(this.lastSnapshot);
             })
-            .catch(() => {
+            .catch((error) => {
               if (
                 view?.mediaUrl === mediaUrl &&
                 view.mediaRequest === mediaRequest
-              ) this.detachMedia(view);
+              ) {
+                console.warn("[canvas] thumbnail load failed", mediaUrl, error);
+                view.media.texture = Texture.EMPTY;
+                view.media.visible = false;
+              }
             });
         }
       }
@@ -626,7 +618,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       // DOM ports are intentionally hidden until interaction. Keeping gray
       // circles and a colored top rail on every Pixi card made the idle state
       // look like a different component rather than the same card renderer.
-      if (selectedIds.has(node.id))
+      if (node.id === snapshot.selectedId || selectedIds.has(node.id))
         view.shell
           .circle(0, node.height / 2, 5)
           .circle(node.width, node.height / 2, 5)

@@ -2244,6 +2244,27 @@ body[data-theme="light"] .kind-voice .video-model-popover.voice-model-menu{color
 .kind-tts.selected>.tts-config-panel.node-composer-panel{display:block!important}
 @media(max-width:780px){body:not(.home-mode) .node-composer-panel{width:min(600px,calc(100vw - 20px))!important}.node-composer-panel>textarea{height:132px!important;min-height:132px!important}.tts-voice-readout{max-width:150px}.kind-tts .tts-settings-popover{width:min(380px,calc(100vw - 40px))!important}}
 
+/* Pixi permanently owns the visible card. The selected DOM node is only an
+   interaction host for toolbars and composer panels, so selection never swaps
+   the card shell, typography, or thumbnail renderer. */
+body:not(.home-mode) .flow-node.pixi-card-editor,
+body:not(.home-mode) .flow-node.pixi-card-editor:hover,
+body:not(.home-mode) .flow-node.pixi-card-editor.selected,
+body:not(.home-mode)[data-theme="dark"] .flow-node.pixi-card-editor,
+body:not(.home-mode)[data-theme="dark"] .flow-node.pixi-card-editor:hover,
+body:not(.home-mode)[data-theme="dark"] .flow-node.pixi-card-editor.selected {
+  background:transparent!important;
+  border-color:transparent!important;
+  box-shadow:none!important;
+}
+.flow-node.pixi-card-editor::after,
+.flow-node.pixi-card-editor>.node-kind,
+.flow-node.pixi-card-editor>.node-copy,
+.flow-node.pixi-card-editor>.node-media,
+.flow-node.pixi-card-editor>.image-empty-state,
+.flow-node.pixi-card-editor>.node-label-heading,
+.flow-node.pixi-card-editor>.node-progress { display:none!important; }
+
 /* Exact video model-picker appearance; only scrolling differs. */
 .kind-voice .voice-model-picker{position:relative;align-self:center;justify-self:start}.kind-voice .voice-model-picker>summary{display:flex;max-width:310px;box-sizing:border-box;align-items:center;cursor:pointer;list-style:none}.kind-voice .voice-model-picker>summary::-webkit-details-marker{display:none}.kind-voice .voice-model-picker>summary>span{display:grid;width:16px;place-items:center;color:inherit}.kind-voice .voice-model-picker>summary>b{overflow:hidden;max-width:230px;font-weight:500;text-overflow:ellipsis;white-space:nowrap}.kind-voice .voice-model-menu{overflow-x:hidden!important;overscroll-behavior:contain}.kind-voice .voice-model-menu::-webkit-scrollbar{display:none}
 .kind-voice .voice-menu-heading{display:flex;align-items:center;justify-content:space-between}.kind-voice .voice-menu-heading>em{color:#a1a1aa;font-size:9px;font-style:normal;font-weight:500}body[data-theme="dark"] .kind-voice .voice-menu-heading>em{color:#71717a}

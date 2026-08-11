@@ -1,4 +1,4 @@
-import { Assets, Texture } from "pixi.js";
+import { Texture } from "pixi.js";
 
 type TextureEntry = {
   texture?: Texture;
@@ -22,7 +22,7 @@ export class PixiTextureCache {
     entry.usedAt = performance.now();
     if (entry.texture) return Promise.resolve(entry.texture);
     if (!entry.loading) {
-      entry.loading = Assets.load<Texture>(url)
+      entry.loading = this.load(url)
         .then((texture) => {
           const live = this.entries.get(url);
           if (!live) {
@@ -54,8 +54,8 @@ export class PixiTextureCache {
   }
 
   clear() {
-    for (const [url, entry] of this.entries) {
-      if (entry.texture) void Assets.unload(url);
+    for (const entry of this.entries.values()) {
+      if (entry.texture) entry.texture.destroy(true);
       else entry.loading?.catch(() => undefined);
     }
     this.entries.clear();
@@ -68,7 +68,36 @@ export class PixiTextureCache {
     while (idle.length > this.maxIdleEntries) {
       const [url, entry] = idle.shift()!;
       this.entries.delete(url);
-      if (entry.texture) void Assets.unload(url);
+      if (entry.texture) entry.texture.destroy(true);
+    }
+  }
+
+  private async load(url: string) {
+    // Asset thumbnail routes intentionally have no file extension. Pixi's
+    // generic Assets loader therefore cannot reliably select an image parser
+    // and silently leaves an idle card in its textual fallback. Fetching the
+    // authenticated response ourselves also guarantees session cookies are
+    // included before handing a decoded bitmap to the GPU.
+    const response = await fetch(url, {
+      credentials: "same-origin",
+      cache: "force-cache",
+    });
+    if (!response.ok)
+      throw new Error(`Thumbnail request failed (${response.status})`);
+    const blob = await response.blob();
+    if (typeof createImageBitmap === "function")
+      return Texture.from(await createImageBitmap(blob));
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+      const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const element = new Image();
+        element.onload = () => resolve(element);
+        element.onerror = () => reject(new Error("Thumbnail decode failed"));
+        element.src = objectUrl;
+      });
+      return Texture.from(image);
+    } finally {
+      URL.revokeObjectURL(objectUrl);
     }
   }
 }
