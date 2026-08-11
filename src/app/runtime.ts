@@ -2,8 +2,7 @@ import "../style.css";
 import { CanvasPerformanceMonitor } from "../canvas/performance-monitor";
 import { CanvasPaintCoordinator } from "../canvas/canvas-paint-coordinator";
 import { CanvasSnapshotController } from "../canvas/canvas-snapshot-controller";
-import { CanvasGeometryController } from "../canvas/canvas-geometry-controller";
-import { ConnectionAutoPanController } from "../canvas/connection-auto-pan-controller";
+import { CanvasConnectionFeature } from "../canvas/canvas-connection-feature";
 import { CanvasStore } from "../canvas/store";
 import {
   applyCanvasOperations,
@@ -41,11 +40,9 @@ import type {
   GenerationCapabilities,
   NodeKind,
   Point,
-  PortSide,
 } from "../nodes/node-types";
 import { NodeLifecycleController } from "../nodes/node-lifecycle-controller";
 import { GenerationGraph } from "../nodes/generation-graph";
-import { ConnectionRules } from "../nodes/connection-rules";
 import { decodePromptClipboardText, normalizePromptText } from "../nodes/prompt-text";
 import { downloadNodeImage as downloadNodeImageFile } from "../nodes/node-download";
 import { PromptNodeController } from "../nodes/prompt-node";
@@ -180,6 +177,7 @@ let videoReferenceSwapSelection: { videoId: number; sourceId: number } | null =
 const promptNodeEditor = new PromptNodeController();
 let contextPosition: Point = { x: 0, y: 0 };
 const connection = new CanvasConnectionController();
+let connectionFeature: CanvasConnectionFeature;
 let currentProjectId = localStorage.getItem("flow-project-id") ?? "default";
 const canvasNodeIds = new CanvasNodeIdAllocator({
   projectId: () => currentProjectId,
@@ -745,12 +743,6 @@ const world = (point: Point) =>
 const portWorld = nodePortPosition;
 const controlPoint = connectionControlPoint;
 const generationGraph = new GenerationGraph(nodes, links);
-const connectionRules = new ConnectionRules({
-  nodes,
-  links,
-  notify: (message) => showToast(message, "warning"),
-});
-
 function nodeIsActivelyGenerating(node: FlowNode | undefined) {
   return generationGraph.isActive(node);
 }
@@ -766,15 +758,18 @@ function imageInputOrder(link: FlowLink) {
 function orderedTargetLinks(targetId: number) {
   return generationGraph.orderedTargetLinks(targetId);
 }
-const canvasGeometry = new CanvasGeometryController(
+connectionFeature = new CanvasConnectionFeature({
   nodes,
   links,
   camera,
-  nodeViews.spatialIndex,
+  spatialIndex: nodeViews.spatialIndex,
+  connection,
   world,
   screen,
   portWorld,
-);
+  draw,
+  notify: (message) => showToast(message, "warning"),
+});
 canvasStore.subscribe((change) => {
   if (change.type === "node-position")
     change.nodeIds.forEach((id) => {
@@ -784,50 +779,24 @@ canvasStore.subscribe((change) => {
   else if (change.type === "structure") nodeViews.spatialIndex.rebuild(nodes);
 });
 function rebuildPaintIndexes() {
-  canvasGeometry.rebuild();
+  connectionFeature.rebuild();
 }
 function canvasInteractionActive() {
   return Boolean(pointer.down || domPointer.drag || interaction.marquee?.active || touchPinch.active);
 }
 function hitNode(sx: number, sy: number) {
-  return canvasGeometry.hitNode(sx, sy);
+  return connectionFeature.hitNode(sx, sy);
 }
 function hitPort(sx: number, sy: number, radius = 12, excludeNodeId?: number) {
-  return canvasGeometry.hitPort(sx, sy, radius, excludeNodeId);
-}
-function directedLink(
-  firstId: number,
-  firstSide: PortSide,
-  secondId: number,
-  secondSide: PortSide,
-): FlowLink | null {
-  return connectionRules.create(firstId, firstSide, secondId, secondSide);
+  return connectionFeature.hitPort(sx, sy, radius, excludeNodeId);
 }
 function updateConnectionPointer(sx: number, sy: number) {
-  if (!connection.active) return;
-  const candidate = hitPort(sx, sy, connection.snapRadius, connection.active.nodeId),
-    target = candidate && candidate.side === "left" ? candidate : null;
-  connection.update(
-    target
-      ? screen(portWorld(target.node, target.side))
-      : { x: sx, y: sy },
-    target ? { nodeId: target.node.id, side: target.side } : null,
-  );
+  connectionFeature.updatePointer(sx, sy);
 }
-const connectionAutoPan = new ConnectionAutoPanController({
-  camera,
-  active: () => Boolean(connection.active),
-  updatePointer: updateConnectionPointer,
-  draw: () => draw(false),
-});
-function stopConnectionAutoPan() {
-  connectionAutoPan.stop();
-}
-function startConnectionAutoPan(sx: number, sy: number) {
-  connectionAutoPan.start(sx, sy);
-}
+function stopConnectionAutoPan() { connectionFeature.stopAutoPan(); }
+function startConnectionAutoPan(sx: number, sy: number) { connectionFeature.startAutoPan(sx, sy); }
 function hitLink(sx: number, sy: number, tolerance = 9) {
-  return canvasGeometry.hitLink(sx, sy, tolerance);
+  return connectionFeature.hitLink(sx, sy, tolerance);
 }
 const canvasPaint = new CanvasPaintCoordinator({
   performance: canvasPerformance,
@@ -840,14 +809,14 @@ const canvasPaint = new CanvasPaintCoordinator({
   interacting: canvasInteractionActive,
   state: () => {
   const pendingNode = connection.active
-    ? canvasGeometry.nodeIndex.get(connection.active.nodeId) ??
+    ? connectionFeature.geometry.nodeIndex.get(connection.active.nodeId) ??
       nodes.find((node) => node.id === connection.active!.nodeId)
     : undefined;
     return {
     nodes,
     links,
     nodeCount: nodes.length,
-    indexedNodeCount: canvasGeometry.nodeIndex.size,
+    indexedNodeCount: connectionFeature.geometry.nodeIndex.size,
     domNodeIds: [...nodeViews.mountedIds],
     camera,
     selectedId: selection.selectedId,
@@ -976,7 +945,7 @@ function finishDomConnection(event: PointerEvent) {
         connection.active.nodeId,
       );
   if (target) {
-    const next = directedLink(
+    const next = connectionFeature.directedLink(
       connection.active.nodeId,
       connection.active.side,
       target.node.id,
