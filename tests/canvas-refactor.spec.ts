@@ -16,6 +16,8 @@ test("video card reference frames stay horizontally centered", () => {
 });
 
 test("video card Pixi and DOM layouts use the same dynamic reference count", () => {
+  expect(videoFrameLayout(240, 0).frameCount).toBe(0);
+  expect(videoFrameLayout(240, 0).frameWidth).toBe(0);
   expect(videoFrameLayout(240, 1).frameCount).toBe(1);
   expect(videoFrameLayout(240, 2).frameCount).toBe(2);
   expect(videoFrameLayout(240, 4).frameCount).toBe(4);

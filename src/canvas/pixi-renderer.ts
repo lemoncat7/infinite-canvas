@@ -712,10 +712,9 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         const referenceCount = (incomingByTarget.get(node.id) ?? [])
             .map((link) => byId.get(link.from))
             .filter((source) => source?.kind === "image").length,
-          visibleFrameCount = referenceCount || VIDEO_CARD_LAYOUT.placeholderCount,
           frameTop = VIDEO_CARD_LAYOUT.frameTop,
           frameGap = VIDEO_CARD_LAYOUT.frameGap,
-          { frameWidth, frameX, frameCount } = videoFrameLayout(node.width, visibleFrameCount);
+          { frameWidth, frameX, frameCount } = videoFrameLayout(node.width, referenceCount);
         for (let index = 0; index < frameCount; index++)
           view.detail
             .roundRect(

@@ -3,7 +3,6 @@ export const VIDEO_CARD_LAYOUT = {
   frameTop: 62,
   frameHeight: 72,
   frameGap: 5,
-  placeholderCount: 3,
   frameRadius: 10,
   summaryOffset: 85,
   footerHeight: 48,
@@ -11,15 +10,14 @@ export const VIDEO_CARD_LAYOUT = {
 
 export function videoFrameLayout(
   cardWidth: number,
-  requestedCount: number = VIDEO_CARD_LAYOUT.placeholderCount,
+  requestedCount: number,
 ) {
   const { horizontalPadding, frameGap } = VIDEO_CARD_LAYOUT;
-  const frameCount = Math.max(1, requestedCount);
+  const frameCount = Math.max(0, requestedCount);
   const contentWidth = Math.max(1, cardWidth - horizontalPadding * 2);
-  const frameWidth = Math.max(
-    1,
-    (contentWidth - frameGap * (frameCount - 1)) / frameCount,
-  );
+  const frameWidth = frameCount
+    ? Math.max(1, (contentWidth - frameGap * (frameCount - 1)) / frameCount)
+    : 0;
   return {
     frameCount,
     frameWidth,

@@ -91,10 +91,7 @@ export function syncVideoReferenceView(options: VideoReferenceViewOptions) {
             : `<i class="is-waiting${selected ? " swap-selected" : ""}" data-video-reference-source="${source.id}" title="参考图 ${index + 1} · 点击选择交换"><span>${index + 1}</span><small>等待</small></i>`;
         })
         .join("");
-      const placeholders = totalReferences
-        ? ""
-        : "<i><span>1</span></i><i><span>2</span></i><i><span>3</span></i>";
-      const content = `<header class="video-node-heading"><div><b>视频生成</b><small>${mode}${totalReferences ? ` · ${readyReferences} / ${totalReferences} 张已就绪` : ""}</small></div></header><div class="video-storyboard" style="--frame-count:${totalReferences || VIDEO_CARD_LAYOUT.placeholderCount}">${frames}${placeholders}<em>→</em></div><div class="video-node-summary"><em>${settings.seconds ?? "5"} 秒</em><em>${agnesKeyframes || settings.referenceMode === "keyframes" ? "关键帧" : "参考图"}</em><em>${settings.resolution ?? "720p"}</em><em>${settings.aspectRatio ?? "16:9"}</em></div><p>${node.body.trim() ? escapeHtml(node.body.trim()) : totalReferences ? (readyReferences === totalReferences ? "参考图已就绪，在下方描述画面运动" : `正在等待 ${totalReferences - readyReferences} 张参考图完成`) : "连接图片，或直接输入视频描述"}</p>`;
+      const content = `<header class="video-node-heading"><div><b>视频生成</b><small>${mode}${totalReferences ? ` · ${readyReferences} / ${totalReferences} 张已就绪` : ""}</small></div></header><div class="video-storyboard" style="--frame-count:${totalReferences}"${totalReferences ? "" : " hidden"}>${frames}<em>→</em></div><div class="video-node-summary"><em>${settings.seconds ?? "5"} 秒</em><em>${agnesKeyframes || settings.referenceMode === "keyframes" ? "关键帧" : "参考图"}</em><em>${settings.resolution ?? "720p"}</em><em>${settings.aspectRatio ?? "16:9"}</em></div><p>${node.body.trim() ? escapeHtml(node.body.trim()) : totalReferences ? (readyReferences === totalReferences ? "参考图已就绪，在下方描述画面运动" : `正在等待 ${totalReferences - readyReferences} 张参考图完成`) : "连接图片，或直接输入视频描述"}</p>`;
       const renderKey = `video-generator:${content}`;
       if (emptyState.dataset.renderKey !== renderKey) {
         emptyState.dataset.renderKey = renderKey;
