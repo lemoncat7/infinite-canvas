@@ -80,12 +80,6 @@ export function labelTextViewport(
   );
   const end = Math.min(lines.length, scrollLine + visibleLines);
   const visible = lines.slice(scrollLine, end);
-  if (scrollLine > 0 && visible.length)
-    visible[0] = `…${visible[0].slice(1)}`;
-  if (end < lines.length && visible.length) {
-    const last = visible.length - 1;
-    visible[last] = `${visible[last].replace(/.$/u, "")}…`;
-  }
   return {
     text: visible.join("\n"),
     scrollLine,

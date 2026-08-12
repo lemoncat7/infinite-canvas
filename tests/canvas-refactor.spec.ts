@@ -5,12 +5,13 @@ import { labelTextViewport } from "../src/nodes/label-text-layout";
 
 const projectId = "canvas-stress-project";
 
-test("label overflow marker remains inside the last visible line", () => {
+test("scrollable labels show complete visible lines without overflow markers", () => {
   const viewport = labelTextViewport("一二三四五六七八九十", 4, 2);
   const lines = viewport.text.split("\n");
   expect(lines).toHaveLength(2);
-  expect(lines[1]).toBe("五六七…");
-  expect(lines[1].length).toBeLessThanOrEqual(4);
+  expect(lines).toEqual(["一二三四", "五六七八"]);
+  expect(viewport.maxScrollLine).toBe(1);
+  expect(viewport.text).not.toContain("…");
 });
 
 test("generation state never regresses from running to queued", () => {
