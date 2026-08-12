@@ -530,10 +530,13 @@ test("dragging a Pixi card never mounts its DOM editor on pointer down", async (
   await page.mouse.up();
 });
 
-test("a full Pixi restore cannot be swallowed by camera panning", () => {
+test("business rendering is frozen for the complete interaction gesture", () => {
   const source = readFileSync("src/canvas/canvas-paint-coordinator.ts", "utf8");
-  expect(source).toContain("this.fullRenderPending = true");
-  expect(source).toContain(
-    "this.interactionPan && !this.fullRenderPending && this.options.interacting()",
+  expect(source).toContain("if (this.options.interacting())");
+  expect(source).toContain("this.options.renderer()?.updateInteraction(snapshot)");
+  const branch = source.slice(
+    source.indexOf("if (this.options.interacting())"),
+    source.indexOf("this.businessRenderPending = false"),
   );
+  expect(branch).not.toContain(".render(snapshot)");
 });

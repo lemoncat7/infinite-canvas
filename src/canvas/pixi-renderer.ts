@@ -879,6 +879,19 @@ export class PixiCanvasRenderer implements CanvasRenderer {
   }
 
   /** Interaction hot path: no node/link traversal, allocation, or culling. */
+  updateInteraction(snapshot: CanvasRenderSnapshot) {
+    if (this.lost || this.suspended) return;
+    this.pan(snapshot.camera);
+    for (const node of snapshot.nodes) {
+      const view = this.cardViews.get(node.id);
+      if (view) view.container.position.set(node.x, node.y);
+    }
+    // Business content, textures, status and Graphics are deliberately frozen
+    // for the entire gesture. Geometry catches up in the full render on release.
+    this.renderPendingConnection(snapshot);
+    this.app.renderer.render(this.app.stage);
+  }
+
   pan(camera: CanvasRenderSnapshot["camera"]) {
     if (this.lost || this.suspended) return;
     this.world.position.set(innerWidth / 2 + camera.x, innerHeight / 2 + camera.y);

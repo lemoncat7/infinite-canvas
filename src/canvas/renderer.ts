@@ -65,6 +65,7 @@ export type CanvasRenderSnapshot = {
 export interface CanvasRenderer {
   mount(parent: HTMLElement): Promise<void>;
   render(snapshot: CanvasRenderSnapshot): void;
+  updateInteraction(snapshot: CanvasRenderSnapshot): void;
   pan(camera: CanvasRenderSnapshot["camera"]): void;
   suspend(): void;
   resume(): void;
