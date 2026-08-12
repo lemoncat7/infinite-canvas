@@ -523,6 +523,14 @@ export class PixiCanvasRenderer implements CanvasRenderer {
                 !view.container.visible
               ) return;
               view.media.texture = texture;
+              const liveNode = this.lastSnapshot?.nodes.find(
+                (item) => item.id === node.id,
+              );
+              if (liveNode) {
+                view.media.position.set(6, 6);
+                view.media.width = Math.max(1, liveNode.width - 12);
+                view.media.height = Math.max(1, liveNode.height - 12);
+              }
               view.media.visible = true;
               if (this.lastSnapshot) this.render(this.lastSnapshot);
             })
@@ -635,26 +643,26 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         const layout = imageEmptyLayout(node.width, node.height);
         const generating = node.status === "queued" || node.status === "running";
         const progress = Math.max(0, Math.min(100, node.progress || 0));
-        view.detail
-          .roundRect(
-            layout.iconX - IMAGE_CARD_LAYOUT.iconSize / 2,
-            layout.iconY - IMAGE_CARD_LAYOUT.iconSize / 2,
-            IMAGE_CARD_LAYOUT.iconSize,
-            IMAGE_CARD_LAYOUT.iconSize,
-            IMAGE_CARD_LAYOUT.iconRadius,
-          )
-          .fill({
-            color: snapshot.dark ? 0xffffff : 0x71807b,
-            alpha: snapshot.dark ? 0.045 : 0.07,
-          })
-          .stroke({
-            color: snapshot.dark ? 0x455458 : 0xc5cfcb,
-            width: 1,
-          });
+        if (!generating)
+          view.detail
+            .roundRect(
+              layout.iconX - IMAGE_CARD_LAYOUT.iconSize / 2,
+              layout.iconY - IMAGE_CARD_LAYOUT.iconSize / 2,
+              IMAGE_CARD_LAYOUT.iconSize,
+              IMAGE_CARD_LAYOUT.iconSize,
+              IMAGE_CARD_LAYOUT.iconRadius,
+            )
+            .fill({
+              color: snapshot.dark ? 0xffffff : 0x71807b,
+              alpha: snapshot.dark ? 0.045 : 0.07,
+            })
+            .stroke({
+              color: snapshot.dark ? 0x455458 : 0xc5cfcb,
+              width: 1,
+            });
         view.icon.position.set(layout.iconX, layout.iconY);
-        view.icon.text = generating
-          ? "◌"
-          : presentation.icon || "";
+        view.icon.text = generating ? "" : presentation.icon || "";
+        view.icon.visible = !generating;
         view.icon.style.fontSize = 19;
         view.title.anchor.set(0.5);
         view.title.position.set(layout.centerX, layout.titleY);

@@ -11,6 +11,7 @@ export class CanvasPaintCoordinator {
   private frame: number | null = null;
   private needsDomSync = true;
   private interactionPan = false;
+  private fullRenderPending = false;
 
   constructor(private readonly options: {
     performance: CanvasPerformanceMonitor;
@@ -31,6 +32,7 @@ export class CanvasPaintCoordinator {
   }) {}
 
   draw = (syncDom = true) => {
+    this.fullRenderPending = true;
     if (syncDom) this.needsDomSync = true;
     if (this.frame === null) this.frame = requestAnimationFrame(this.paint);
   };
@@ -43,12 +45,13 @@ export class CanvasPaintCoordinator {
   paint = () => {
     const startedAt = this.options.performance.beginFrame();
     this.frame = null;
-    if (this.interactionPan && this.options.interacting()) {
+    if (this.interactionPan && !this.fullRenderPending && this.options.interacting()) {
       this.interactionPan = false;
       this.options.renderer()?.pan(this.options.camera());
       this.options.performance.endFrame(startedAt);
       return;
     }
+    this.fullRenderPending = false;
     this.interactionPan = false;
     const syncUi = this.needsDomSync && !this.options.interacting();
     if (syncUi) this.needsDomSync = false;

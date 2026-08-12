@@ -273,6 +273,7 @@ test("the Pixi image generation state avoids animated arc paths and duplicate pr
   expect(source).not.toContain(".arc(\n                layout.iconX");
   expect(source).toContain('`生成中 ${Math.round(progress)}%`');
   expect(source).toContain(': "正在处理画面"');
+  expect(source).toContain('view.icon.visible = !generating');
 });
 
 test("400 nodes stay GPU-virtualized and recover WebGL context", async ({
@@ -527,4 +528,12 @@ test("dragging a Pixi card never mounts its DOM editor on pointer down", async (
   await page.mouse.move(560, 410, { steps: 4 });
   await expect(page.locator("#node-layer > .flow-node")).toHaveCount(0);
   await page.mouse.up();
+});
+
+test("a full Pixi restore cannot be swallowed by camera panning", () => {
+  const source = readFileSync("src/canvas/canvas-paint-coordinator.ts", "utf8");
+  expect(source).toContain("this.fullRenderPending = true");
+  expect(source).toContain(
+    "this.interactionPan && !this.fullRenderPending && this.options.interacting()",
+  );
 });
