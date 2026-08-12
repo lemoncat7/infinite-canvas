@@ -55,6 +55,15 @@ test("selected DOM video card repaints linked reference thumbnails", () => {
   expect(repaint).toContain("this.drawImage(target, image)");
 });
 
+test("selected video generator supports pointer drag reference swapping", () => {
+  const source = readFileSync("src/nodes/video-reference-view.ts", "utf8");
+  expect(source).toContain("frame.setPointerCapture(event.pointerId)");
+  expect(source).toContain("exchangeReferences(");
+  expect(source).toContain("item.link.inputOrder = index + 1");
+  expect(source).toContain("frame.classList.add(\"is-dragging\")");
+  expect(source).toContain("?.classList.add(\"drag-over\")");
+});
+
 const snapNode = (id: number, x: number, y: number, width = 100, height = 80) => ({
   id, x, y, width, height, kind: "prompt" as const, title: "", body: "", accent: "",
 });

@@ -97,16 +97,100 @@ export function syncVideoReferenceView(options: VideoReferenceViewOptions) {
         emptyState.dataset.renderKey = renderKey;
         emptyState.innerHTML = content;
       }
+      const exchangeReferences = (firstSourceId: number, secondSourceId: number) => {
+        if (firstSourceId === secondSourceId) return false;
+        const first = links.find(
+            (link) => link.to === node.id && link.from === firstSourceId,
+          ),
+          second = links.find(
+            (link) => link.to === node.id && link.from === secondSourceId,
+          );
+        if (!first || !second) return false;
+        referenceLinks.forEach(
+          (item, index) => (item.link.inputOrder = index + 1),
+        );
+        const firstOrder = first.inputOrder!,
+          secondOrder = second.inputOrder!;
+        first.inputOrder = secondOrder;
+        second.inputOrder = firstOrder;
+        setSwap(null);
+        scheduleSave();
+        commitHistory();
+        notify(
+          `参考图 ${firstOrder} 与参考图 ${secondOrder} 已交换`,
+          "success",
+        );
+        draw();
+        return true;
+      };
+      let draggedSourceId = 0,
+        dragStartX = 0,
+        dragStartY = 0,
+        didDrag = false;
       emptyState
         .querySelectorAll<HTMLElement>("[data-video-reference-source]")
         .forEach((frame) => {
           frame.onpointerdown = (event) => {
             event.preventDefault();
             event.stopPropagation();
+            draggedSourceId = Number(frame.dataset.videoReferenceSource) || 0;
+            dragStartX = event.clientX;
+            dragStartY = event.clientY;
+            didDrag = false;
+            frame.setPointerCapture(event.pointerId);
+            frame.classList.add("is-dragging");
+          };
+          frame.onpointermove = (event) => {
+            if (!draggedSourceId || !frame.hasPointerCapture(event.pointerId)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (!didDrag && Math.hypot(event.clientX - dragStartX, event.clientY - dragStartY) > 5)
+              didDrag = true;
+            emptyState
+              .querySelectorAll("[data-video-reference-source].drag-over")
+              .forEach((item) => item.classList.remove("drag-over"));
+            if (!didDrag) return;
+            document
+              .elementFromPoint(event.clientX, event.clientY)
+              ?.closest<HTMLElement>("[data-video-reference-source]")
+              ?.classList.add("drag-over");
+          };
+          frame.onpointerup = (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const target = document
+              .elementFromPoint(event.clientX, event.clientY)
+              ?.closest<HTMLElement>("[data-video-reference-source]");
+            frame.classList.remove("is-dragging");
+            emptyState
+              .querySelectorAll("[data-video-reference-source].drag-over")
+              .forEach((item) => item.classList.remove("drag-over"));
+            if (frame.hasPointerCapture(event.pointerId))
+              frame.releasePointerCapture(event.pointerId);
+            const sourceId = draggedSourceId;
+            draggedSourceId = 0;
+            if (didDrag && target) {
+              exchangeReferences(
+                sourceId,
+                Number(target.dataset.videoReferenceSource) || 0,
+              );
+            }
+          };
+          frame.onpointercancel = () => {
+            draggedSourceId = 0;
+            didDrag = false;
+            frame.classList.remove("is-dragging");
+            emptyState
+              .querySelectorAll("[data-video-reference-source].drag-over")
+              .forEach((item) => item.classList.remove("drag-over"));
           };
           frame.onclick = (event) => {
             event.preventDefault();
             event.stopPropagation();
+            if (didDrag) {
+              didDrag = false;
+              return;
+            }
             const sourceId = Number(frame.dataset.videoReferenceSource);
             if (!sourceId) return;
             if (
@@ -131,34 +215,10 @@ export function syncVideoReferenceView(options: VideoReferenceViewOptions) {
               draw();
               return;
             }
-            const first = links.find(
-                (link) =>
-                  link.to === node.id &&
-                  link.from === getSwap()!.sourceId,
-              ),
-              second = links.find(
-                (link) => link.to === node.id && link.from === sourceId,
-              );
-            if (!first || !second) {
+            if (!exchangeReferences(getSwap()!.sourceId, sourceId)) {
               setSwap(null);
               draw();
-              return;
             }
-            referenceLinks.forEach(
-              (item, index) => (item.link.inputOrder = index + 1),
-            );
-            const firstOrder = first.inputOrder!,
-              secondOrder = second.inputOrder!;
-            first.inputOrder = secondOrder;
-            second.inputOrder = firstOrder;
-            setSwap(null);
-            scheduleSave();
-            commitHistory();
-            notify(
-              `参考图 ${firstOrder} 与参考图 ${secondOrder} 已交换`,
-              "success",
-            );
-            draw();
           };
         });
       if (onscreen)
