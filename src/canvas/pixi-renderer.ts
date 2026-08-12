@@ -662,6 +662,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
             });
           if (node.status === "running" && progress > 0)
             view.detail
+              .moveTo(layout.iconX, layout.iconY - radius)
               .arc(
                 layout.iconX,
                 layout.iconY,

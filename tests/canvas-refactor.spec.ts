@@ -228,6 +228,11 @@ test("a queued Pixi image replaces empty actions with progress state", async ({ 
   expect(await page.evaluate(() => document.querySelectorAll("#canvas-pixi").length)).toBe(1);
 });
 
+test("the Pixi image progress arc starts at its circumference without a center chord", () => {
+  const source = readFileSync("src/canvas/pixi-renderer.ts", "utf8");
+  expect(source).toContain(".moveTo(layout.iconX, layout.iconY - radius)\n              .arc(");
+});
+
 test("400 nodes stay GPU-virtualized and recover WebGL context", async ({
   page,
 }) => {
