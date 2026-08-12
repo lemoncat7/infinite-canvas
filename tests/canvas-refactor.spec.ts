@@ -146,6 +146,9 @@ test("an idle Pixi label clamps long text and opens DOM editing on double click"
   await page.goto("/?canvasPerf=1#/canvas");
   await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
   await expect(page.locator("#node-layer > .flow-node")).toHaveCount(0);
+  await page.mouse.click(460, 350);
+  const selectedCopy = page.locator(".flow-node.kind-prompt.selected .node-copy");
+  await expect(selectedCopy).toBeHidden();
   await page.mouse.dblclick(460, 350);
   const editor = page.locator('.flow-node.kind-prompt .node-copy[contenteditable="true"]');
   await expect(editor).toBeVisible();
