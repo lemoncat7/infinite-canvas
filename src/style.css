@@ -407,8 +407,6 @@ body[data-theme="light"] .agent-mode.open > button {
 
 .notification-load-hint { padding:8px 0 3px; color:#85858e; font-size:10px; text-align:center; }
 body[data-theme="light"] .notification-load-hint { color:#71717a; }
-body.page-backgrounded *,body.page-backgrounded *::before,body.page-backgrounded *::after,body.page-unfocused *,body.page-unfocused *::before,body.page-unfocused *::after { animation-play-state:paused!important; }
-
 body[data-theme="light"] { color:#292524; background:#f4f2ed; }
 body[data-theme="light"] .glass { color:#292524; background:rgba(251,250,247,.92); border-color:#d6d3ca; box-shadow:0 16px 40px rgba(28,25,23,.1); }
 body[data-theme="light"] button { color:#57534e; background:#eceae5; border-color:#d6d3ca; } body[data-theme="light"] button:hover { color:#292524; background:#e4e1da; }

@@ -5,7 +5,6 @@ export class MediaLifecycleController {
   readonly retries = new Map<string, number>();
   readonly cache: MediaLruCache<HTMLImageElement>;
   private restoreFrame = 0;
-  private restoreTimer = 0;
 
   constructor(
     options: {
@@ -73,57 +72,23 @@ export class MediaLifecycleController {
   }) {
     const cancelRestore = () => {
       if (this.restoreFrame) cancelAnimationFrame(this.restoreFrame);
-      if (this.restoreTimer) clearTimeout(this.restoreTimer);
       this.restoreFrame = 0;
-      this.restoreTimer = 0;
     };
     const restore = () => {
       if (document.visibilityState !== "visible") return;
       cancelRestore();
-      document.body.classList.remove("page-backgrounded", "page-unfocused");
-      options.resumeRenderer();
       this.restoreFrame = requestAnimationFrame(() => {
         this.restoreFrame = 0;
         options.resize();
-        // Restore the GPU scene first. DOM media repainting is deliberately
-        // deferred so the first pointer interaction after tab focus stays hot.
         options.draw(false);
-        this.restoreTimer = window.setTimeout(() => {
-          this.restoreTimer = 0;
-          if (document.visibilityState !== "visible") return;
-          options.clearNodeStates();
-          options.draw(true);
-        }, 180);
       });
     };
     document.addEventListener("visibilitychange", () => {
-      const backgrounded = document.hidden;
-      document.body.classList.toggle("page-backgrounded", backgrounded);
-      if (backgrounded) {
-        cancelRestore();
-        options.suspendRenderer();
-        this.clear();
-        this.releasePreviews();
-        options.clearNodeStates();
-        options.nodeLayer
-          .querySelectorAll<HTMLElement>(".node-media")
-          .forEach((media) => delete media.dataset.sourceKey);
-        options.nodeLayer
-          .querySelectorAll<HTMLCanvasElement>("[data-reference-url]")
-          .forEach((media) => delete media.dataset.paintedUrl);
-        options.nodeLayer
-          .querySelectorAll<HTMLCanvasElement>(".node-media-canvas")
-          .forEach((media) => {
-            media.width = 2;
-            media.height = 2;
-          });
-      } else restore();
+      if (document.hidden) cancelRestore();
+      else restore();
     });
-    window.addEventListener("pagehide", () => { cancelRestore(); this.clear(); });
+    window.addEventListener("pagehide", cancelRestore);
     window.addEventListener("pageshow", restore);
     window.addEventListener("focus", restore);
-    window.addEventListener("blur", () =>
-      document.body.classList.add("page-unfocused"),
-    );
   }
 }
