@@ -834,7 +834,11 @@ export class PixiCanvasRenderer implements CanvasRenderer {
             alpha: 0.72,
             width: 1,
           });
-      if (presentation.icon && !mediaOnly)
+      if (
+        presentation.icon &&
+        !mediaOnly &&
+        !(node.kind === "image" && !node.mediaUrl)
+      )
         view.shell
           .roundRect(node.width / 2 - 21, node.height / 2 - 57, 42, 42, 11)
           .fill({

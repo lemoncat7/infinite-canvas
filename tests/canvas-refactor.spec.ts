@@ -191,6 +191,15 @@ test("a Pixi image opens the existing preview on double click", async ({ page })
   await expect(page.locator("#asset-preview")).toHaveClass(/open/);
 });
 
+test("an empty Pixi image keeps a single aligned icon frame", async ({ page }) => {
+  const { canvas } = await mockApi(page, 1);
+  Object.assign(canvas.nodes[0], { kind: "image", mediaUrl: undefined });
+  await page.goto("/?canvasPerf=1#/canvas");
+  await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator("#node-layer > .flow-node")).toHaveCount(0);
+  expect(await page.evaluate(() => document.querySelectorAll("#canvas-pixi").length)).toBe(1);
+});
+
 test("400 nodes stay GPU-virtualized and recover WebGL context", async ({
   page,
 }) => {
