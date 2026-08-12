@@ -29,10 +29,24 @@ type Options = {
 export function synchronizeNodeDom(options: Options) {
   const { nodes, camera } = options;
   options.viewport.style.transform = `translate3d(${innerWidth / 2 + camera.x}px, ${innerHeight / 2 + camera.y}px,0) scale(${camera.zoom})`;
+  const offsetX = innerWidth / 2 + camera.x,
+    offsetY = innerHeight / 2 + camera.y,
+    margin = 480,
+    visibleVideoGenerators = nodes
+      .filter((node) =>
+        node.kind === "video" &&
+        node.role !== "result" &&
+        offsetX + (node.x + node.width) * camera.zoom > -margin &&
+        offsetX + node.x * camera.zoom < innerWidth + margin &&
+        offsetY + (node.y + node.height) * camera.zoom > -margin &&
+        offsetY + node.y * camera.zoom < innerHeight + margin,
+      )
+      .map((node) => node.id);
   const required = new Set([
     options.selectedDomVisible ? options.selectedId : 0,
     options.editingId,
     options.draggingId,
+    ...visibleVideoGenerators,
   ].filter(Boolean));
   const allIds = new Set(nodes.map((node) => node.id));
   options.mountedIds.clear();
@@ -64,7 +78,7 @@ export function synchronizeNodeDom(options: Options) {
     }
     if (!element) { element = options.createElement(node); options.layer.append(element); options.states.delete(node.id); }
     const screenX = innerWidth / 2 + camera.x + node.x * camera.zoom,
-      screenY = innerHeight / 2 + camera.y + node.y * camera.zoom, margin = 480;
+      screenY = innerHeight / 2 + camera.y + node.y * camera.zoom;
     const workflowWaiting = Boolean(node.agentAuto && node.status === "waiting");
     const locked = (options.isGenerating(node) || workflowWaiting) && !(node.kind === "video" && node.role !== "result");
     const flags: NodeDomSyncFlags = {

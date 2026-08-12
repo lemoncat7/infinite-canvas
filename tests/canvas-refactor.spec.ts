@@ -68,13 +68,24 @@ test("selected video generator supports pointer drag reference swapping", () => 
 
 test("selected Pixi video generator exposes its DOM storyboard hit layer", () => {
   const source = readFileSync("src/style.css", "utf8");
-  const selector = "flow-node.pixi-card-editor.kind-video.node-generator.selected>.image-empty-state";
+  const selector = "flow-node.pixi-card-editor.kind-video.node-generator>.image-empty-state";
   expect(source).toContain(selector);
   const rule = source.slice(source.indexOf(selector), source.indexOf("}", source.indexOf(selector)));
   expect(rule).toContain("display:grid!important");
   expect(rule).toContain("pointer-events:auto!important");
   expect(rule).toContain("border:0!important");
   expect(rule).toContain("box-shadow:inset 0 0 0 1px");
+});
+
+test("visible video generators use one DOM renderer in selected and idle states", () => {
+  const dom = readFileSync("src/nodes/node-dom-synchronizer.ts", "utf8");
+  const pixi = readFileSync("src/canvas/pixi-renderer.ts", "utf8");
+  expect(dom).toContain("visibleVideoGenerators");
+  expect(dom).toContain("node.kind === \"video\"");
+  expect(dom).toContain("node.role !== \"result\"");
+  expect(dom).toContain("...visibleVideoGenerators");
+  expect(pixi).toContain("const domNodeIds = new Set(snapshot.domNodeIds)");
+  expect(pixi).toContain("if (domNodeIds.has(node.id)) continue");
 });
 
 test("Pixi video text uses high-resolution textures without changing card size", () => {

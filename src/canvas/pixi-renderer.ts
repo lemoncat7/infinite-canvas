@@ -346,11 +346,13 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       this.renderLinkGeometry(snapshot, byId);
     }
     const selectedIds = new Set(snapshot.selectedIds);
+    const domNodeIds = new Set(snapshot.domNodeIds);
     const offsetX = innerWidth / 2 + snapshot.camera.x,
       offsetY = innerHeight / 2 + snapshot.camera.y,
       activeCardIds = new Set<number>(),
       margin = 520;
     for (const node of snapshot.nodes) {
+      if (domNodeIds.has(node.id)) continue;
       const screenX = node.x * snapshot.camera.zoom + offsetX,
         screenY = node.y * snapshot.camera.zoom + offsetY,
         visible =

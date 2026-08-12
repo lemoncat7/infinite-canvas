@@ -2301,7 +2301,7 @@ body:not(.home-mode)[data-theme="dark"] .flow-node.pixi-card-editor.selected {
 .flow-node.pixi-card-editor>.node-progress { display:none!important; }
 /* A selected video generator needs its DOM storyboard for reference ordering.
    Other selected cards remain Pixi-backed interaction shells. */
-body.renderer-pixi .flow-node.pixi-card-editor.kind-video.node-generator.selected>.image-empty-state{
+body.renderer-pixi .flow-node.pixi-card-editor.kind-video.node-generator>.image-empty-state{
   position:absolute!important;
   z-index:3!important;
   inset:0!important;
@@ -2317,6 +2317,7 @@ body.renderer-pixi .flow-node.pixi-card-editor.kind-video.node-generator.selecte
   box-shadow:inset 0 0 0 1px var(--ws-border)!important;
   pointer-events:auto!important;
 }
+body.renderer-pixi .flow-node.pixi-card-editor.kind-video.node-generator>.image-empty-state>.video-storyboard{pointer-events:none!important}
 body.renderer-pixi .flow-node.pixi-card-editor.kind-video.node-generator.selected>.image-empty-state>.video-storyboard,
 body.renderer-pixi .flow-node.pixi-card-editor.kind-video.node-generator.selected>.image-empty-state>.video-storyboard>[data-video-reference-source]{pointer-events:auto!important;touch-action:none!important}
 .flow-node.pixi-card-editor>.node-copy.editing {
