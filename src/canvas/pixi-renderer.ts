@@ -650,7 +650,12 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         view.hint.position.set(node.width / 2, buttonY + 10);
         view.hint.style.fontSize = 10;
       } else if (!mediaOnly && node.kind === "prompt") {
-        view.body.text = node.body || "暂无描述";
+        const maxBodyLines = Math.max(1, Math.floor((node.height - 82) / 18));
+        view.body.text = this.clampPromptText(
+          node.body || "暂无描述",
+          Math.max(8, Math.floor((node.width - 44) / 11)),
+          maxBodyLines,
+        );
         view.title.style.fontSize = 16;
         view.title.style.fontWeight = "700";
         view.title.anchor.set(0);
@@ -874,6 +879,23 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       /^(\/api\/(?:public\/)?assets\/[^/]+)\/content(?:\/.*)?$/,
       "$1/thumbnail",
     );
+  }
+
+  private clampPromptText(value: string, columns: number, maxLines: number) {
+    const normalized = value.replace(/\r/g, "").trim();
+    if (!normalized) return "暂无描述";
+    let used = 0;
+    const limit = Math.max(columns, columns * maxLines);
+    const output = Array.from(normalized).reduce((text, character) => {
+      if (used >= limit) return text;
+      if (character === "\n") {
+        used = Math.ceil((used + 1) / columns) * columns;
+        return used <= limit ? `${text}\n` : text;
+      }
+      used += /[\u0000-\u00ff]/.test(character) ? 0.55 : 1;
+      return used <= limit ? text + character : text;
+    }, "");
+    return output.length < normalized.length ? `${output.trimEnd()}…` : output;
   }
 
   private renderPendingConnection(snapshot: CanvasRenderSnapshot) {

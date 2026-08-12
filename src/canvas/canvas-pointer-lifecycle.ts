@@ -9,6 +9,7 @@ type Options = {
   selection: CanvasSelectionController;
   zoom: () => number;
   hitNode: (x: number, y: number) => FlowNode | undefined;
+  editPrompt: (node: FlowNode) => void;
   cancelCameraAnimation: () => void;
   toggleBatchNode: (id: number) => void;
   updateEditor: () => void;
@@ -33,6 +34,7 @@ export class CanvasPointerLifecycle {
     o.canvas.addEventListener("pointermove", this.onMove);
     o.canvas.addEventListener("pointerup", this.onUp);
     o.canvas.addEventListener("pointercancel", this.onCancel);
+    o.canvas.addEventListener("dblclick", this.onDoubleClick);
     window.addEventListener("blur", this.onPageInterruption);
     document.addEventListener("visibilitychange", this.onVisibilityChange);
     o.canvas.addEventListener("wheel", this.onCanvasWheel, { passive: false });
@@ -106,6 +108,16 @@ export class CanvasPointerLifecycle {
     this.clearPanVisual(); this.o.interaction.resetPointer();
     if (this.o.connectionActive()) this.o.cancelConnection();
     this.o.draw();
+  };
+  private onDoubleClick = (event: MouseEvent) => {
+    const node = this.o.hitNode(event.clientX, event.clientY);
+    if (node?.kind !== "prompt") return;
+    event.preventDefault();
+    event.stopPropagation();
+    this.o.selection.selectedId = node.id;
+    this.o.updateEditor();
+    this.o.draw(true);
+    this.o.editPrompt(node);
   };
   private onPageInterruption = () => {
     if (!this.o.interaction.pointer.down) return;

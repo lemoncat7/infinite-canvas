@@ -136,6 +136,24 @@ test("prompt agent opens the isolated comic studio", async ({ page }) => {
   await expect(page.locator(".prompt-agent-panel")).toHaveClass(/comic-hidden/);
 });
 
+test("an idle Pixi label clamps long text and opens DOM editing on double click", async ({ page }) => {
+  const { canvas } = await mockApi(page, 3);
+  Object.assign(canvas.nodes[0], {
+    kind: "prompt",
+    title: "长标签",
+    body: "这是一段用于验证标签内容不会越过卡片底部的长文本。".repeat(30),
+  });
+  await page.goto("/?canvasPerf=1#/canvas");
+  await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator("#node-layer > .flow-node")).toHaveCount(0);
+  await page.mouse.dblclick(460, 350);
+  const editor = page.locator('.flow-node.kind-prompt .node-copy[contenteditable="true"]');
+  await expect(editor).toBeVisible();
+  await editor.fill("双击后可以正常编辑标签内容");
+  await editor.press("Control+Enter");
+  await expect(editor).not.toBeVisible();
+});
+
 test("400 nodes stay GPU-virtualized and recover WebGL context", async ({
   page,
 }) => {

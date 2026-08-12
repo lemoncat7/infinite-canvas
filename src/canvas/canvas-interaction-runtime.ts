@@ -148,6 +148,15 @@ export class CanvasInteractionRuntime {
         options.rendering().connection.stopAutoPan();
       },
       hitNode: (x, y) => options.rendering().connection.hitNode(x, y),
+      editPrompt: (node) => {
+        const element = nodeLayer.querySelector<HTMLElement>(
+          `.flow-node[data-id="${node.id}"]`,
+        );
+        if (element) {
+          options.nodeRuntime().beginTextEdit(node, element);
+          options.draw(true);
+        }
+      },
       moveNode: (id, dx, dy) => store.moveNodeById(id, dx, dy),
       panCamera: (dx, dy) => store.panCamera(dx, dy),
       closeQuickMenu: () => options.controls().closeQuickMenu(),

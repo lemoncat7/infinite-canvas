@@ -47,6 +47,7 @@ export class PromptNodeController {
     this.editingId = node.id;
     copy.contentEditable = "true";
     copy.classList.add("editing");
+    element.classList.add("prompt-inline-editing");
     copy.focus();
     const range = document.createRange();
     range.selectNodeContents(copy);
@@ -59,6 +60,7 @@ export class PromptNodeController {
       this.editingId = 0;
       copy.contentEditable = "false";
       copy.classList.remove("editing");
+      element.classList.remove("prompt-inline-editing");
       copy.oninput = null;
       copy.onkeydown = null;
       copy.onblur = null;

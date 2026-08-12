@@ -40,6 +40,7 @@ export class CanvasInputFeature {
     finishConnection: (event: PointerEvent) => void;
     cancelConnection: () => void;
     hitNode: (x: number, y: number) => FlowNode | undefined;
+    editPrompt: (node: FlowNode) => void;
     moveNode: (id: number, dx: number, dy: number) => void;
     panCamera: (dx: number, dy: number) => void;
     closeQuickMenu: () => void;
@@ -131,6 +132,7 @@ export class CanvasInputFeature {
       selection: options.selection,
       zoom: () => options.camera.zoom,
       hitNode: options.hitNode,
+      editPrompt: options.editPrompt,
       cancelCameraAnimation: this.cameraViewport.cancel,
       toggleBatchNode: options.toggleBatchNode,
       updateEditor: options.updateEditor,
