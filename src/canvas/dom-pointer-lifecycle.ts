@@ -96,7 +96,13 @@ export class DomPointerLifecycle {
         if (item) Object.assign(item, { x: origin.x + dx, y: origin.y + dy });
       } else {
         const item = this.options.nodes.find((candidate) => candidate.id === drag.id);
-        if (item) Object.assign(item, { x: drag.initialX + dx, y: drag.initialY + dy });
+        if (item) {
+          Object.assign(item, { x: drag.initialX + dx, y: drag.initialY + dy });
+          // The element that owns the pointer is the authoritative DOM card
+          // during this drag. Move it in this frame instead of waiting for a
+          // DOM reconciliation after pointerup.
+          drag.element.style.transform = `translate(${item.x}px, ${item.y}px)`;
+        }
       }
       this.options.syncElements(drag.groupInitial?.size ? drag.groupInitial.keys() : [drag.id]);
       this.options.setEditing(); this.options.draw(false); this.dragFrame = null;

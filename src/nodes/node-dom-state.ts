@@ -1,5 +1,6 @@
 import type { FlowNode } from "./node-types";
 import { LABEL_TEXT_LAYOUT, labelBodyMetrics } from "./label-text-layout";
+import { NODE_CARD_STYLE } from "./node-card-style";
 
 export interface NodeViewFlags {
   selected: boolean;
@@ -18,12 +19,12 @@ export function normalizeNodeViewSize(node: FlowNode) {
   if (!Number.isFinite(node.width) || node.width < 1) node.width = 280;
   if (!Number.isFinite(node.height) || node.height < 1) node.height = 220;
   if (
-    (node.kind === "video" && node.role !== "result") ||
+    ((node.kind === "image" || node.kind === "video") && node.role !== "result") ||
     node.kind === "voice" ||
     node.kind === "tts"
   ) {
-    node.width = 290;
-    node.height = 225;
+    node.width = NODE_CARD_STYLE.generatorWidth;
+    node.height = NODE_CARD_STYLE.generatorHeight;
   }
 }
 
@@ -32,13 +33,14 @@ export function styleNodeEditor(
   node: FlowNode,
   flags: NodeViewFlags,
 ) {
-  const className = `flow-node pixi-card-editor kind-${node.kind}${node.role === "result" || node.kind === "audio" ? " node-result" : " node-generator"}${flags.selected ? " selected" : ""}${flags.editing ? " prompt-inline-editing" : ""}${flags.batchSelected ? " batch-selected" : ""}${flags.agentReference ? " agent-reference" : ""}${flags.locked ? " generating" : ""}${flags.workflowWaiting ? " workflow-waiting" : ""}`;
+  const className = `flow-node pixi-card-editor pixi-owned-editor kind-${node.kind}${node.role === "result" || node.kind === "audio" ? " node-result" : " node-generator"}${flags.selected ? " selected" : ""}${flags.editing ? " prompt-inline-editing" : ""}${flags.batchSelected ? " batch-selected" : ""}${flags.agentReference ? " agent-reference" : ""}${flags.locked ? " generating" : ""}${flags.workflowWaiting ? " workflow-waiting" : ""}`;
   if (element.className !== className) element.className = className;
   element.style.transform = `translate(${node.x}px, ${node.y}px)`;
   element.style.width = `${node.width}px`;
   element.style.height = `${node.height}px`;
   element.style.setProperty("--accent", node.accent);
   element.style.setProperty("--font-scale", String(node.fontScale ?? 1));
+  element.style.setProperty("--node-card-radius", `${NODE_CARD_STYLE.radius}px`);
   const labelMetrics = labelBodyMetrics(node.width, node.height, node.fontScale);
   element.style.setProperty("--label-x", `${LABEL_TEXT_LAYOUT.horizontalPadding}px`);
   element.style.setProperty("--label-title-top", `${LABEL_TEXT_LAYOUT.titleTop}px`);

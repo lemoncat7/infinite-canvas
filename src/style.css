@@ -48,7 +48,7 @@ body.canvas-context-lost::after { content:"正在恢复画布…"; position:fixe
 #canvas.dragging { cursor:grabbing; }
 #node-viewport { position:fixed; z-index:1; left:0; top:0; width:2px; height:2px; overflow:visible; transform-origin:0 0; pointer-events:none; backface-visibility:hidden; }
 #node-layer { position:absolute; left:0; top:0; width:2px; height:2px; overflow:visible; backface-visibility:hidden; }
-.flow-node { --accent:#8ee7ff; position:absolute; display:flex; flex-direction:column; overflow:visible; color:#222522; background:#f7f7f4; border:1px solid rgba(24,28,24,.14); border-radius:14px; box-shadow:0 10px 28px rgba(0,0,0,.2); pointer-events:auto; touch-action:none; user-select:none; -webkit-user-drag:none; transition:border-color .16s,box-shadow .16s; cursor:grab; }
+.flow-node { --accent:#8ee7ff; --node-card-radius:14px; position:absolute; display:flex; flex-direction:column; overflow:visible; color:#222522; background:#f7f7f4; border:1px solid rgba(24,28,24,.14); border-radius:var(--node-card-radius); box-shadow:0 10px 28px rgba(0,0,0,.2); pointer-events:auto; touch-action:none; user-select:none; -webkit-user-drag:none; transition:border-color .16s,box-shadow .16s; cursor:grab; }
 .flow-node.dragging { cursor:grabbing; transition:none; will-change:transform; }
 .flow-node img,.flow-node video,.flow-node canvas { -webkit-user-drag:none; user-select:none; }
 .flow-node:hover { border-color:#ff4d5e; box-shadow:0 0 0 2px rgba(255,77,94,.22),0 0 26px rgba(255,54,74,.22),0 16px 44px rgba(0,0,0,.3); }
@@ -214,7 +214,7 @@ body[data-theme="dark"] .quick-node-menu button[data-quick-add="tts"] { box-shad
 .node-info-details { padding:10px 20px 20px; }.node-info-details dl { margin:0; }.node-info-details dl div { display:grid; grid-template-columns:90px 1fr; gap:16px; padding:11px 2px; border-bottom:1px solid #eceae5; }.node-info-details dt { color:#78716c; font-size:11px; }.node-info-details dd { overflow:hidden; margin:0; color:#292524; font:500 11px ui-monospace,SFMono-Regular,monospace; text-overflow:ellipsis; }.node-info-details dd i { display:inline-block; width:7px; height:7px; margin-right:7px; border-radius:50%; background:#54a35a; }
 .node-info-modal pre { overflow:auto; max-height:430px; margin:0; padding:18px 20px 22px; color:#292524; background:#f2f0eb; font:11px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; }
 .node-progress { position:absolute; right:10px; bottom:8px; left:10px; overflow:hidden; height:4px; background:#dfe2dc; border-radius:5px; opacity:0; }.node-progress.visible { opacity:1; }.node-progress i { display:block; height:100%; background:#2f80ff; transition:width .3s; }
-.kind-video.node-result .node-progress { right:12px; bottom:43px; left:12px; z-index:4; height:5px; background:rgba(127,127,127,.2); }.kind-video.node-result .node-progress i { background:linear-gradient(90deg,#d9ed70,#88cdd0); box-shadow:0 0 10px rgba(217,237,112,.35); }.node-progress.indeterminate i { width:42%!important; animation:job-progress-wait 1.15s ease-in-out infinite; }@keyframes job-progress-wait { 0% { transform:translateX(-115%); } 100% { transform:translateX(280%); } }.kind-video.node-result .video-generation-count { z-index:4; min-width:78px; text-align:center; }
+.kind-video.node-result .node-progress { display:none!important; }.node-progress.indeterminate i { width:42%!important; animation:job-progress-wait 1.15s ease-in-out infinite; }@keyframes job-progress-wait { 0% { transform:translateX(-115%); } 100% { transform:translateX(280%); } }.kind-video.node-result .video-generation-count { z-index:4; min-width:78px; text-align:center; }
 .image-config-panel { position:absolute; z-index:6; top:calc(100% + 14px); left:50%; display:none; width:440px; padding:14px; translate:-50% 0; color:#292524; background:linear-gradient(145deg,rgba(255,255,253,.99),rgba(246,244,239,.98)); border:1px solid rgba(120,113,108,.25); border-radius:22px; box-shadow:0 24px 70px rgba(28,25,23,.22),inset 0 1px rgba(255,255,255,.85); cursor:default; user-select:none; backdrop-filter:blur(22px); }.image-config-panel.open { display:block; animation:composer-in .2s cubic-bezier(.2,.8,.2,1); } @keyframes composer-in { from { opacity:0; transform:translateY(-6px) scale(.98); } }
 .image-composer-title { display:flex; align-items:center; gap:9px; padding:1px 10px 5px; }.image-composer-title span { color:#9f1239; font-size:8px; font-weight:850; letter-spacing:.14em; }.image-composer-title small { color:#a8a29e; font-size:9px; }
 .image-config-panel > textarea { display:block; width:100%; height:100px; padding:9px 10px 13px; color:#292524; background:transparent; border:0; outline:none; font:12px/1.6 inherit; resize:none; user-select:text; }.image-config-panel > textarea::placeholder { color:#a8a29e; }
@@ -1107,7 +1107,7 @@ body:not(.home-mode) .video-config-panel > textarea::-webkit-scrollbar { width:5
 body:not(.home-mode) .video-config-panel > textarea::-webkit-scrollbar-thumb { background:color-mix(in srgb,var(--ws-muted) 42%,transparent); border-radius:999px; }
 .flow-node.canvas-pan-selected .node-config-panel,
 .flow-node.canvas-pan-selected .video-result-prompt { visibility:hidden; opacity:0; pointer-events:none; }
-#node-layer.dom-interaction-suspended > .flow-node:not(.kind-video.node-generator) { display:none!important; }
+#node-layer.dom-interaction-suspended > .flow-node { display:none!important; }
 body:not(.home-mode) .image-config-panel footer,
 body:not(.home-mode) .video-config-panel footer { border-color:var(--ws-border); }
 body:not(.home-mode) .image-config-panel summary,
@@ -2282,44 +2282,26 @@ body[data-theme="light"] .kind-voice .video-model-popover.voice-model-menu{color
 /* Pixi permanently owns the visible card. The selected DOM node is only an
    interaction host for toolbars and composer panels, so selection never swaps
    the card shell, typography, or thumbnail renderer. */
-body:not(.home-mode) .flow-node.pixi-card-editor,
-body:not(.home-mode) .flow-node.pixi-card-editor:hover,
-body:not(.home-mode) .flow-node.pixi-card-editor.selected,
-body:not(.home-mode)[data-theme="dark"] .flow-node.pixi-card-editor,
-body:not(.home-mode)[data-theme="dark"] .flow-node.pixi-card-editor:hover,
-body:not(.home-mode)[data-theme="dark"] .flow-node.pixi-card-editor.selected {
+body:not(.home-mode) .flow-node.pixi-owned-editor,
+body:not(.home-mode) .flow-node.pixi-owned-editor:hover,
+body:not(.home-mode) .flow-node.pixi-owned-editor.selected,
+body:not(.home-mode)[data-theme="dark"] .flow-node.pixi-owned-editor,
+body:not(.home-mode)[data-theme="dark"] .flow-node.pixi-owned-editor:hover,
+body:not(.home-mode)[data-theme="dark"] .flow-node.pixi-owned-editor.selected {
   background:transparent!important;
   border-color:transparent!important;
   box-shadow:none!important;
 }
-.flow-node.pixi-card-editor::after,
-.flow-node.pixi-card-editor>.node-kind,
-.flow-node.pixi-card-editor>.node-copy,
-.flow-node.pixi-card-editor>.node-media,
-.flow-node.pixi-card-editor>.image-empty-state,
-.flow-node.pixi-card-editor>.node-label-heading,
-.flow-node.pixi-card-editor>.node-progress { display:none!important; }
-/* A selected video generator needs its DOM storyboard for reference ordering.
-   Other selected cards remain Pixi-backed interaction shells. */
-body.renderer-pixi .flow-node.pixi-card-editor.kind-video.node-generator>.image-empty-state{
-  position:absolute!important;
-  z-index:3!important;
-  inset:0!important;
-  display:grid!important;
-  width:auto!important;
-  height:auto!important;
-  min-width:0!important;
-  box-sizing:border-box!important;
-  overflow:hidden!important;
-  background:var(--ws-surface-solid)!important;
-  border:0!important;
-  border-radius:14px!important;
-  box-shadow:inset 0 0 0 1px var(--ws-border)!important;
-  pointer-events:auto!important;
-}
-body.renderer-pixi .flow-node.pixi-card-editor.kind-video.node-generator>.image-empty-state>.video-storyboard{pointer-events:none!important}
-body.renderer-pixi .flow-node.pixi-card-editor.kind-video.node-generator.selected>.image-empty-state>.video-storyboard,
-body.renderer-pixi .flow-node.pixi-card-editor.kind-video.node-generator.selected>.image-empty-state>.video-storyboard>[data-video-reference-source]{pointer-events:auto!important;touch-action:none!important}
+.flow-node.pixi-owned-editor::after,
+.flow-node.pixi-owned-editor>.node-kind,
+.flow-node.pixi-owned-editor>.node-copy,
+.flow-node.pixi-owned-editor>.node-media,
+.flow-node.pixi-owned-editor>.image-empty-state,
+.flow-node.pixi-owned-editor>.node-label-heading,
+.flow-node.pixi-owned-editor>.node-progress { display:none!important; }
+.flow-node.dom-owned-card.kind-video.node-generator>.image-empty-state>.video-storyboard{pointer-events:none}
+.flow-node.dom-owned-card.kind-video.node-generator.selected>.image-empty-state>.video-storyboard,
+.flow-node.dom-owned-card.kind-video.node-generator.selected>.image-empty-state>.video-storyboard>[data-video-reference-source]{pointer-events:auto;touch-action:none}
 .flow-node.pixi-card-editor>.node-copy.editing {
   position:absolute!important;
   inset:56px 14px 14px!important;

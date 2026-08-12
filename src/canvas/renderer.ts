@@ -45,8 +45,8 @@ export type RenderLink = {
 export type CanvasRenderSnapshot = {
   nodes: readonly RenderNode[];
   links: readonly RenderLink[];
-  /** Nodes currently rendered by the interactive DOM card layer. */
-  domNodeIds: readonly number[];
+  /** Stable renderer ownership; independent from selection and interaction. */
+  domOwnedNodeIds: readonly number[];
   camera: { x: number; y: number; zoom: number };
   selectedId: number;
   selectedIds: readonly number[];

@@ -4,6 +4,8 @@ import { mergeGenerationState } from "../src/services/generation-poller";
 import { labelTextViewport } from "../src/nodes/label-text-layout";
 import { NODE_SNAP_GAP, snapNodeGroup } from "../src/canvas/node-snap-controller";
 import { VIDEO_CARD_LAYOUT, videoFrameLayout } from "../src/nodes/video-card-layout";
+import { domOwnedNodeIds } from "../src/canvas/node-render-ownership";
+import { NODE_CARD_STYLE } from "../src/nodes/node-card-style";
 
 test("video card reference frames stay horizontally centered", () => {
   const width = 240;
@@ -15,34 +17,18 @@ test("video card reference frames stay horizontally centered", () => {
   expect(layout.contentRight).toBe(width - VIDEO_CARD_LAYOUT.horizontalPadding);
 });
 
-test("video card Pixi and DOM layouts use the same dynamic reference count", () => {
-  expect(videoFrameLayout(240, 0).frameCount).toBe(0);
-  expect(videoFrameLayout(240, 0).frameWidth).toBe(0);
+test("video card keeps one empty slot then follows the exact reference count", () => {
+  expect(videoFrameLayout(240, 0).frameCount).toBe(1);
+  expect(videoFrameLayout(240, 0).frameWidth).toBeGreaterThan(0);
   expect(videoFrameLayout(240, 1).frameCount).toBe(1);
   expect(videoFrameLayout(240, 2).frameCount).toBe(2);
   expect(videoFrameLayout(240, 4).frameCount).toBe(4);
   expect(videoFrameLayout(240, 8).frameCount).toBe(8);
 });
 
-test("Pixi video card paints linked reference thumbnails", async ({ page }) => {
-  const { canvas } = await mockApi(page, 2);
-  canvas.nodes.splice(0, canvas.nodes.length,
-    { id: 1, kind: "image", x: -400, y: -100, width: 240, height: 180, title: "素材", body: "", accent: "#7da9df", mediaUrl: "/api/assets/test-image/content/test.png" },
-    { id: 2, kind: "video", role: "generator", x: -100, y: -100, width: 280, height: 220, title: "视频生成", body: "测试视频", accent: "#7da9df", videoSettings: { seconds: "5", resolution: "720p", aspectRatio: "16:9", referenceMode: "references" } },
-  );
-  canvas.links.splice(0, canvas.links.length, { from: 1, to: 2, fromSide: "right", toSide: "left" });
-  await page.goto("/?canvasPerf=1#/canvas");
-  const pixi = page.locator("#canvas-pixi");
-  await expect(pixi).toBeVisible({ timeout: 15_000 });
-  await expect.poll(async () => page.evaluate(() => {
-    const canvas = document.querySelector<HTMLCanvasElement>("#canvas-pixi");
-    if (!canvas) return 0;
-    const context = canvas.getContext("webgl2") || canvas.getContext("webgl");
-    return context ? 1 : 0;
-  })).toBe(1);
-  await page.waitForTimeout(1000);
-  if (process.env.CANVAS_VISUAL_AUDIT)
-    await page.screenshot({ path: "test-results/video-reference-pixi.png" });
+test("empty video reference slot is clearly labelled", () => {
+  const pixi = readFileSync("src/canvas/pixi-renderer.ts", "utf8");
+  expect(pixi).toContain('referenceCount > 0 ? String(index + 1) : "素材参考图"');
 });
 
 test("selected DOM video card repaints linked reference thumbnails", () => {
@@ -66,43 +52,57 @@ test("selected video generator supports pointer drag reference swapping", () => 
   expect(source).toContain("?.classList.add(\"drag-over\")");
 });
 
-test("selected Pixi video generator exposes its DOM storyboard hit layer", () => {
-  const source = readFileSync("src/style.css", "utf8");
-  const selector = "flow-node.pixi-card-editor.kind-video.node-generator>.image-empty-state";
-  expect(source).toContain(selector);
-  const rule = source.slice(source.indexOf(selector), source.indexOf("}", source.indexOf(selector)));
-  expect(rule).toContain("display:grid!important");
-  expect(rule).toContain("pointer-events:auto!important");
-  expect(rule).toContain("border:0!important");
-  expect(rule).toContain("box-shadow:inset 0 0 0 1px");
-});
-
-test("visible video generators use one DOM renderer in selected and idle states", () => {
-  const dom = readFileSync("src/nodes/node-dom-synchronizer.ts", "utf8");
+test("all cards have permanent Pixi ownership", () => {
   const pixi = readFileSync("src/canvas/pixi-renderer.ts", "utf8");
-  expect(dom).toContain("visibleVideoGenerators");
-  expect(dom).toContain("node.kind === \"video\"");
-  expect(dom).toContain("node.role !== \"result\"");
-  expect(dom).toContain("...visibleVideoGenerators");
-  expect(pixi).toContain("const domNodeIds = new Set(snapshot.domNodeIds)");
-  expect(pixi).toContain("if (domNodeIds.has(node.id)) continue");
+  expect(domOwnedNodeIds()).toEqual([]);
+  expect(pixi).toContain("const domOwnedNodeIds = new Set(snapshot.domOwnedNodeIds)");
+  expect(pixi).toContain("if (domOwnedNodeIds.has(node.id)) continue");
 });
 
-test("interaction suspension preserves DOM-owned video generators", () => {
-  const view = readFileSync("src/nodes/canvas-node-view-feature.ts", "utf8");
+test("selected node mounts a panel-only DOM interaction host", () => {
+  const synchronizer = readFileSync("src/nodes/node-dom-synchronizer.ts", "utf8");
+  const state = readFileSync("src/nodes/node-dom-state.ts", "utf8");
+  expect(synchronizer).toContain("options.selectedDomVisible ? options.selectedId : 0");
+  expect(state).toContain("pixi-owned-editor");
+  expect(domOwnedNodeIds()).toEqual([]);
+});
+
+test("video result uses centered progress without a bottom bar", () => {
+  const pixi = readFileSync("src/canvas/pixi-renderer.ts", "utf8");
   const style = readFileSync("src/style.css", "utf8");
-  expect(view).toContain("persistentVideoIds");
-  expect(view).toContain('node?.kind === "video" && node.role !== "result"');
-  expect(style).toContain(
-    "#node-layer.dom-interaction-suspended > .flow-node:not(.kind-video.node-generator)",
-  );
+  expect(pixi).toContain("正在处理视频");
+  expect(pixi).toContain("`生成中 ${Math.round");
+  expect(pixi).not.toContain(".rect(0, node.height - 3, node.width, 3)");
+  expect(style).toContain(".kind-video.node-result .node-progress { display:none!important; }");
 });
 
-test("Pixi video text uses high-resolution textures without changing card size", () => {
-  const source = readFileSync("src/canvas/pixi-renderer.ts", "utf8");
-  expect(source).toContain("const videoTextResolution = Math.min(devicePixelRatio || 1, 2)");
-  expect(source).toContain("view.title.resolution = videoTextResolution");
-  expect(source).toContain("parameter.resolution = videoTextResolution");
+test("completed Pixi video result opens preview on double click", () => {
+  const pointer = readFileSync("src/canvas/canvas-pointer-lifecycle.ts", "utf8");
+  const domPointer = readFileSync("src/nodes/node-interaction-view.ts", "utf8");
+  expect(pointer).toContain('node.kind === "video" && node.role === "result"');
+  expect(pointer).toContain("this.o.previewMedia(node)");
+  expect(domPointer).toContain('current.kind === "video" && current.role === "result"');
+  expect(domPointer).not.toContain('.querySelector<HTMLElement>(".node-media")!');
+});
+
+test("image and video generators share one card geometry", () => {
+  expect(NODE_CARD_STYLE.generatorWidth).toBe(290);
+  expect(NODE_CARD_STYLE.generatorHeight).toBe(225);
+  const state = readFileSync("src/nodes/node-dom-state.ts", "utf8");
+  const pixi = readFileSync("src/canvas/pixi-renderer.ts", "utf8");
+  expect(state).toContain("NODE_CARD_STYLE.generatorWidth");
+  expect(pixi).toContain("NODE_CARD_STYLE.lightFill");
+  expect(pixi).toContain("NODE_CARD_STYLE.radius");
+});
+
+test("DOM-owned card follows pointer in the drag animation frame", () => {
+  const source = readFileSync("src/canvas/dom-pointer-lifecycle.ts", "utf8");
+  expect(source).toContain("drag.element.style.transform = `translate(${item.x}px, ${item.y}px)`");
+});
+
+test("interaction suspension follows renderer ownership", () => {
+  const style = readFileSync("src/style.css", "utf8");
+  expect(style).toContain('#node-layer.dom-interaction-suspended > .flow-node:not(.dragging)');
 });
 
 test("dragging one selected video reference onto another swaps its order", async ({ page }) => {

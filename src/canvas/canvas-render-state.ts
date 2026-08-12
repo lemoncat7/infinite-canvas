@@ -9,7 +9,7 @@ export class CanvasRenderState {
     camera: { x: number; y: number; zoom: number };
     connectionFeature: CanvasConnectionFeature;
     connection: CanvasConnectionController;
-    domNodeIds: () => number[];
+    domOwnedNodeIds: () => number[];
     selectedId: () => number;
     batchIds: Set<number>;
     agentIds: () => Set<number>;
@@ -30,7 +30,7 @@ export class CanvasRenderState {
       links: this.options.links,
       nodeCount: nodes.length,
       indexedNodeCount: connectionFeature.geometry.nodeIndex.size,
-      domNodeIds: this.options.domNodeIds(),
+      domOwnedNodeIds: this.options.domOwnedNodeIds(),
       camera: this.options.camera,
       selectedId: this.options.selectedId(),
       selectedIds: [

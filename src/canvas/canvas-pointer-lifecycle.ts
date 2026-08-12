@@ -127,7 +127,10 @@ export class CanvasPointerLifecycle {
   private onDoubleClick = (event: MouseEvent) => {
     const node = this.o.hitNode(event.clientX, event.clientY);
     if (!node) return;
-    if (node.kind === "image" && node.mediaUrl) {
+    if (
+      node.mediaUrl &&
+      (node.kind === "image" || (node.kind === "video" && node.role === "result"))
+    ) {
       event.preventDefault();
       event.stopPropagation();
       this.o.selection.selectedId = node.id;

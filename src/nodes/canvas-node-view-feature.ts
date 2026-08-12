@@ -12,6 +12,7 @@ import type {
 } from "./node-types";
 import { BoundNodeDomSynchronizer } from "./bound-node-dom-synchronizer";
 import { BoundNodeViewFactory } from "./bound-node-view-factory";
+import { domOwnedNodeIds } from "../canvas/node-render-ownership";
 
 type Tone = "success" | "warning" | "error" | "info";
 type Swap = { videoId: number; sourceId: number } | null;
@@ -187,20 +188,10 @@ export class CanvasNodeViewFeature {
   hideSelectedDom() {
     const selectedId = this.getSelectedId();
     if (selectedId) this.hiddenSelectedDomId = selectedId;
-    // Pixi must immediately resume drawing the selected card while its DOM
-    // editor is being detached; waiting for the next full DOM sync creates a
-    // one-frame blank card during drag.
-    // Video generators have a single DOM renderer in both idle and selected
-    // states. Preserve their ownership while other selected DOM editors yield
-    // to Pixi during camera/node interaction.
-    const persistentVideoIds = new Set(
-      [...this.mountedIds].filter((id) => {
-        const node = this.nodes.find((item) => item.id === id);
-        return node?.kind === "video" && node.role !== "result";
-      }),
-    );
     this.mountedIds.clear();
-    persistentVideoIds.forEach((id) => this.mountedIds.add(id));
+  }
+  domOwnedNodeIds() {
+    return domOwnedNodeIds();
   }
   sync() { this.synchronizer.sync(); }
   scheduleWarmup() { this.editorCache.scheduleWarmup(); }

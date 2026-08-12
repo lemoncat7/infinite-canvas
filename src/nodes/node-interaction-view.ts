@@ -153,35 +153,20 @@ export function bindNodePointerInteraction(options: NodePointerOptions) {
       else options.editPrompt(current, element);
       return;
     }
-    // A selected Pixi image is represented by a transparent DOM interaction
-    // host. Its hidden media canvas has no reliable hit rectangle, so the
-    // whole card surface (except controls filtered above) is the preview hit
-    // area, matching the unselected Pixi path.
-    if (current.kind === "image" && current.mediaUrl) {
+    // Selected Pixi media is represented by a transparent DOM interaction
+    // host. Its hidden .node-media has a zero hit rectangle, so the whole
+    // card surface (except controls filtered above) opens the same preview.
+    if (
+      current.mediaUrl &&
+      (current.kind === "image" ||
+        (current.kind === "video" && current.role === "result"))
+    ) {
       event.preventDefault();
       event.stopPropagation();
       options.selectNode(current.id);
       options.previewMedia(current);
       return;
     }
-    if (
-      current.kind !== "video" || !current.mediaUrl
-    )
-      return;
-    const rect = element
-      .querySelector<HTMLElement>(".node-media")!
-      .getBoundingClientRect();
-    if (
-      event.clientX < rect.left ||
-      event.clientX > rect.right ||
-      event.clientY < rect.top ||
-      event.clientY > rect.bottom
-    )
-      return;
-    event.preventDefault();
-    event.stopPropagation();
-    options.selectNode(current.id);
-    options.previewMedia(current);
   });
   element.addEventListener("dragstart", (event) => event.preventDefault());
   element.addEventListener("contextmenu", (event) => {

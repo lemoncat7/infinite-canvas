@@ -21,6 +21,7 @@ import {
   labelTextViewport,
 } from "../nodes/label-text-layout";
 import { VIDEO_CARD_LAYOUT, videoFrameLayout } from "../nodes/video-card-layout";
+import { NODE_CARD_STYLE } from "../nodes/node-card-style";
 
 function port(node: RenderNode, side: RenderLink["fromSide"]) {
   if (side === "top") return { x: node.x + node.width / 2, y: node.y };
@@ -104,12 +105,21 @@ function cardPresentation(
   }
   if (node.kind === "video" && node.role === "result" && !node.mediaUrl)
     return {
-      title: "▶  正在生成视频",
+      title:
+        node.status === "queued"
+          ? "等待生成"
+          : node.status === "running"
+            ? `生成中 ${Math.round(Math.max(0, Math.min(100, node.progress || 0)))}%`
+            : "视频结果",
       subtitle: "",
-      body: "完成后可在这里双击播放",
+      body:
+        node.status === "queued"
+          ? "任务已进入队列"
+          : node.status === "running"
+            ? "正在处理视频"
+            : "等待视频生成",
       meta: "",
       centered: true,
-      icon: "▶",
     };
   if (node.kind === "voice") {
     const settings = node.voiceSettings ?? {},
@@ -346,13 +356,13 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       this.renderLinkGeometry(snapshot, byId);
     }
     const selectedIds = new Set(snapshot.selectedIds);
-    const domNodeIds = new Set(snapshot.domNodeIds);
+    const domOwnedNodeIds = new Set(snapshot.domOwnedNodeIds);
     const offsetX = innerWidth / 2 + snapshot.camera.x,
       offsetY = innerHeight / 2 + snapshot.camera.y,
       activeCardIds = new Set<number>(),
       margin = 520;
     for (const node of snapshot.nodes) {
-      if (domNodeIds.has(node.id)) continue;
+      if (domOwnedNodeIds.has(node.id)) continue;
       const screenX = node.x * snapshot.camera.zoom + offsetX,
         screenY = node.y * snapshot.camera.zoom + offsetY,
         visible =
@@ -612,19 +622,19 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       view.detail.clear();
       view.shadow
         .clear()
-        .roundRect(0, 7, node.width, node.height, 14)
-        .fill({ color: 0x000000, alpha: snapshot.dark ? 0.24 : 0.1 });
+        .roundRect(0, 7, node.width, node.height, NODE_CARD_STYLE.radius)
+        .fill({ color: 0x000000, alpha: snapshot.dark ? NODE_CARD_STYLE.darkShadowAlpha : NODE_CARD_STYLE.lightShadowAlpha });
       view.shell
         .clear()
-        .roundRect(0, 0, node.width, node.height, 14)
-        .fill({ color: snapshot.dark ? 0x111a1c : 0xf7f9f8, alpha: 1 })
+        .roundRect(0, 0, node.width, node.height, NODE_CARD_STYLE.radius)
+        .fill({ color: snapshot.dark ? NODE_CARD_STYLE.darkFill : NODE_CARD_STYLE.lightFill, alpha: 1 })
         .stroke({
           color:
             node.id === snapshot.selectedId || selectedIds.has(node.id)
               ? node.accent
               : snapshot.dark
-                ? 0x344247
-                : 0xc9d0cc,
+                ? NODE_CARD_STYLE.darkBorder
+                : NODE_CARD_STYLE.lightBorder,
           width:
             node.id === snapshot.selectedId || selectedIds.has(node.id) ? 2 : 1,
         });
@@ -783,7 +793,9 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         view.markers.forEach((marker, index) => {
           marker.visible = index < frameCount;
           if (index >= frameCount) return;
-          marker.text = String(index + 1);
+          marker.text = referenceCount > 0 ? String(index + 1) : "素材参考图";
+          marker.style.fontSize = referenceCount > 0 ? 15 : 11;
+          marker.style.fill = snapshot.dark ? 0x8fa09d : 0x78827f;
           marker.position.set(
             frameX(index) + frameWidth / 2,
             frameTop + VIDEO_CARD_LAYOUT.frameHeight / 2,
@@ -873,22 +885,8 @@ export class PixiCanvasRenderer implements CanvasRenderer {
             alpha: snapshot.dark ? 0.2 : 0.22,
             width: 1,
           });
-      if (
-        (node.status === "queued" || node.status === "running") &&
-        node.kind !== "image"
-      ) {
-        const progress = Math.max(0, Math.min(100, node.progress || 0));
-        view.shell
-          .rect(0, node.height - 3, node.width, 3)
-          .fill({ color: snapshot.dark ? 0x273337 : 0xe1e7e4 })
-          .rect(
-            0,
-            node.height - 3,
-            (node.width * (node.status === "queued" ? 0.035 : progress / 100)),
-            3,
-          )
-          .fill({ color: node.accent });
-      }
+      // Image and video result cards communicate progress in their centered
+      // content. A second bottom bar duplicates state and causes visual jumps.
     }
     for (const [id, view] of this.cardViews)
       if (!activeCardIds.has(id)) {
