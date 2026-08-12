@@ -2,7 +2,7 @@ import type { FlowNode } from "../nodes/node-types";
 
 export type NodeSnapResult = { dx: number; dy: number };
 
-const SNAP_GAP = 24;
+const SNAP_GAP = 5;
 const SNAP_SCREEN_THRESHOLD = 12;
 
 function overlap(a0: number, a1: number, b0: number, b1: number) {

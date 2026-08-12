@@ -11,8 +11,8 @@ const snapNode = (id: number, x: number, y: number, width = 100, height = 80) =>
 test("single node snapping uses a fixed gap", () => {
   const moving = snapNode(1, 0, 0);
   const target = snapNode(2, 150, 0);
-  const result = snapNodeGroup({ moving: [moving], candidates: [target], dx: 24, dy: 0, zoom: 1 });
-  expect(result.dx).toBe(26);
+  const result = snapNodeGroup({ moving: [moving], candidates: [target], dx: 40, dy: 0, zoom: 1 });
+  expect(result.dx).toBe(45);
   expect(moving.x + moving.width + result.dx).toBe(target.x - NODE_SNAP_GAP);
 });
 
