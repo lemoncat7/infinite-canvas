@@ -244,25 +244,15 @@ body[data-theme] .app-toast { color:var(--ui-text); background:var(--ui-surface-
 /* Public home light theme uses the same neutral system, never cream or lime. */
 body.home-mode[data-theme="light"] { color:var(--ui-text); background:var(--ui-bg); }
 :is(body[data-theme] .home-page,.home-page[data-home-theme]) { color:var(--ui-text); background:var(--ui-gradient-page); }
-:is(body[data-theme] .home-page,.home-page[data-home-theme]) .home-nav { background:transparent; border-color:transparent; box-shadow:none; backdrop-filter:none; -webkit-backdrop-filter:none; }
 :is(body[data-theme] .home-page,.home-page[data-home-theme]) :is(.home-logo,.home-nav a:hover,.home-hero h1,.home-showcase h2) { color:var(--ui-text); }
 :is(body[data-theme] .home-page,.home-page[data-home-theme]) :is(.home-nav a,.home-hero-copy > p,.home-showcase header > p,.home-footer) { color:var(--ui-muted); }
-:is(body[data-theme] .home-page,.home-page[data-home-theme]) :is(.home-nav button,.home-gallery-card,.hero-glass-card) { color:var(--ui-text-secondary); background:var(--ui-surface); border-color:var(--ui-border); box-shadow:var(--ui-shadow-sm); }
+:is(body[data-theme] .home-page,.home-page[data-home-theme]) :is(.home-nav button,.home-gallery-card) { color:var(--ui-text-secondary); background:var(--ui-surface); border-color:var(--ui-border); box-shadow:var(--ui-shadow-sm); }
 :is(body[data-theme] .home-page,.home-page[data-home-theme]) :is(#home-enter,.home-hero-copy button) { color:var(--ui-accent-contrast); background:var(--ui-gradient-accent); border-color:var(--ui-accent); box-shadow:0 12px 32px var(--ui-accent-glow); }
-:is(body[data-theme] .home-page,.home-page[data-home-theme]) :is(.home-eyebrow,.home-showcase header span,.hero-glass-card span) { color:var(--ui-accent); }
+:is(body[data-theme] .home-page,.home-page[data-home-theme]) :is(.home-eyebrow,.home-showcase header span) { color:var(--ui-accent); }
 :is(body[data-theme] .home-page,.home-page[data-home-theme]) .home-logo > span { color:var(--ui-accent-contrast); background:var(--ui-gradient-accent); box-shadow:none; }
-:is(body[data-theme] .home-page,.home-page[data-home-theme]) :is(.process-node,.capability-grid > article,.home-showcase::before) {
-  color:var(--ui-text); background:var(--ui-gradient-surface)!important; border-color:var(--ui-border)!important; box-shadow:var(--ui-shadow-lg),inset 0 1px color-mix(in srgb,var(--ui-text) 8%,transparent)!important;
-}
-:is(body[data-theme] .home-page,.home-page[data-home-theme]) :is(.process-node > i,.process-node > small,.capability-grid article > span,.capability-grid p,.home-process > footer,.home-wheel-hint) { color:var(--ui-muted)!important; }
-:is(body[data-theme] .home-page,.home-page[data-home-theme]) :is(.capability-grid h3,.home-process h2,.home-capabilities h2,.home-showcase h2) { color:var(--ui-text); }
-:is(body[data-theme] .home-page,.home-page[data-home-theme]) .process-node > span { background:var(--ui-accent); border-color:var(--ui-surface-solid); box-shadow:0 0 0 5px var(--ui-accent-soft); }
+:is(body[data-theme] .home-page,.home-page[data-home-theme]) :is(.home-process h2,.home-capabilities h2,.home-showcase h2) { color:var(--ui-text); }
 :is(body[data-theme] .home-page,.home-page[data-home-theme]) .home-gallery-card { background:var(--ui-surface-raised); border-color:var(--ui-border); box-shadow:var(--ui-shadow-sm); }
 :is(body[data-theme] .home-page,.home-page[data-home-theme]) .home-gallery-card:hover { border-color:var(--ui-border-strong); box-shadow:var(--ui-shadow-lg); }
-:is(body[data-theme] .home-page,.home-page[data-home-theme]) .home-scene-nav button { color:var(--ui-muted)!important; background:transparent; border-color:transparent; }
-:is(body[data-theme] .home-page,.home-page[data-home-theme]) .home-scene-nav button.active { color:var(--ui-accent)!important; }
-:is(body[data-theme] .home-page,.home-page[data-home-theme]) .home-wheel-hint i { border-color:var(--ui-muted)!important; }
-:is(body[data-theme] .home-page,.home-page[data-home-theme]) .home-wheel-hint i::after { background:var(--ui-accent)!important; }
 :is(body[data-theme] .home-page,.home-page[data-home-theme]) .home-nav .home-github {
   color:var(--ui-text-secondary); background:var(--ui-accent-soft); border-color:var(--ui-border); box-shadow:none;
 }

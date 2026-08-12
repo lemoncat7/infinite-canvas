@@ -1,17 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
   <defs>
-    <linearGradient id="mist" x1="26" y1="19" x2="104" y2="111" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#DCE9DF"/>
-      <stop offset=".52" stop-color="#AFC9C2"/>
-      <stop offset="1" stop-color="#91AEB5"/>
-    </linearGradient>
-    <linearGradient id="leaf" x1="47" y1="33" x2="84" y2="94" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#F7FBF4"/>
-      <stop offset="1" stop-color="#CADCCF"/>
-    </linearGradient>
+    <linearGradient id="surface" x1="22" y1="14" x2="108" y2="116" gradientUnits="userSpaceOnUse"><stop stop-color="#25384A"/><stop offset=".55" stop-color="#172536"/><stop offset="1" stop-color="#0D1722"/></linearGradient>
+    <linearGradient id="leftFrame" x1="29" y1="30" x2="64" y2="98" gradientUnits="userSpaceOnUse"><stop stop-color="#DDEAF7"/><stop offset="1" stop-color="#789BBC"/></linearGradient>
+    <linearGradient id="rightFrame" x1="99" y1="30" x2="64" y2="98" gradientUnits="userSpaceOnUse"><stop stop-color="#BBD8F1"/><stop offset="1" stop-color="#6386AC"/></linearGradient>
+    <linearGradient id="path" x1="34" y1="33" x2="91" y2="86" gradientUnits="userSpaceOnUse"><stop stop-color="#FFFFFF"/><stop offset=".48" stop-color="#D8E9FA"/><stop offset="1" stop-color="#A4C7E8"/></linearGradient>
   </defs>
-  <path d="M20 27c0-7.7 6.3-14 14-14h60c7.7 0 14 6.3 14 14v74c0 7.7-6.3 14-14 14H34c-7.7 0-14-6.3-14-14V27Z" fill="#19201E"/>
-  <path d="M36 37c10.5 4.4 20.2 14.6 28.2 30.5C72.6 51 81.8 41 92 37c-4.2 24.3-12.6 43.1-27.8 56C48.5 79.9 40.2 61.2 36 37Z" fill="url(#mist)"/>
-  <path d="M49.5 43.5c5.7 6.2 10.7 14.4 14.8 24.5 4.2-10.1 9-18.3 14.4-24.5-1.7 17.5-6.2 31.9-14.5 42.6-8.5-10.8-13-25.2-14.7-42.6Z" fill="url(#leaf)" fill-opacity=".88"/>
-  <circle cx="64" cy="69" r="4.2" fill="#F4F7F1"/>
+  <rect x="10" y="10" width="108" height="108" rx="30" fill="url(#surface)"/>
+  <rect x="10.75" y="10.75" width="106.5" height="106.5" rx="29.25" stroke="#D9EBFB" stroke-opacity=".18" stroke-width="1.5"/>
+  <path d="M29 33.5C29 29.9 33 27.8 36 29.8L64 48.4V97.5L31.8 55.1A14 14 0 0 1 29 46.6V33.5Z" fill="url(#leftFrame)"/>
+  <path d="M99 33.5C99 29.9 95 27.8 92 29.8L64 48.4V97.5L96.2 55.1A14 14 0 0 0 99 46.6V33.5Z" fill="url(#rightFrame)"/>
+  <path d="M35 37.5L59 53.5C62 55.5 66 55.5 69 53.5L93 37.5" stroke="url(#path)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="35" cy="37.5" r="3.2" fill="#FFFFFF"/>
+  <circle cx="64" cy="56" r="3.5" fill="#F5FAFF"/>
+  <circle cx="93" cy="37.5" r="3.2" fill="#DDEEFF"/>
 </svg>

@@ -1,4 +1,5 @@
 import "./style.css";
+import "./styles/home.css";
 import "./styles/theme.css";
 import "./services/theme-preference";
 import { bootstrap } from "./app/bootstrap";
