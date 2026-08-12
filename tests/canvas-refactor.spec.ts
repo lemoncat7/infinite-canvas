@@ -200,6 +200,20 @@ test("an empty Pixi image keeps a single aligned icon frame", async ({ page }) =
   expect(await page.evaluate(() => document.querySelectorAll("#canvas-pixi").length)).toBe(1);
 });
 
+test("a queued Pixi image replaces empty actions with progress state", async ({ page }) => {
+  const { canvas } = await mockApi(page, 1);
+  Object.assign(canvas.nodes[0], {
+    kind: "image",
+    mediaUrl: undefined,
+    status: "running",
+    progress: 42,
+  });
+  await page.goto("/?canvasPerf=1#/canvas");
+  await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator("#node-layer > .flow-node")).toHaveCount(0);
+  expect(await page.evaluate(() => document.querySelectorAll("#canvas-pixi").length)).toBe(1);
+});
+
 test("400 nodes stay GPU-virtualized and recover WebGL context", async ({
   page,
 }) => {

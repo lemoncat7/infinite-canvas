@@ -633,6 +633,8 @@ export class PixiCanvasRenderer implements CanvasRenderer {
           .fill({ color: node.accent });
       if (!mediaOnly && node.kind === "image" && !node.mediaUrl) {
         const layout = imageEmptyLayout(node.width, node.height);
+        const generating = node.status === "queued" || node.status === "running";
+        const progress = Math.max(0, Math.min(100, node.progress || 0));
         view.detail
           .roundRect(
             layout.iconX - IMAGE_CARD_LAYOUT.iconSize / 2,
@@ -653,14 +655,24 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         view.icon.style.fontSize = 19;
         view.title.anchor.set(0.5);
         view.title.position.set(layout.centerX, layout.titleY);
+        view.title.text = generating
+          ? node.status === "queued"
+            ? "图片任务排队中"
+            : "正在生成图片"
+          : presentation.title;
         view.title.style.fontSize = 13;
         view.subtitle.visible = false;
         view.body.anchor.set(0.5);
         view.body.position.set(layout.centerX, layout.descriptionY);
+        view.body.text = generating
+          ? node.status === "queued"
+            ? "等待可用的生成位置"
+            : `生成进度 ${Math.round(progress)}%`
+          : presentation.body;
         view.body.style.fontSize = 10;
         view.body.style.align = "center";
         view.meta.visible = false;
-        view.detail
+        if (!generating) view.detail
           .roundRect(
             layout.actionsX,
             layout.actionsY,
@@ -681,7 +693,11 @@ export class PixiCanvasRenderer implements CanvasRenderer {
             alpha: 0.9,
             width: 1,
           });
-        view.hint.text = "↑  上传          ▦  资产库";
+        view.hint.text = generating
+          ? node.status === "queued"
+            ? "已进入生成队列"
+            : `${Math.round(progress)}%`
+          : "↑  上传          ▦  资产库";
         view.hint.visible = true;
         view.hint.anchor.set(0.5);
         view.hint.position.set(
@@ -855,7 +871,12 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         view.shell
           .rect(0, node.height - 3, node.width, 3)
           .fill({ color: snapshot.dark ? 0x273337 : 0xe1e7e4 })
-          .rect(0, node.height - 3, (node.width * progress) / 100, 3)
+          .rect(
+            0,
+            node.height - 3,
+            (node.width * (node.status === "queued" ? 0.035 : progress / 100)),
+            3,
+          )
           .fill({ color: node.accent });
       }
     }
