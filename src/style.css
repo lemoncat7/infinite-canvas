@@ -2250,27 +2250,29 @@ body[data-theme="light"] .kind-voice .video-model-popover.voice-model-menu{color
 .kind-tts.selected>.tts-config-panel.node-composer-panel{display:block!important}
 @media(max-width:780px){body:not(.home-mode) .node-composer-panel{width:min(600px,calc(100vw - 20px))!important}.node-composer-panel>textarea{height:132px!important;min-height:132px!important}.tts-voice-readout{max-width:150px}.kind-tts .tts-settings-popover{width:min(380px,calc(100vw - 40px))!important}}
 @media(max-width:780px){
-  body:not(.home-mode) .flow-node.selected>.node-composer-panel{
-    position:absolute!important;
-    z-index:130!important;
-    right:auto!important;
-    bottom:auto!important;
-    left:var(--mobile-panel-left)!important;
-    top:var(--mobile-panel-top)!important;
-    width:var(--mobile-panel-width)!important;
-    max-height:var(--mobile-panel-max-height)!important;
-    overflow-y:auto!important;
-    overscroll-behavior:contain;
-    translate:0 0!important;
-    transform:scale(var(--mobile-panel-scale))!important;
-    transform-origin:top left!important;
-  }
   body:not(.home-mode) .node-composer-panel>.node-composer-footer{
-    position:sticky!important;
-    bottom:0!important;
-    z-index:2!important;
-    padding-bottom:2px!important;
-    background:var(--ws-surface-solid)!important;
+    display:grid!important;
+    grid-template-columns:minmax(0,1fr) minmax(0,1fr) 82px!important;
+    gap:6px!important;
+  }
+  body:not(.home-mode) .node-composer-panel>.node-composer-footer>details{
+    min-width:0!important;
+    margin:0!important;
+  }
+  body:not(.home-mode) .node-composer-panel>.node-composer-footer>details>summary{
+    min-width:0!important;
+    padding:0 9px!important;
+  }
+  body:not(.home-mode) .node-composer-panel>.node-composer-footer>details>summary>b{
+    overflow:hidden!important;
+    text-overflow:ellipsis!important;
+    white-space:nowrap!important;
+  }
+  body:not(.home-mode) .node-composer-panel>.node-composer-footer>.node-composer-submit{
+    width:82px!important;
+    min-width:82px!important;
+    max-width:82px!important;
+    margin:0!important;
   }
 }
 

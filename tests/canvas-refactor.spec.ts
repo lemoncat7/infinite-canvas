@@ -19,7 +19,7 @@ test("generation state never regresses from running to queued", () => {
   ).toBe(38);
 });
 
-test("mobile composer remains inside the visual viewport", async ({ page }) => {
+test("mobile composer keeps its generate button inside its own footer", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const { canvas } = await mockApi(page, 1);
   canvas.nodes[0].x = -100;
@@ -29,12 +29,18 @@ test("mobile composer remains inside the visual viewport", async ({ page }) => {
   await page.mouse.click(195, 350);
   const panel = page.locator(".flow-node.selected > .image-config-panel");
   await expect(panel).toBeVisible();
-  const box = await panel.boundingBox();
-  expect(box).toBeTruthy();
-  expect(box!.x).toBeGreaterThanOrEqual(0);
-  expect(box!.x + box!.width).toBeLessThanOrEqual(390);
-  expect(box!.y + box!.height).toBeLessThanOrEqual(844);
-  await expect(panel.locator("[data-image-generate]")).toBeInViewport();
+  const footer = panel.locator(".node-composer-footer");
+  const button = panel.locator("[data-image-generate]");
+  const [footerBox, buttonBox] = await Promise.all([
+    footer.boundingBox(),
+    button.boundingBox(),
+  ]);
+  expect(footerBox).toBeTruthy();
+  expect(buttonBox).toBeTruthy();
+  expect(buttonBox!.x).toBeGreaterThanOrEqual(footerBox!.x);
+  expect(buttonBox!.x + buttonBox!.width).toBeLessThanOrEqual(
+    footerBox!.x + footerBox!.width + 1,
+  );
 });
 
 function stressCanvas(count = 400) {

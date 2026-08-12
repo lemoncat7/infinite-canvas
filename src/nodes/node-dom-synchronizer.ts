@@ -78,18 +78,6 @@ export function synchronizeNodeDom(options: Options) {
       swapSourceId: options.swap?.videoId === node.id ? options.swap.sourceId : 0,
     };
     styleNodeEditor(element, node, flags);
-    if (innerWidth <= 780) {
-      const panelLeft = (10 - screenX) / camera.zoom;
-      const panelTop = (72 - screenY) / camera.zoom;
-      element.style.setProperty("--mobile-panel-left", `${panelLeft}px`);
-      element.style.setProperty("--mobile-panel-top", `${panelTop}px`);
-      element.style.setProperty("--mobile-panel-scale", String(1 / camera.zoom));
-      element.style.setProperty("--mobile-panel-width", `${innerWidth - 20}px`);
-      element.style.setProperty(
-        "--mobile-panel-max-height",
-        `${Math.max(280, innerHeight - 166)}px`,
-      );
-    }
     const state = nodeDomState(node, flags), previous = options.states.get(node.id);
     if (nodeDomStateEquals(previous, state)) continue;
     options.states.set(node.id, state);
