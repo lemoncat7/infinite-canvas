@@ -717,6 +717,12 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         view.body.style.wordWrapWidth = metrics.contentWidth;
         view.meta.visible = false;
       } else if (!mediaOnly && node.kind === "video" && node.role !== "result") {
+        const videoTextResolution = Math.min(devicePixelRatio || 1, 2);
+        view.title.resolution = videoTextResolution;
+        view.subtitle.resolution = videoTextResolution;
+        view.body.resolution = videoTextResolution;
+        view.markers.forEach((marker) => { marker.resolution = videoTextResolution; });
+        view.parameters.forEach((parameter) => { parameter.resolution = videoTextResolution; });
         const references = (incomingByTarget.get(node.id) ?? [])
             .map((link) => byId.get(link.from))
             .filter((source): source is RenderNode => source?.kind === "image"),

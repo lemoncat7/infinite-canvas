@@ -2312,8 +2312,9 @@ body.renderer-pixi .flow-node.pixi-card-editor.kind-video.node-generator.selecte
   box-sizing:border-box!important;
   overflow:hidden!important;
   background:var(--ws-surface-solid)!important;
-  border:1px solid var(--ws-border)!important;
+  border:0!important;
   border-radius:14px!important;
+  box-shadow:inset 0 0 0 1px var(--ws-border)!important;
   pointer-events:auto!important;
 }
 body.renderer-pixi .flow-node.pixi-card-editor.kind-video.node-generator.selected>.image-empty-state>.video-storyboard,

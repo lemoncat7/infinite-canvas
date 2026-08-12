@@ -73,6 +73,15 @@ test("selected Pixi video generator exposes its DOM storyboard hit layer", () =>
   const rule = source.slice(source.indexOf(selector), source.indexOf("}", source.indexOf(selector)));
   expect(rule).toContain("display:grid!important");
   expect(rule).toContain("pointer-events:auto!important");
+  expect(rule).toContain("border:0!important");
+  expect(rule).toContain("box-shadow:inset 0 0 0 1px");
+});
+
+test("Pixi video text uses high-resolution textures without changing card size", () => {
+  const source = readFileSync("src/canvas/pixi-renderer.ts", "utf8");
+  expect(source).toContain("const videoTextResolution = Math.min(devicePixelRatio || 1, 2)");
+  expect(source).toContain("view.title.resolution = videoTextResolution");
+  expect(source).toContain("parameter.resolution = videoTextResolution");
 });
 
 test("dragging one selected video reference onto another swaps its order", async ({ page }) => {
