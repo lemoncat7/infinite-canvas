@@ -26,6 +26,7 @@ type Options = {
   cancelConnection: () => void;
   save: () => void;
   draw: (syncDom?: boolean) => void;
+  drawCamera: () => void;
   closeQuickMenu: () => void;
   smoothZoom: (factor: number, anchor: Point) => void;
 };
@@ -96,7 +97,8 @@ export class CanvasPointerLifecycle {
     if (pointer.draggingNode) for (const id of pointer.draggingGroup ?? [pointer.draggingNode]) this.o.moveNode(id, dx/this.o.zoom(), dy/this.o.zoom());
     else this.o.panCamera(dx, dy);
     pointer.x = event.clientX; pointer.y = event.clientY;
-    this.o.draw(Boolean(pointer.draggingNode));
+    if (pointer.draggingNode) this.o.draw(true);
+    else this.o.drawCamera();
   };
 
   private onUp = (event: PointerEvent) => {
