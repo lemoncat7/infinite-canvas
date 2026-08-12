@@ -58,6 +58,8 @@ test("selected DOM video card repaints linked reference thumbnails", () => {
 test("selected video generator supports pointer drag reference swapping", () => {
   const source = readFileSync("src/nodes/video-reference-view.ts", "utf8");
   expect(source).toContain("frame.setPointerCapture(event.pointerId)");
+  expect(source).toContain("getBoundingClientRect()");
+  expect(source).toContain("referenceAtPoint(event.clientX, event.clientY)");
   expect(source).toContain("exchangeReferences(");
   expect(source).toContain("item.link.inputOrder = index + 1");
   expect(source).toContain("frame.classList.add(\"is-dragging\")");
@@ -71,6 +73,34 @@ test("selected Pixi video generator exposes its DOM storyboard hit layer", () =>
   const rule = source.slice(source.indexOf(selector), source.indexOf("}", source.indexOf(selector)));
   expect(rule).toContain("display:grid!important");
   expect(rule).toContain("pointer-events:auto!important");
+});
+
+test("dragging one selected video reference onto another swaps its order", async ({ page }) => {
+  const { canvas } = await mockApi(page, 3, true);
+  canvas.nodes.splice(0, canvas.nodes.length,
+    { id: 1, kind: "image", x: -450, y: -140, width: 220, height: 170, title: "素材一", body: "", accent: "#7da9df", mediaUrl: "/api/assets/test-image/content/test.png" },
+    { id: 2, kind: "image", x: -450, y: 80, width: 220, height: 170, title: "素材二", body: "", accent: "#7da9df", mediaUrl: "/api/assets/test-image/content/test.png" },
+    { id: 3, kind: "video", role: "generator", x: -80, y: -100, width: 300, height: 240, title: "视频生成", body: "测试", accent: "#7da9df", videoSettings: { seconds: "5", resolution: "720p", aspectRatio: "16:9", referenceMode: "references" } },
+  );
+  canvas.links.splice(0, canvas.links.length,
+    { from: 1, to: 3, fromSide: "right", toSide: "left", inputOrder: 1 },
+    { from: 2, to: 3, fromSide: "right", toSide: "left", inputOrder: 2 },
+  );
+  await page.goto("/?canvasPerf=1#/canvas");
+  await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
+  await page.mouse.click(710, 390);
+  const frames = page.locator(".flow-node.selected .video-storyboard [data-video-reference-source]");
+  await expect(frames).toHaveCount(2);
+  const first = await frames.nth(0).boundingBox(), second = await frames.nth(1).boundingBox();
+  expect(first).toBeTruthy(); expect(second).toBeTruthy();
+  await page.mouse.move(first!.x + first!.width / 2, first!.y + first!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(second!.x + second!.width / 2, second!.y + second!.height / 2, { steps: 8 });
+  await page.mouse.up();
+  await expect(frames.nth(0)).toHaveAttribute("data-video-reference-source", "2");
+  await expect(frames.nth(1)).toHaveAttribute("data-video-reference-source", "1");
+  await expect(frames.nth(0).locator("b")).toHaveText("1");
+  await expect(frames.nth(1).locator("b")).toHaveText("2");
 });
 
 const snapNode = (id: number, x: number, y: number, width = 100, height = 80) => ({

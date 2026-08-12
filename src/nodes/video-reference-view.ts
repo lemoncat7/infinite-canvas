@@ -127,6 +127,12 @@ export function syncVideoReferenceView(options: VideoReferenceViewOptions) {
         dragStartX = 0,
         dragStartY = 0,
         didDrag = false;
+      const referenceAtPoint = (x: number, y: number) =>
+        [...emptyState.querySelectorAll<HTMLElement>("[data-video-reference-source]")]
+          .find((item) => {
+            const rect = item.getBoundingClientRect();
+            return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+          });
       emptyState
         .querySelectorAll<HTMLElement>("[data-video-reference-source]")
         .forEach((frame) => {
@@ -150,17 +156,12 @@ export function syncVideoReferenceView(options: VideoReferenceViewOptions) {
               .querySelectorAll("[data-video-reference-source].drag-over")
               .forEach((item) => item.classList.remove("drag-over"));
             if (!didDrag) return;
-            document
-              .elementFromPoint(event.clientX, event.clientY)
-              ?.closest<HTMLElement>("[data-video-reference-source]")
-              ?.classList.add("drag-over");
+            referenceAtPoint(event.clientX, event.clientY)?.classList.add("drag-over");
           };
           frame.onpointerup = (event) => {
             event.preventDefault();
             event.stopPropagation();
-            const target = document
-              .elementFromPoint(event.clientX, event.clientY)
-              ?.closest<HTMLElement>("[data-video-reference-source]");
+            const target = referenceAtPoint(event.clientX, event.clientY);
             frame.classList.remove("is-dragging");
             emptyState
               .querySelectorAll("[data-video-reference-source].drag-over")
