@@ -112,6 +112,16 @@ test("homepage defers Pixi until the workspace is opened", async ({ page }) => {
   expect(pixiRequests).toHaveLength(0);
 });
 
+test("startup does not flash the GitHub icon or notification modal", async ({ page }) => {
+  await mockApi(page, 20);
+  await page.goto("/?canvasPerf=1");
+  await expect(page.locator("html")).not.toHaveClass(/app-loading/);
+  await expect(page.locator("#notification-modal")).not.toBeVisible();
+  const icon = await page.locator(".home-github svg").boundingBox();
+  expect(icon?.width).toBeLessThanOrEqual(20);
+  expect(icon?.height).toBeLessThanOrEqual(20);
+});
+
 test("prompt agent opens the isolated comic studio", async ({ page }) => {
   await mockApi(page, 20);
   await page.goto("/#/canvas");

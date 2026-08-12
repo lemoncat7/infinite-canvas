@@ -1,4 +1,3 @@
-import "../style.css";
 import { CanvasPersistenceRuntimeFeature } from "../canvas/canvas-persistence-runtime-feature";
 import { CanvasRenderingRuntimeFeature } from "../canvas/canvas-rendering-runtime-feature";
 import { createCanvasPersistenceComposition } from "../canvas/canvas-persistence-composition";
