@@ -23,7 +23,6 @@ export class CanvasInputFeature {
     marqueeBox: HTMLElement;
     batchToolbar: HTMLElement;
     draw: (syncDom?: boolean) => void;
-    drawCamera: () => void;
     save: () => void;
     setEditing: () => void;
     updateEditor: () => void;
@@ -154,7 +153,6 @@ export class CanvasInputFeature {
       cancelConnection: options.cancelConnection,
       save: options.save,
       draw: options.draw,
-      drawCamera: options.drawCamera,
       closeQuickMenu: options.closeQuickMenu,
       smoothZoom: this.cameraViewport.smoothBy,
     });

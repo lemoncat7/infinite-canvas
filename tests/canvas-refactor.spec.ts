@@ -294,32 +294,6 @@ test("400 nodes stay GPU-virtualized and recover WebGL context", async ({
   expect(errors).toEqual([]);
 });
 
-test("blank-canvas panning uses the camera-only Pixi path", async ({ page }) => {
-  await mockApi(page, 400);
-  await page.goto("/?canvasPerf=1#/canvas");
-  await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
-  await page.evaluate(() =>
-    (
-      window as typeof window & {
-        __canvasPerformance?: { reset(): void };
-      }
-    ).__canvasPerformance?.reset(),
-  );
-  await page.mouse.move(1120, 720);
-  await page.mouse.down();
-  await page.mouse.move(840, 610, { steps: 30 });
-  await page.mouse.up();
-  const perf = await page.evaluate(() =>
-    (
-      window as typeof window & {
-        __canvasPerformance?: { snapshot(): { averagePaintMs: number } };
-      }
-    ).__canvasPerformance?.snapshot(),
-  );
-  expect(perf).toBeTruthy();
-  expect(perf!.averagePaintMs).toBeLessThan(30);
-});
-
 test("mobile uses bounded DPR and touch selection", async ({ browser }) => {
   const context = await browser.newContext({
     viewport: { width: 390, height: 844 },

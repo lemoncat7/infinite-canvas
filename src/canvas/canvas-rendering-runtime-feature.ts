@@ -101,6 +101,4 @@ export class CanvasRenderingRuntimeFeature {
   world = (point: Point) =>
     screenToWorld(point, this.camera, { width: innerWidth, height: innerHeight });
 
-  drawCamera = () => this.render.drawCamera();
-
 }

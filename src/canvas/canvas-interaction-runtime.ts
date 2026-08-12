@@ -125,7 +125,6 @@ export class CanvasInteractionRuntime {
       marqueeBox: this.batch.marqueeBox,
       batchToolbar: this.batch.toolbar,
       draw: options.draw,
-      drawCamera: () => options.rendering().drawCamera(),
       save: options.save,
       setEditing: () => options.persistence().setEditing(),
       updateEditor: options.updateEditor,

@@ -58,7 +58,6 @@ export class CanvasRenderFeature {
   private readonly log: (event: string, details: unknown) => void;
 
   draw = (syncDom = true) => this.paintCoordinator.draw(syncDom);
-  drawCamera = () => this.paintCoordinator.drawCamera();
   paint = () => this.paintCoordinator.paint();
   active = () => Boolean(this.renderer);
   suspend = () => this.renderer?.suspend();
