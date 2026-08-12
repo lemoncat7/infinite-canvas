@@ -411,7 +411,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
             },
           }),
           markers = Array.from(
-            { length: 3 },
+            { length: VIDEO_CARD_LAYOUT.maxFrameCount },
             (_, index) =>
               new Text({
                 text: String(index + 1),
@@ -523,6 +523,14 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         JSON.stringify(node.videoSettings),
         JSON.stringify(node.voiceSettings),
         JSON.stringify(node.ttsSettings),
+        node.kind === "video"
+          ? (incomingByTarget.get(node.id) ?? [])
+              .map((link) => {
+                const source = byId.get(link.from);
+                return `${link.from}:${source?.kind ?? ""}:${source?.mediaUrl ?? ""}`;
+              })
+              .join(",")
+          : "",
         node.id === snapshot.selectedId,
         selectedIds.has(node.id),
         view.media.visible,
@@ -685,10 +693,14 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         view.body.style.wordWrapWidth = metrics.contentWidth;
         view.meta.visible = false;
       } else if (!mediaOnly && node.kind === "video" && node.role !== "result") {
-        const frameTop = VIDEO_CARD_LAYOUT.frameTop,
+        const referenceCount = (incomingByTarget.get(node.id) ?? [])
+            .map((link) => byId.get(link.from))
+            .filter((source) => source?.kind === "image").length,
+          visibleFrameCount = referenceCount || VIDEO_CARD_LAYOUT.placeholderCount,
+          frameTop = VIDEO_CARD_LAYOUT.frameTop,
           frameGap = VIDEO_CARD_LAYOUT.frameGap,
-          { frameWidth, frameX } = videoFrameLayout(node.width);
-        for (let index = 0; index < VIDEO_CARD_LAYOUT.frameCount; index++)
+          { frameWidth, frameX, frameCount } = videoFrameLayout(node.width, visibleFrameCount);
+        for (let index = 0; index < frameCount; index++)
           view.detail
             .roundRect(
               frameX(index),
@@ -728,7 +740,9 @@ export class PixiCanvasRenderer implements CanvasRenderer {
           });
         view.icon.visible = false;
         view.markers.forEach((marker, index) => {
-          marker.visible = true;
+          marker.visible = index < frameCount;
+          if (index >= frameCount) return;
+          marker.text = String(index + 1);
           marker.position.set(
             frameX(index) + frameWidth / 2,
             frameTop + VIDEO_CARD_LAYOUT.frameHeight / 2,

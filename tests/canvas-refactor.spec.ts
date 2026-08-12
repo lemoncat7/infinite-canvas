@@ -7,12 +7,19 @@ import { VIDEO_CARD_LAYOUT, videoFrameLayout } from "../src/nodes/video-card-lay
 
 test("video card reference frames stay horizontally centered", () => {
   const width = 240;
-  const layout = videoFrameLayout(width);
+  const layout = videoFrameLayout(width, 3);
   const lastRight =
-    layout.frameX(VIDEO_CARD_LAYOUT.frameCount - 1) + layout.frameWidth;
+    layout.frameX(layout.frameCount - 1) + layout.frameWidth;
   expect(layout.frameX(0)).toBe(VIDEO_CARD_LAYOUT.horizontalPadding);
   expect(lastRight).toBeCloseTo(width - VIDEO_CARD_LAYOUT.horizontalPadding);
   expect(layout.contentRight).toBe(width - VIDEO_CARD_LAYOUT.horizontalPadding);
+});
+
+test("video card Pixi and DOM layouts use the same dynamic reference count", () => {
+  expect(videoFrameLayout(240, 1).frameCount).toBe(1);
+  expect(videoFrameLayout(240, 2).frameCount).toBe(2);
+  expect(videoFrameLayout(240, 4).frameCount).toBe(4);
+  expect(videoFrameLayout(240, 8).frameCount).toBe(VIDEO_CARD_LAYOUT.maxFrameCount);
 });
 
 const snapNode = (id: number, x: number, y: number, width = 100, height = 80) => ({
