@@ -88,6 +88,16 @@ test("visible video generators use one DOM renderer in selected and idle states"
   expect(pixi).toContain("if (domNodeIds.has(node.id)) continue");
 });
 
+test("interaction suspension preserves DOM-owned video generators", () => {
+  const view = readFileSync("src/nodes/canvas-node-view-feature.ts", "utf8");
+  const style = readFileSync("src/style.css", "utf8");
+  expect(view).toContain("persistentVideoIds");
+  expect(view).toContain('node?.kind === "video" && node.role !== "result"');
+  expect(style).toContain(
+    "#node-layer.dom-interaction-suspended > .flow-node:not(.kind-video.node-generator)",
+  );
+});
+
 test("Pixi video text uses high-resolution textures without changing card size", () => {
   const source = readFileSync("src/canvas/pixi-renderer.ts", "utf8");
   expect(source).toContain("const videoTextResolution = Math.min(devicePixelRatio || 1, 2)");

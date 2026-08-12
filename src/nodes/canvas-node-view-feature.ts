@@ -24,6 +24,7 @@ export class CanvasNodeViewFeature {
   readonly editorCache: PixiEditorCache;
   private hiddenSelectedDomId = 0;
   private readonly getSelectedId: () => number;
+  private readonly nodes: FlowNode[];
   private readonly factory: BoundNodeViewFactory;
   private readonly synchronizer: BoundNodeDomSynchronizer;
 
@@ -90,6 +91,7 @@ export class CanvasNodeViewFeature {
     notify: (message: string, type: Tone, detail?: string) => void;
   }) {
     this.getSelectedId = options.getSelectedId;
+    this.nodes = options.nodes;
     this.factory = new BoundNodeViewFactory({
       nodes: options.nodes,
       batchIds: options.getBatchIds(),
@@ -188,7 +190,17 @@ export class CanvasNodeViewFeature {
     // Pixi must immediately resume drawing the selected card while its DOM
     // editor is being detached; waiting for the next full DOM sync creates a
     // one-frame blank card during drag.
+    // Video generators have a single DOM renderer in both idle and selected
+    // states. Preserve their ownership while other selected DOM editors yield
+    // to Pixi during camera/node interaction.
+    const persistentVideoIds = new Set(
+      [...this.mountedIds].filter((id) => {
+        const node = this.nodes.find((item) => item.id === id);
+        return node?.kind === "video" && node.role !== "result";
+      }),
+    );
     this.mountedIds.clear();
+    persistentVideoIds.forEach((id) => this.mountedIds.add(id));
   }
   sync() { this.synchronizer.sync(); }
   scheduleWarmup() { this.editorCache.scheduleWarmup(); }
@@ -203,4 +215,5 @@ export class CanvasNodeViewFeature {
         element.style.transform = `translate(${node.x}px, ${node.y}px)`;
     }
   }
+
 }

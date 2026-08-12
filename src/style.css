@@ -1107,7 +1107,7 @@ body:not(.home-mode) .video-config-panel > textarea::-webkit-scrollbar { width:5
 body:not(.home-mode) .video-config-panel > textarea::-webkit-scrollbar-thumb { background:color-mix(in srgb,var(--ws-muted) 42%,transparent); border-radius:999px; }
 .flow-node.canvas-pan-selected .node-config-panel,
 .flow-node.canvas-pan-selected .video-result-prompt { visibility:hidden; opacity:0; pointer-events:none; }
-#node-layer.dom-interaction-suspended > .flow-node { display:none!important; }
+#node-layer.dom-interaction-suspended > .flow-node:not(.kind-video.node-generator) { display:none!important; }
 body:not(.home-mode) .image-config-panel footer,
 body:not(.home-mode) .video-config-panel footer { border-color:var(--ws-border); }
 body:not(.home-mode) .image-config-panel summary,
