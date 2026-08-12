@@ -7,12 +7,12 @@
     <link rel="icon" type="image/svg+xml" href="/brand/viora-mark-v2.svg" />
     <style>
       .asset-item img,.asset-item video{pointer-events:none;-webkit-user-drag:none;user-select:none}
-      .app-loading .home-github svg{width:16px;height:16px}
-      .app-loading #notification-modal{display:none}
+      html.app-loading{background:#10110f}
+      html.app-loading body{visibility:hidden}
     </style>
     <title>Viora — AI 视觉无限画布</title>
   </head>
-  <body>
+  <body class="home-mode">
     <main id="home-page" class="home-page">
       <nav class="home-nav"><a class="home-logo" href="#/"><span><img src="/brand/viora-mark-v2.svg" alt=""></span><strong>Viora</strong></a><div><a href="#showcase">探索作品</a><a class="home-github" href="https://github.com/lemoncat7/infinite-canvas" target="_blank" rel="noreferrer" title="在 GitHub 查看 Viora" aria-label="GitHub 仓库"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.69c-2.78.6-3.37-1.18-3.37-1.18-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.61.07-.61 1 .07 1.53 1.03 1.53 1.03.9 1.53 2.35 1.09 2.92.83.09-.65.35-1.09.64-1.34-2.22-.25-4.56-1.11-4.56-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02A9.6 9.6 0 0 1 12 6.7a9.6 9.6 0 0 1 2.5.34c1.91-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.68-4.57 4.93.36.31.68.92.68 1.86v2.76c0 .27.18.58.69.48A10 10 0 0 0 12 2Z"></path></svg></a><button id="home-login" type="button">登录</button><button id="home-enter" type="button">进入工作台</button></div></nav>
       <section class="home-hero home-scene" data-scene-index="0"><div class="home-grid" aria-hidden="true"></div><div class="home-orb home-orb-a"></div><div class="home-orb home-orb-b"></div><div class="home-particles" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div><div class="home-hero-copy"><span class="home-eyebrow">VIORA · VISUAL THOUGHT SPACE</span><h1>让灵感，<br>自然生长。</h1><p>把文字、图像与动态影像放进同一片画布。轻轻连接，让创意从一个念头生长成完整世界。</p><div><button id="home-start" type="button">开始创作 <span>↗</span></button><a href="#showcase">浏览灵感</a></div></div><div class="home-hero-art" aria-hidden="true"><img class="hero-brand-mark" src="/brand/viora-mark-v2.svg" alt=""><div class="hero-glass-card hero-card-one"><i></i><span>IMAGE</span><b>从一句话，长出一幅画</b></div><div class="hero-glass-card hero-card-two"><i></i><span>VIDEO</span><b>让静止的画面开始呼吸</b></div><div class="hero-flow-line"></div></div></section>

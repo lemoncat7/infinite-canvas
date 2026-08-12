@@ -27,7 +27,6 @@ export class ApplicationBootstrapController<User> {
     localStorage.removeItem("flow-authenticated");
     this.options.renderUser();
     if (this.options.user()) this.options.touchSession();
-    const capabilities = this.options.loadCapabilities();
     if (this.options.user() && location.hash === "#/canvas") {
       document.body.classList.add("home-mode", "workspace-loading", "workspace-preparing");
       this.options.randomizeTheme();
@@ -35,14 +34,17 @@ export class ApplicationBootstrapController<User> {
       const restored = await this.options.synchronizeCanvas();
       if (restored) {
         this.options.status("正在加载资产索引与创作模型");
-        await Promise.all([this.options.loadAssets(), capabilities]);
+        await Promise.all([
+          this.options.loadAssets(),
+          this.options.loadCapabilities(),
+        ]);
         this.options.status("工作区已准备完成");
       } else {
         location.hash = "#/";
         this.options.notifyError("工作区同步失败，请重新进入创作");
       }
       document.body.classList.remove("workspace-loading", "workspace-preparing");
-    } else await capabilities;
+    } else if (this.options.user()) await this.options.loadCapabilities();
     this.options.status("", false);
     this.options.applyRoute();
   }

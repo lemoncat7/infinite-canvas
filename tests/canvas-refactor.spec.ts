@@ -112,10 +112,12 @@ test("homepage defers Pixi until the workspace is opened", async ({ page }) => {
   expect(pixiRequests).toHaveLength(0);
 });
 
-test("startup does not flash the GitHub icon or notification modal", async ({ page }) => {
+test("startup keeps all unstyled UI out of the first paint", async ({ page }) => {
   await mockApi(page, 20);
   await page.goto("/?canvasPerf=1");
   await expect(page.locator("html")).not.toHaveClass(/app-loading/);
+  await expect(page.locator("body")).toHaveClass(/home-mode/);
+  await expect(page.locator(".home-page")).toBeVisible();
   await expect(page.locator("#notification-modal")).not.toBeVisible();
   const icon = await page.locator(".home-github svg").boundingBox();
   expect(icon?.width).toBeLessThanOrEqual(20);
