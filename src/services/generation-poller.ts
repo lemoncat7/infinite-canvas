@@ -9,6 +9,20 @@ type Options = {
   onSyncFailure: (failures: number, notify: boolean) => void;
 };
 
+export function mergeGenerationState(
+  current: Pick<FlowNode, "status" | "progress">,
+  incoming: Pick<GenerationJob, "status" | "progress">,
+) {
+  const terminal = ["succeeded", "failed", "canceled"].includes(incoming.status);
+  const preventQueueRegression = current.status === "running" && incoming.status === "queued";
+  const status = preventQueueRegression ? "running" : incoming.status;
+  const progress =
+    !terminal && status === "running"
+      ? Math.max(Number(current.progress ?? 0), Number(incoming.progress ?? 0))
+      : Number(incoming.progress ?? 0);
+  return { status, progress, terminal };
+}
+
 export class GenerationPoller {
   private readonly timers = new Map<string, number>();
   private readonly retryNotified = new Set<string>();
@@ -42,19 +56,20 @@ export class GenerationPoller {
         current = this.o.nodes.find((item) => item.id === nodeId);
         if (!current?.jobId || current.jobId !== jobId) return this.cancel(jobId);
         failures = 0; failureNotified = false;
-        const changed = current.status !== job.status || Number(current.progress ?? 0) !== Number(job.progress ?? 0);
-        const terminal = job.status === "succeeded" || job.status === "failed" || job.status === "canceled";
-        current.status = job.status; current.progress = Number(job.progress ?? 0);
-        if (current.kind === "image" && job.status === "running" && job.progress === 20 && !this.retryNotified.has(jobId)) {
+        const merged = mergeGenerationState(current, job);
+        const changed = current.status !== merged.status || Number(current.progress ?? 0) !== merged.progress;
+        current.status = merged.status; current.progress = merged.progress;
+        const stableJob = { ...job, status: merged.status, progress: merged.progress };
+        if (current.kind === "image" && merged.status === "running" && merged.progress === 20 && !this.retryNotified.has(jobId)) {
           this.retryNotified.add(jobId); this.o.onRetry(current);
         }
-        if (!terminal) this.o.onProgress(current, job, changed);
-        if (!terminal) return;
+        if (!merged.terminal) this.o.onProgress(current, stableJob, changed);
+        if (!merged.terminal) return;
         this.cancel(jobId); this.retryNotified.delete(jobId);
         if (this.finalized.has(jobId)) return;
         this.finalized.add(jobId);
         if (this.finalized.size > 200) this.finalized.delete(this.finalized.values().next().value!);
-        await this.o.onTerminal(current, job);
+        await this.o.onTerminal(current, stableJob);
       } catch {
         failures++;
         if (failures >= 5 && !failureNotified) failureNotified = true;

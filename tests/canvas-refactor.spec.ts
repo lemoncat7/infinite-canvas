@@ -1,7 +1,23 @@
 import { expect, test, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
+import { mergeGenerationState } from "../src/services/generation-poller";
 
 const projectId = "canvas-stress-project";
+
+test("generation state never regresses from running to queued", () => {
+  expect(
+    mergeGenerationState(
+      { status: "running", progress: 38 },
+      { status: "queued", progress: 0 },
+    ),
+  ).toEqual({ status: "running", progress: 38, terminal: false });
+  expect(
+    mergeGenerationState(
+      { status: "running", progress: 38 },
+      { status: "running", progress: 20 },
+    ).progress,
+  ).toBe(38);
+});
 
 function stressCanvas(count = 400) {
   const nodes = Array.from({ length: count }, (_, index) => {
