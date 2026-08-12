@@ -64,6 +64,15 @@ test("selected video generator supports pointer drag reference swapping", () => 
   expect(source).toContain("?.classList.add(\"drag-over\")");
 });
 
+test("selected Pixi video generator exposes its DOM storyboard hit layer", () => {
+  const source = readFileSync("src/style.css", "utf8");
+  const selector = "flow-node.pixi-card-editor.kind-video.node-generator.selected>.image-empty-state";
+  expect(source).toContain(selector);
+  const rule = source.slice(source.indexOf(selector), source.indexOf("}", source.indexOf(selector)));
+  expect(rule).toContain("display:grid!important");
+  expect(rule).toContain("pointer-events:auto!important");
+});
+
 const snapNode = (id: number, x: number, y: number, width = 100, height = 80) => ({
   id, x, y, width, height, kind: "prompt" as const, title: "", body: "", accent: "",
 });
