@@ -955,7 +955,9 @@ body.home-mode .home-page { color:#1b2421; background:radial-gradient(circle at 
 .home-scene-nav button { color:#8c9b95!important; }.home-scene-nav button.active { color:#587a72!important; }.home-scene-nav button.active i { box-shadow:0 0 13px rgba(78,126,115,.42)!important; }.home-wheel-hint { color:#83918b!important; }.home-wheel-hint i { border-color:#8c9b95!important; }.home-wheel-hint i::after { background:#668a81!important; }
 
 @media (min-width:801px) {
-  .home-hero,.home-process,.home-capabilities,.home-showcase { position:absolute; z-index:0; inset:82px 0 0; width:min(1180px,100%); height:calc(100vh - 82px); min-height:0; margin:auto; opacity:var(--scene-presence)!important; transform:translate3d(0,calc(var(--scene-distance) * 13vh),0) scale(calc(.94 + var(--scene-presence) * .06))!important; filter:blur(calc((1 - var(--scene-presence)) * 9px))!important; pointer-events:none!important; will-change:transform,opacity,filter; }
+  .home-hero,.home-process,.home-capabilities,.home-showcase { position:absolute; z-index:0; inset:82px 0 0; width:min(1180px,100%); height:calc(100vh - 82px); min-height:0; margin:auto; opacity:var(--scene-presence)!important; transform:translate3d(0,calc(var(--scene-distance) * 13vh),0) scale(calc(.94 + var(--scene-presence) * .06))!important; filter:none!important; pointer-events:none!important; will-change:transform,opacity; contain:layout paint style; backface-visibility:hidden; }
+  .home-scene.scene-dormant { visibility:hidden; content-visibility:hidden; }
+  .home-scene.scene-dormant * { animation-play-state:paused!important; }
   .home-page[data-scene="0"] [data-scene-index="0"],.home-page[data-scene="1"] [data-scene-index="1"],.home-page[data-scene="2"] [data-scene-index="2"],.home-page[data-scene="3"] [data-scene-index="3"] { z-index:3; pointer-events:auto!important; }
   .home-process,.home-capabilities { display:grid; align-content:center; padding:20px 48px 48px; }
   .home-process { grid-template-rows:auto 330px auto; }.home-capabilities { grid-template-rows:auto auto; }

@@ -1,4 +1,6 @@
 export class HomeSceneController {
+  private readonly scenes: HTMLElement[];
+  private readonly sceneButtons: HTMLElement[];
   private progress = 0;
   private target = 0;
   private frame = 0;
@@ -14,6 +16,10 @@ export class HomeSceneController {
     private readonly loginModal: HTMLElement,
     private readonly preview: HTMLElement,
   ) {
+    this.scenes = Array.from(this.page.querySelectorAll<HTMLElement>(".home-scene"));
+    this.sceneButtons = Array.from(
+      this.page.querySelectorAll<HTMLElement>("[data-home-scene]"),
+    );
     this.bind();
     this.setTarget(0);
   }
@@ -36,10 +42,9 @@ export class HomeSceneController {
     this.progress = this.start + (this.target - this.start) * eased;
     if (elapsed >= 1) this.progress = this.target;
     this.page.style.setProperty("--home-progress", this.progress.toFixed(4));
-    this.page
-      .querySelectorAll<HTMLElement>(".home-scene")
-      .forEach((element, index) => {
+    this.scenes.forEach((element, index) => {
         const distance = index - this.progress;
+        element.classList.toggle("scene-dormant", Math.abs(distance) > 1.05);
         element.style.setProperty("--scene-distance", distance.toFixed(4));
         element.style.setProperty(
           "--scene-presence",
@@ -48,9 +53,7 @@ export class HomeSceneController {
       });
     const scene = Math.max(0, Math.min(3, Math.round(this.progress)));
     this.page.dataset.scene = String(scene);
-    this.page
-      .querySelectorAll<HTMLElement>("[data-home-scene]")
-      .forEach((button) =>
+    this.sceneButtons.forEach((button) =>
         button.classList.toggle(
           "active",
           Number(button.dataset.homeScene) === scene,
@@ -85,9 +88,7 @@ export class HomeSceneController {
       },
       { passive: false },
     );
-    this.page
-      .querySelectorAll<HTMLElement>("[data-home-scene]")
-      .forEach((button) =>
+    this.sceneButtons.forEach((button) =>
         button.addEventListener("click", () =>
           this.setTarget(Number(button.dataset.homeScene)),
         ),
