@@ -119,6 +119,8 @@ export class BoundNodeViewFactory {
       scheduleSave: this.options.scheduleSave,
       draw: this.options.draw,
       generate: this.options.generate,
+      beginImageUpload: this.options.beginImageUpload,
+      beginImageLibrary: this.options.beginImageLibrary,
       previewMedia: this.options.previewMedia,
       downloadMedia: (current) => {
         if (current.kind === "audio") {

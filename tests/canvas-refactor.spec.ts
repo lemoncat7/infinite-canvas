@@ -200,6 +200,20 @@ test("an empty Pixi image keeps a single aligned icon frame", async ({ page }) =
   expect(await page.evaluate(() => document.querySelectorAll("#canvas-pixi").length)).toBe(1);
 });
 
+test("an empty selected image exposes real source actions and guards generation", async ({ page }) => {
+  const { canvas } = await mockApi(page, 1);
+  Object.assign(canvas.nodes[0], { kind: "image", mediaUrl: undefined, body: "" });
+  await page.goto("/?canvasPerf=1#/canvas");
+  await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
+  await page.mouse.click(460, 350);
+  const node = page.locator('.flow-node[data-id="1"]');
+  await expect(node.locator('[data-action="image-upload"]')).toBeVisible();
+  await expect(node.locator('[data-action="image-library"]')).toBeVisible();
+  await expect(node.locator('[data-action="generate"]')).toBeDisabled();
+  await node.locator('[data-image-field="description"]').fill("冷色清晨的城市天台");
+  await expect(node.locator('[data-action="generate"]')).toBeEnabled();
+});
+
 test("a queued Pixi image replaces empty actions with progress state", async ({ page }) => {
   const { canvas } = await mockApi(page, 1);
   Object.assign(canvas.nodes[0], {

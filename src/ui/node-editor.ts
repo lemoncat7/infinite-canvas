@@ -5,6 +5,8 @@ type NodeToolAction =
   | "edit"
   | "zoom-in"
   | "zoom-out"
+  | "image-upload"
+  | "image-library"
   | "generate"
   | "preview"
   | "download"
@@ -16,6 +18,8 @@ const toolContent: Record<NodeToolAction, { label: string; icon: string }> = {
   edit: { label: "编辑", icon: '<path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path>' },
   "zoom-in": { label: "放大", icon: '<circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path><path d="M11 8v6"></path><path d="M8 11h6"></path>' },
   "zoom-out": { label: "缩小", icon: '<circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path><path d="M8 11h6"></path>' },
+  "image-upload": { label: "上传", icon: '<path d="M12 16V4"></path><path d="m7 9 5-5 5 5"></path><path d="M5 20h14"></path>' },
+  "image-library": { label: "资产库", icon: '<rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="m3 15 5-5 4 4 3-3 6 6"></path>' },
   generate: { label: "生成", icon: '<path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8Z"></path>' },
   preview: { label: "预览", icon: '<circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path>' },
   download: { label: "下载", icon: '<path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path>' },
@@ -27,7 +31,9 @@ function nodeToolActions(node: FlowNode) {
   if (node.kind === "image")
     return new Set<NodeToolAction>([
       "info",
-      ...(node.mediaUrl ? (["download", "clear-image"] as NodeToolAction[]) : []),
+      ...(node.mediaUrl
+        ? (["download", "clear-image"] as NodeToolAction[])
+        : (["image-upload", "image-library", "generate"] as NodeToolAction[])),
       "delete",
     ]);
   if (node.kind === "audio")
@@ -54,7 +60,10 @@ export function renderNodeToolbar(
     .forEach((button) => {
       const action = button.dataset.action as NodeToolAction;
       button.hidden = !visible.has(action);
-      button.disabled = action === "clear-image" && locked;
+      button.disabled =
+        (action === "clear-image" && locked) ||
+        (["image-upload", "image-library", "generate"] as NodeToolAction[]).includes(action) &&
+          (locked || (action === "generate" && !node.body.trim()));
       const content = toolContent[action];
       if (content && button.dataset.toolRendered !== "true") {
         button.dataset.toolRendered = "true";

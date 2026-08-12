@@ -697,28 +697,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         view.body.style.fontSize = 10;
         view.body.style.align = "center";
         view.meta.visible = false;
-        if (!generating) view.detail
-          .roundRect(
-            layout.actionsX,
-            layout.actionsY,
-            IMAGE_CARD_LAYOUT.uploadWidth,
-            IMAGE_CARD_LAYOUT.actionHeight,
-            9,
-          )
-          .roundRect(
-            layout.actionsX + IMAGE_CARD_LAYOUT.uploadWidth + IMAGE_CARD_LAYOUT.actionGap,
-            layout.actionsY,
-            IMAGE_CARD_LAYOUT.libraryWidth,
-            IMAGE_CARD_LAYOUT.actionHeight,
-            9,
-          )
-          .fill({ color: snapshot.dark ? 0xffffff : 0x687772, alpha: 0.035 })
-          .stroke({
-            color: snapshot.dark ? 0x344247 : 0xd2d9d5,
-            alpha: 0.9,
-            width: 1,
-          });
-        view.hint.text = "↑  上传          ▦  资产库";
+        view.hint.text = "选中卡片后，可从上方上传、选择资产或生成";
         view.hint.visible = !generating;
         view.hint.anchor.set(0.5);
         view.hint.position.set(

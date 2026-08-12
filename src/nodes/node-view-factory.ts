@@ -115,6 +115,20 @@ export function createNodeView(options: NodeViewFactoryOptions) {
   clearImageTool.dataset.action = "clear-image";
   clearImageTool.title = "清除卡片图片";
   clearImageTool.textContent = "⌫";
+  const imageUploadTool = document.createElement("button");
+  imageUploadTool.type = "button";
+  imageUploadTool.dataset.action = "image-upload";
+  imageUploadTool.title = "上传";
+  imageUploadTool.textContent = "↑";
+  const imageLibraryTool = document.createElement("button");
+  imageLibraryTool.type = "button";
+  imageLibraryTool.dataset.action = "image-library";
+  imageLibraryTool.title = "资产库";
+  imageLibraryTool.textContent = "▦";
+  const floatingTools = element.querySelector(".node-floating-tools")!;
+  const generateTool = element.querySelector('[data-action="generate"]')!;
+  floatingTools.insertBefore(imageUploadTool, generateTool);
+  floatingTools.insertBefore(imageLibraryTool, generateTool);
   element
     .querySelector(".node-floating-tools")!
     .insertBefore(

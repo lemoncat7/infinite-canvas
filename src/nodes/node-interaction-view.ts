@@ -268,6 +268,8 @@ interface NodeToolbarOptions {
   scheduleSave: () => void;
   draw: () => void;
   generate: (node: FlowNode) => void | Promise<void>;
+  beginImageUpload: (nodeId: number) => void;
+  beginImageLibrary: (nodeId: number) => void | Promise<void>;
   previewMedia: (node: FlowNode) => void;
   downloadMedia: (node: FlowNode) => void | Promise<void>;
   deleteNode: (node: FlowNode) => void;
@@ -303,6 +305,8 @@ export function bindNodeToolbarActions(options: NodeToolbarOptions) {
     options.selectNode(node.id);
     void options.generate(node);
   });
+  on("image-upload", (node) => options.beginImageUpload(node.id));
+  on("image-library", (node) => void options.beginImageLibrary(node.id));
   on("preview", (node) => {
     if (
       node.mediaUrl &&
