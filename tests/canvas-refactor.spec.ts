@@ -550,3 +550,13 @@ test("business rendering is frozen for the complete interaction gesture", () => 
   );
   expect(branch).not.toContain(".render(snapshot)");
 });
+
+test("interaction rendering updates card and link geometry together", () => {
+  const source = readFileSync("src/canvas/pixi-renderer.ts", "utf8");
+  const interaction = source.slice(
+    source.indexOf("updateInteraction(snapshot"),
+    source.indexOf("private renderLinkGeometry"),
+  );
+  expect(interaction).toContain("view.container.position.set(node.x, node.y)");
+  expect(interaction).toContain("this.renderLinkGeometry(");
+});

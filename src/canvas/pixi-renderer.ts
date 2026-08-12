@@ -338,45 +338,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
     const linksKey = `${linkHash}:${snapshot.links.length}`;
     if (linksKey !== this.linksKey) {
       this.linksKey = linksKey;
-      this.links.clear();
-      this.activeLinks.clear();
-      let activeCount = 0;
-      snapshot.links.forEach((link, index) => {
-      const from = byId.get(link.from),
-        to = byId.get(link.to);
-      if (!from || !to) return;
-      const a = port(from, link.fromSide),
-        b = port(to, link.toSide),
-        curve = Math.max(55, Math.hypot(b.x - a.x, b.y - a.y) * 0.35),
-        ca = control(a, link.fromSide, curve),
-        cb = control(b, link.toSide, curve),
-        highlighted =
-          link.from === snapshot.selectedId ||
-          link.to === snapshot.selectedId ||
-          index === snapshot.hoveredLinkIndex ||
-          index === snapshot.touchSelectedLinkIndex,
-        active =
-          from.status === "queued" ||
-          from.status === "running" ||
-          to.status === "queued" ||
-          to.status === "running";
-      if (active) activeCount++;
-      (active ? this.activeLinks : this.links)
-        .moveTo(a.x, a.y)
-        .bezierCurveTo(ca.x, ca.y, cb.x, cb.y, b.x, b.y)
-        .stroke({
-          color: highlighted
-            ? snapshot.dark
-              ? 0x89e8e4
-              : 0x186f67
-            : snapshot.dark
-              ? 0x6fc7c3
-              : 0x48897a,
-          alpha: highlighted ? 0.94 : 0.64,
-          width: highlighted ? 3 : 2.25,
-        });
-      });
-      this.setActiveLinkAnimation(activeCount > 0);
+      this.renderLinkGeometry(snapshot, byId);
     }
     const selectedIds = new Set(snapshot.selectedIds);
     const offsetX = innerWidth / 2 + snapshot.camera.x,
@@ -886,10 +848,43 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       const view = this.cardViews.get(node.id);
       if (view) view.container.position.set(node.x, node.y);
     }
+    this.renderLinkGeometry(
+      snapshot,
+      new Map(snapshot.nodes.map((node) => [node.id, node])),
+    );
     // Business content, textures, status and Graphics are deliberately frozen
     // for the entire gesture. Geometry catches up in the full render on release.
     this.renderPendingConnection(snapshot);
     this.app.renderer.render(this.app.stage);
+  }
+
+  private renderLinkGeometry(
+    snapshot: CanvasRenderSnapshot,
+    byId: ReadonlyMap<number, RenderNode>,
+  ) {
+    this.links.clear();
+    this.activeLinks.clear();
+    let activeCount = 0;
+    snapshot.links.forEach((link, index) => {
+      const from = byId.get(link.from), to = byId.get(link.to);
+      if (!from || !to) return;
+      const a = port(from, link.fromSide), b = port(to, link.toSide),
+        curve = Math.max(55, Math.hypot(b.x - a.x, b.y - a.y) * 0.35),
+        ca = control(a, link.fromSide, curve), cb = control(b, link.toSide, curve),
+        highlighted = link.from === snapshot.selectedId || link.to === snapshot.selectedId ||
+          index === snapshot.hoveredLinkIndex || index === snapshot.touchSelectedLinkIndex,
+        active = [from.status, to.status].some((status) => status === "queued" || status === "running");
+      if (active) activeCount++;
+      (active ? this.activeLinks : this.links)
+        .moveTo(a.x, a.y)
+        .bezierCurveTo(ca.x, ca.y, cb.x, cb.y, b.x, b.y)
+        .stroke({
+          color: highlighted ? (snapshot.dark ? 0x89e8e4 : 0x186f67) : (snapshot.dark ? 0x6fc7c3 : 0x48897a),
+          alpha: highlighted ? 0.94 : 0.64,
+          width: highlighted ? 3 : 2.25,
+        });
+    });
+    this.setActiveLinkAnimation(activeCount > 0);
   }
 
   pan(camera: CanvasRenderSnapshot["camera"]) {
