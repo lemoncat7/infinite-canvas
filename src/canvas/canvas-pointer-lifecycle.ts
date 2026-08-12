@@ -69,6 +69,7 @@ export class CanvasPointerLifecycle {
         pointer.toggleBatchOnRelease = hit.id;
       } else {
         this.o.selection.selectedId = hit.id;
+        this.o.showSelectedDom();
         pointer.draggingNode = hit.id;
       }
       pointer.blankCanvas = false;

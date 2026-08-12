@@ -5,6 +5,7 @@ import { CanvasStore } from "../canvas/store";
 import type { FlowLink, FlowNode, Point } from "../nodes/node-types";
 import { PromptNodeController } from "../nodes/prompt-node";
 import { CanvasNodeIdAllocator } from "../services/canvas-node-id-allocator";
+import { themePreference } from "../services/theme-preference";
 
 function requiredElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -46,8 +47,7 @@ export class RuntimeFoundation {
   readonly nodeIds: CanvasNodeIdAllocator;
   readonly syncClientId: string;
   backgroundMode: "dots" | "lines" | "blank" = "lines";
-  colorTheme: "light" | "dark" =
-    localStorage.getItem("flow-theme") === "light" ? "light" : "dark";
+  colorTheme: "light" | "dark" = themePreference.theme;
 
   constructor(notifyNodeIdExhausted: () => void) {
     requiredElement<HTMLElement>(".brand").append(this.dom.saveState);

@@ -112,7 +112,7 @@ export class CanvasGeometryController {
     return undefined;
   }
 
-  hitPort(sx: number, sy: number, radius = 12, excludeNodeId?: number) {
+  hitPort(sx: number, sy: number, radius = 16, excludeNodeId?: number) {
     const center = this.world({ x: sx, y: sy });
     const worldRadius = radius / this.camera.zoom;
     const candidates = new Set(this.spatialIndex.search({ minX: center.x - worldRadius, minY: center.y - worldRadius, maxX: center.x + worldRadius, maxY: center.y + worldRadius }));

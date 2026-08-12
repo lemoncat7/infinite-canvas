@@ -64,6 +64,13 @@ export function syncImageNodePanel(options: ImageNodeSyncOptions) {
     imagePanel.querySelector<HTMLElement>(
       "[data-image-model-label]",
     )!.textContent = displayModelName(node.model ?? "gpt-image-2");
+    imagePanel
+      .querySelectorAll<HTMLButtonElement>("[data-image-model]")
+      .forEach((button) => {
+        const selected = button.dataset.imageModel === model.value;
+        button.classList.toggle("active", selected);
+        button.setAttribute("aria-selected", String(selected));
+      });
     description.placeholder = node.mediaUrl
       ? "描述你想如何修改这张图片"
       : "描述要生成的图片内容";

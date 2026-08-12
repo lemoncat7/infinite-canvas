@@ -33,7 +33,7 @@ export function styleNodeEditor(
   node: FlowNode,
   flags: NodeViewFlags,
 ) {
-  const className = `flow-node pixi-card-editor pixi-owned-editor kind-${node.kind}${node.role === "result" || node.kind === "audio" ? " node-result" : " node-generator"}${flags.selected ? " selected" : ""}${flags.editing ? " prompt-inline-editing" : ""}${flags.batchSelected ? " batch-selected" : ""}${flags.agentReference ? " agent-reference" : ""}${flags.locked ? " generating" : ""}${flags.workflowWaiting ? " workflow-waiting" : ""}`;
+  const className = `flow-node kind-${node.kind}${node.role === "result" || node.kind === "audio" ? " node-result" : " node-generator"}${flags.selected ? " selected" : ""}${flags.editing ? " prompt-inline-editing" : ""}${flags.batchSelected ? " batch-selected" : ""}${flags.agentReference ? " agent-reference" : ""}${flags.locked ? " generating" : ""}${flags.workflowWaiting ? " workflow-waiting" : ""}`;
   if (element.className !== className) element.className = className;
   element.style.transform = `translate(${node.x}px, ${node.y}px)`;
   element.style.width = `${node.width}px`;

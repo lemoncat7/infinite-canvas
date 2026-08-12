@@ -1,5 +1,135 @@
 import assert from "node:assert/strict";
 import { comicAssetNameMentioned, comicCharacterStateTransitionIssues, comicPostureTransitionIssue, comicShotCapacity, finalizeComicSceneDependencies, hasVisibleAnonymousCrowd, normalizeComicAssetIndexes, normalizeComicCharacterStates, normalizeComicSceneHierarchy, resolveVisibleAnonymousCrowd } from "../dist/comic-validation.js";
+import { COMIC_SHOT_BATCH_SIZE, comicBatchWindow, comicContinuityAuditIndexes, comicShotBatches, completedShotCount, normalizePlannedShots } from "../dist/comic/pipeline-policy.js";
+import { restoreComicCheckpoint, updateComicCheckpoint } from "../dist/comic/checkpoint-store.js";
+import { comicGenerationErrorMessage, comicGenerationIssue } from "../dist/comic/error-policy.js";
+import { estimateComicSpeechDuration, normalizeComicDialogue, validateComicStage } from "../dist/comic/validation.js";
+import { repairComicStageUntilValid } from "../dist/comic/stage-repair.js";
+import { compactComicFoundation, comicShotPlanIssues, normalizeComicShotPlan } from "../dist/comic/shot-plan.js";
+import { comicAssetPrompt, comicAuditPrompt, comicSceneViewPrompt, comicShotExpansionPrompt, comicShotPlanPrompt, comicStoryPrompt } from "../dist/comic/prompts.js";
+import { parseFirstJsonObject } from "../dist/comic/json.js";
+import { ComicStreamState } from "../dist/comic/stream-state.js";
+import { applyComicAuditRepairs, comicAuditSubset } from "../dist/comic/audit.js";
+
+assert.equal(normalizeComicDialogue({ speaker:"Narrator", text:"夜幕降临" }), "旁白：夜幕降临");
+assert.equal(normalizeComicDialogue([{ character:"林夜", line:"走。" }, { role:"苏晚", words:"好。" }]), "林夜：走。\n苏晚：好。");
+assert.equal(estimateComicSpeechDuration("无对白，以脚步推进").minimumSeconds, 3);
+assert.ok(estimateComicSpeechDuration("林夜：这是一段需要自然停顿并完整说出的中文对白。伏笔已经出现，我们必须立刻离开这里。苏晚：明白。小心身后。").minimumSeconds > 8);
+assert.deepEqual(validateComicStage({ characters:[{ visualAsset:true, imagePrompt:"x".repeat(421) }], props:[] }, "assets"), ["角色1.imagePrompt 421>420"]);
+assert.ok(validateComicStage({ scenes:[{ sceneId:"hall", variantType:"area", imagePrompt:"大厅" }] }, "scenes").includes("场景1变体缺少 baseSceneId"));
+const invalidShotIssues = validateComicStage({ shots:[{ imagePrompt:"画面", scenePrompt:"场景", dialogue:"林夜：这段对白很短。", videoPrompt:"动作", hasAnonymousCrowd:false, crowdPrompt:"群众", frames:[] }] }, "shots");
+assert.ok(invalidShotIssues.includes("镜头1无匿名人群但 crowdPrompt 非空"));
+assert.ok(invalidShotIssues.includes("镜头1.frames 为空"));
+console.log("comic stage validation behavior: 8/8 passed");
+
+const repairEvents = [];
+let repairCalls = 0;
+const repaired = await repairComicStageUntilValid({
+  stage:"资产",
+  value:{ characters:[{ visualAsset:true, imagePrompt:"" }], props:[] },
+  kind:"assets",
+  system:"system",
+  contextText:"context",
+  progress:25,
+  maxTokens:100,
+  emit:(event) => repairEvents.push(event),
+  readStage:async (_stage, _system, content) => {
+    repairCalls++;
+    assert.match(content, /角色1\.imagePrompt 为空/);
+    return { characters:[{ visualAsset:true, imagePrompt:"完整设定" }], props:[] };
+  },
+});
+assert.equal(repairCalls, 1);
+assert.equal(repairEvents.length, 1);
+assert.equal(repaired.characters[0].imagePrompt, "完整设定");
+await assert.rejects(() => repairComicStageUntilValid({
+  stage:"资产", value:{ characters:[{ visualAsset:true, imagePrompt:"" }], props:[] }, kind:"assets",
+  system:"system", contextText:"context", progress:25, maxTokens:100, emit:()=>{}, maxRewrites:1,
+  readStage:async () => ({ characters:[{ visualAsset:true, imagePrompt:"" }], props:[] }),
+}), /资产复检仍有 1 项不合格/);
+console.log("comic targeted stage repair: 4/4 passed");
+
+const foundationSummary = compactComicFoundation({ title:"片名", characters:[{name:"林夜", imagePrompt:"很长提示"}], props:[{name:"古剑"}], scenes:[{sceneId:"hall", imagePrompt:"大厅"}] });
+assert.deepEqual(foundationSummary.characters, [{ index:1, name:"林夜", description:undefined, voiceProfile:undefined }]);
+assert.equal(foundationSummary.scenes[0].sceneId, "hall");
+const normalizedPlan = normalizeComicShotPlan({ plannedShots:[
+  { outlineIndex:1, storyBeat:"林夜停步", dialogue:"无对白", sceneId:"hall", stateChanges:[], exitState:"林夜站定" },
+  { outlineIndex:2, storyBeat:"林夜走近古剑", dialogue:"林夜：剑在这里。", sceneId:"hall", stateChanges:["走近古剑"], exitState:"林夜站在剑旁" },
+] }, [{content:"开场"},{content:"发现"}]);
+assert.equal(normalizedPlan.plannedShots[0].frameCount, 1);
+assert.equal(normalizedPlan.plannedShots[1].frameCount, 2);
+assert.equal(normalizedPlan.plannedShots[1].entryState, "林夜站定");
+assert.equal(normalizedPlan.plannedShots[1].cameraAxis, "保持左右关系与180度轴线");
+assert.deepEqual(comicShotPlanIssues(normalizedPlan, 2, "30秒"), []);
+const uncovered = comicShotPlanIssues({ plannedShots:[normalizedPlan.plannedShots[0]] }, 2, "30秒");
+assert.ok(uncovered.includes("剧情段落 2/2 未被镜头覆盖"));
+console.log("comic shot-plan domain behavior: 7/7 passed");
+
+assert.match(comicStoryPrompt(), /禁止返回人物、道具、场景和 shots/);
+assert.match(comicAssetPrompt(), /三视图/);
+assert.match(comicSceneViewPrompt(), /main、reverse、top/);
+assert.match(comicShotPlanPrompt(), /stateChanges/);
+assert.match(comicShotExpansionPrompt(), /100–320字/);
+assert.match(comicAuditPrompt(), /只修复确有硬错误/);
+console.log("comic prompt builders: 6/6 passed");
+
+assert.deepEqual(parseFirstJsonObject('```json\n{"text":"} inside","nested":{"ok":true}}\n```', "测试").value, { text:"} inside", nested:{ok:true} });
+assert.equal(parseFirstJsonObject('{"ok":true} trailing', "测试").trailingLength, 8);
+assert.throws(() => parseFirstJsonObject('{"ok":', "测试"), /不完整/);
+console.log("comic JSON extraction: 3/3 passed");
+
+const streamState = new ComicStreamState("primary");
+streamState.addContent("中文");
+assert.equal(streamState.receivedBytes, 6);
+assert.equal(streamState.advance(12), 12);
+assert.equal(streamState.advance(8), 12);
+streamState.usedModel = "fallback";
+assert.equal(streamState.usedModel, "fallback");
+console.log("comic single stream state: 4/4 passed");
+
+const auditShots = [{number:1,sceneId:"a",frames:[{title:"旧"}]},{number:2,sceneId:"a"},{number:3,sceneId:"a"},{number:4,sceneId:"b"}];
+assert.deepEqual(comicAuditSubset(auditShots, 3), auditShots);
+assert.deepEqual(applyComicAuditRepairs(auditShots, [{shotNumber:2,sceneId:"fixed",frames:[{title:"新"}]},{shotNumber:99,sceneId:"bad"}]), [2]);
+assert.equal(auditShots[1].sceneId, "fixed");
+assert.equal(auditShots[1].frames[0].title, "新");
+console.log("comic audit repair behavior: 4/4 passed");
+
+assert.equal(COMIC_SHOT_BATCH_SIZE, 3);
+assert.deepEqual(comicShotBatches([1,2,3,4,5,6,7]), [[1,2,3],[4,5,6],[7]]);
+assert.equal(completedShotCount(2, 7), 6);
+assert.equal(completedShotCount(3, 7), 7);
+const cinematic = normalizePlannedShots([
+  { sceneId:"hall", cameraAxis:"A左B右", cameraMovement:"慢推", effectState:"剑光开始", shotPurpose:"环境建立" },
+  { sceneId:"hall", cameraMovement:"任意飞行", effectState:"" },
+  { sceneId:"yard", cameraMovement:"横移", effectState:"" },
+]);
+assert.equal(cinematic[1].cameraAxis, "A左B右");
+assert.equal(cinematic[1].cameraMovement, "固定镜头");
+assert.equal(cinematic[1].effectState, "剑光开始");
+assert.equal(cinematic[2].effectState, "无特效");
+assert.equal(cinematic[2].shotPurpose, "环境建立");
+assert.throws(() => comicShotBatches([1], 0), RangeError);
+assert.deepEqual(comicBatchWindow([1,2,3,4,5,6,7], 1), { expected:[4,5,6], neighbors:[3,4,5,6,7], start:3, end:6 });
+assert.deepEqual(comicContinuityAuditIndexes(7), [0,1,2,3,4,5,6]);
+assert.deepEqual(comicContinuityAuditIndexes(10, 3, [7]), [4,5,6,7,8]);
+console.log("comic stable batching and cinematic locks: 13/13 passed");
+
+const emptyCheckpoint = restoreComicCheckpoint("not-json", "current");
+assert.deepEqual(emptyCheckpoint, { fingerprint:"current" });
+assert.deepEqual(restoreComicCheckpoint(JSON.stringify({ fingerprint:"old", completedBatches:2 }), "current"), { fingerprint:"current" });
+const restoredCheckpoint = restoreComicCheckpoint(JSON.stringify({ fingerprint:"current", completedBatches:2, shots:[1,2,3,4,5,6] }), "current");
+assert.equal(restoredCheckpoint.completedBatches, 2);
+const updatedCheckpoint = updateComicCheckpoint(restoredCheckpoint, { completedBatches:3 }, "current", "2026-08-12T00:00:00.000Z");
+assert.equal(updatedCheckpoint.completedBatches, 3);
+assert.equal(updatedCheckpoint.updatedAt, "2026-08-12T00:00:00.000Z");
+console.log("comic checkpoint behavior: 5/5 passed");
+
+assert.equal(comicGenerationIssue(new Error("对白时长超限"), 42, true).code, "E101");
+assert.equal(comicGenerationIssue(new Error("场景引用丢失"), 72, true).code, "E301");
+assert.equal(comicGenerationIssue(new Error("跨段连续性错误"), 95, true).code, "E401");
+assert.match(comicGenerationErrorMessage(new SyntaxError("JSON损坏"), comicGenerationIssue(new SyntaxError("JSON损坏"), 20, false)), /已保留通过校验的阶段/);
+console.log("comic error policy: 4/4 passed");
+
 
 assert.equal(comicShotCapacity("约60秒"), 24);
 assert.equal(comicShotCapacity("约2～3分钟"), 45);

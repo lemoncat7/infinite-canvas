@@ -140,7 +140,7 @@ export function syncVoiceTtsAudioPanels(options: VoiceTtsAudioSyncOptions) {
         availableVoices
           .map(
             (item) =>
-              `<button type="button" data-voice-option="${escapeHtml(item.id)}" class="${item.id === voice.value ? "active" : ""}"><span><b>${escapeHtml(item.name.split(" · ")[0])}</b><small>${escapeHtml(item.name.split(" · ").slice(1).join(" · ") || "中文音色")}</small></span><em class="model-price voice">中文</em><i>✓</i></button>`,
+              `<button type="button" data-voice-option="${escapeHtml(item.id)}" class="${item.id === voice.value ? "active" : ""}" aria-selected="${item.id === voice.value}"><span><b>${escapeHtml(item.name.split(" · ")[0])}</b><small>${escapeHtml(item.name.split(" · ").slice(1).join(" · ") || "中文音色")}</small></span><em class="model-price voice">中文</em><i>✓</i></button>`,
           )
           .join("");
     }
@@ -278,4 +278,3 @@ export function syncVoiceTtsAudioPanels(options: VoiceTtsAudioSyncOptions) {
   }
   
 }
-

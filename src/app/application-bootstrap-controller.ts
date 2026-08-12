@@ -10,7 +10,6 @@ export class ApplicationBootstrapController<User> {
     synchronizeCanvas: () => Promise<boolean>;
     loadAssets: () => Promise<unknown>;
     status: (message: string, visible?: boolean) => number;
-    randomizeTheme: () => void;
     applyRoute: () => void;
     notifyError: (message: string) => void;
   }) {}
@@ -29,7 +28,6 @@ export class ApplicationBootstrapController<User> {
     if (this.options.user()) this.options.touchSession();
     if (this.options.user() && location.hash === "#/canvas") {
       document.body.classList.add("home-mode", "workspace-loading", "workspace-preparing");
-      this.options.randomizeTheme();
       this.options.status("登录成功，正在同步项目");
       const restored = await this.options.synchronizeCanvas();
       if (restored) {

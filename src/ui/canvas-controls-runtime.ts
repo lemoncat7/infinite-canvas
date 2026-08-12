@@ -6,6 +6,7 @@ import type { CanvasNodeRuntimeFeature } from "../nodes/canvas-node-runtime-feat
 import type { CanvasGenerationRuntime } from "../services/canvas-generation-composition";
 import type { CanvasWorkspaceContentRuntime } from "./canvas-workspace-content-runtime";
 import { CanvasControlsFeature } from "./canvas-controls-feature";
+import { themePreference } from "../services/theme-preference";
 
 type Tone = "success" | "warning" | "error" | "info";
 
@@ -80,14 +81,17 @@ export class CanvasControlsRuntime {
       appearance: {
         pendingMedia: () => options.presentation.media.pendingLoads.size,
         currentTheme: () => foundation.colorTheme,
-        applyTheme: (theme) => {
-          foundation.colorTheme = theme;
-          document.body.dataset.theme = theme;
-          localStorage.setItem("flow-theme", theme);
-        },
+        currentPreference: () => themePreference.preference,
+        cycleTheme: () => themePreference.cycle(),
         repaintMedia: options.presentation.media.repaintAll,
         paint: options.rendering.render.paint,
       },
+    });
+    themePreference.subscribe((theme) => {
+      foundation.colorTheme = theme;
+      options.presentation.media.repaintAll();
+      options.rendering.render.paint();
+      this.feature.refreshAppearance();
     });
   }
 

@@ -12,7 +12,6 @@ import type {
 } from "./node-types";
 import { BoundNodeDomSynchronizer } from "./bound-node-dom-synchronizer";
 import { BoundNodeViewFactory } from "./bound-node-view-factory";
-import { domOwnedNodeIds } from "../canvas/node-render-ownership";
 
 type Tone = "success" | "warning" | "error" | "info";
 type Swap = { videoId: number; sourceId: number } | null;
@@ -188,10 +187,6 @@ export class CanvasNodeViewFeature {
   hideSelectedDom() {
     const selectedId = this.getSelectedId();
     if (selectedId) this.hiddenSelectedDomId = selectedId;
-    this.mountedIds.clear();
-  }
-  domOwnedNodeIds() {
-    return domOwnedNodeIds();
   }
   sync() { this.synchronizer.sync(); }
   scheduleWarmup() { this.editorCache.scheduleWarmup(); }

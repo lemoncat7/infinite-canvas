@@ -80,7 +80,11 @@ export class CanvasInputFeature {
       refreshBatchSelection: options.refreshBatchSelection,
       isMultiSelectMode: () => options.selection.multiSelectMode,
       toggleBatchNode: options.toggleBatchNode,
-      selectNode: (id) => { options.selection.selectedId = id; options.updateEditor(); },
+      selectNode: (id) => {
+        options.selection.selectedId = id;
+        options.showSelectedDom();
+        options.updateEditor();
+      },
       clearSelection: () => {
         options.selection.selectedId = 0;
         options.updateEditor();

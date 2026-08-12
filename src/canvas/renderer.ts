@@ -45,8 +45,6 @@ export type RenderLink = {
 export type CanvasRenderSnapshot = {
   nodes: readonly RenderNode[];
   links: readonly RenderLink[];
-  /** Stable renderer ownership; independent from selection and interaction. */
-  domOwnedNodeIds: readonly number[];
   camera: { x: number; y: number; zoom: number };
   selectedId: number;
   selectedIds: readonly number[];

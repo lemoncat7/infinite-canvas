@@ -4,10 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#10110f" />
+    <script>
+      (()=>{const p=localStorage.getItem("flow-theme-preference"),h=new Date().getHours(),t=p==="light"||p==="dark"?p:h>=7&&h<19?"light":"dark";document.documentElement.dataset.theme=t;document.documentElement.style.background=t==="dark"?"#090d12":"#f1f4f7"})();
+    </script>
     <link rel="icon" type="image/svg+xml" href="/brand/viora-mark-v2.svg" />
     <style>
       .asset-item img,.asset-item video{pointer-events:none;-webkit-user-drag:none;user-select:none}
-      html.app-loading{background:#10110f}
+      html.app-loading{background:inherit}
       html.app-loading body{visibility:hidden}
     </style>
     <title>Viora — AI 视觉无限画布</title>

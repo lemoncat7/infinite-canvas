@@ -48,7 +48,6 @@ export class WorkspaceRouteController {
   apply = () => {
     const home = location.hash !== "#/canvas" || !this.options.authenticated();
     const wasHome = document.body.classList.contains("home-mode");
-    if (home && !wasHome) this.randomizeTheme();
     document.body.classList.toggle("home-mode", home);
     if (home && !this.options.showcaseLoaded()) void this.options.loadShowcase();
     if (!home) requestAnimationFrame(this.options.resize);
@@ -61,11 +60,4 @@ export class WorkspaceRouteController {
     else this.options.openAuth("register");
   };
 
-  randomizeTheme = () => {
-    const theme = crypto.getRandomValues(new Uint8Array(1))[0] % 2
-      ? "dark"
-      : "light";
-    this.options.homePage.dataset.homeTheme = theme;
-    document.body.dataset.homeTheme = theme;
-  };
 }

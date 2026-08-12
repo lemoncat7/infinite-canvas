@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { mergeGenerationState } from "../src/services/generation-poller";
 import { labelTextViewport } from "../src/nodes/label-text-layout";
 import { NODE_SNAP_GAP, snapNodeGroup } from "../src/canvas/node-snap-controller";
+import { positionDraggedNodes } from "../src/canvas/node-drag-positioner";
 import { VIDEO_CARD_LAYOUT, videoFrameLayout } from "../src/nodes/video-card-layout";
-import { domOwnedNodeIds } from "../src/canvas/node-render-ownership";
 import { NODE_CARD_STYLE } from "../src/nodes/node-card-style";
 
 test("video card reference frames stay horizontally centered", () => {
@@ -24,11 +24,6 @@ test("video card keeps one empty slot then follows the exact reference count", (
   expect(videoFrameLayout(240, 2).frameCount).toBe(2);
   expect(videoFrameLayout(240, 4).frameCount).toBe(4);
   expect(videoFrameLayout(240, 8).frameCount).toBe(8);
-});
-
-test("empty video reference slot is clearly labelled", () => {
-  const pixi = readFileSync("src/canvas/pixi-renderer.ts", "utf8");
-  expect(pixi).toContain('referenceCount > 0 ? String(index + 1) : "素材参考图"');
 });
 
 test("selected DOM video card repaints linked reference thumbnails", () => {
@@ -52,28 +47,13 @@ test("selected video generator supports pointer drag reference swapping", () => 
   expect(source).toContain("?.classList.add(\"drag-over\")");
 });
 
-test("all cards have permanent Pixi ownership", () => {
+test("Pixi renders only the canvas surface and links", () => {
   const pixi = readFileSync("src/canvas/pixi-renderer.ts", "utf8");
-  expect(domOwnedNodeIds()).toEqual([]);
-  expect(pixi).toContain("const domOwnedNodeIds = new Set(snapshot.domOwnedNodeIds)");
-  expect(pixi).toContain("if (domOwnedNodeIds.has(node.id)) continue");
-});
-
-test("selected node mounts a panel-only DOM interaction host", () => {
-  const synchronizer = readFileSync("src/nodes/node-dom-synchronizer.ts", "utf8");
-  const state = readFileSync("src/nodes/node-dom-state.ts", "utf8");
-  expect(synchronizer).toContain("options.selectedDomVisible ? options.selectedId : 0");
-  expect(state).toContain("pixi-owned-editor");
-  expect(domOwnedNodeIds()).toEqual([]);
-});
-
-test("video result uses centered progress without a bottom bar", () => {
-  const pixi = readFileSync("src/canvas/pixi-renderer.ts", "utf8");
-  const style = readFileSync("src/style.css", "utf8");
-  expect(pixi).toContain("正在处理视频");
-  expect(pixi).toContain("`生成中 ${Math.round");
-  expect(pixi).not.toContain(".rect(0, node.height - 3, node.width, 3)");
-  expect(style).toContain(".kind-video.node-result .node-progress { display:none!important; }");
+  expect(pixi).toContain("this.world.addChild(this.links, this.activeLinks)");
+  expect(pixi).not.toContain("cardViews");
+  expect(pixi).not.toMatch(/\bSprite\b/);
+  expect(pixi).not.toContain("PixiTextureCache");
+  expect(pixi).not.toContain("createPixiCardText");
 });
 
 test("completed Pixi video result opens preview on double click", () => {
@@ -89,10 +69,7 @@ test("image and video generators share one card geometry", () => {
   expect(NODE_CARD_STYLE.generatorWidth).toBe(290);
   expect(NODE_CARD_STYLE.generatorHeight).toBe(225);
   const state = readFileSync("src/nodes/node-dom-state.ts", "utf8");
-  const pixi = readFileSync("src/canvas/pixi-renderer.ts", "utf8");
   expect(state).toContain("NODE_CARD_STYLE.generatorWidth");
-  expect(pixi).toContain("NODE_CARD_STYLE.lightFill");
-  expect(pixi).toContain("NODE_CARD_STYLE.radius");
 });
 
 test("DOM-owned card follows pointer in the drag animation frame", () => {
@@ -102,7 +79,23 @@ test("DOM-owned card follows pointer in the drag animation frame", () => {
 
 test("interaction suspension follows renderer ownership", () => {
   const style = readFileSync("src/style.css", "utf8");
-  expect(style).toContain('#node-layer.dom-interaction-suspended > .flow-node:not(.dragging)');
+  expect(style).toContain('#node-layer.dom-interaction-suspended > .flow-node .node-config-panel');
+  expect(style).not.toContain('#node-layer.dom-interaction-suspended > .flow-node { display:none');
+});
+
+test("DOM card viewport advances in the interaction hot path", () => {
+  const paint = readFileSync("src/canvas/canvas-paint-coordinator.ts", "utf8");
+  const hotPath = paint.slice(
+    paint.indexOf("if (this.options.interacting())"),
+    paint.indexOf("this.businessRenderPending = false"),
+  );
+  expect(hotPath).toContain("this.positionCardLayer()");
+  expect(hotPath).toContain("updateInteraction(snapshot)");
+});
+
+test("selecting a DOM card restores its native controls", () => {
+  const input = readFileSync("src/canvas/canvas-input-feature.ts", "utf8");
+  expect(input).toContain("options.showSelectedDom();");
 });
 
 test("dragging one selected video reference onto another swaps its order", async ({ page }) => {
@@ -145,9 +138,34 @@ test("single node snapping uses a fixed gap", () => {
   expect(moving.x + moving.width + result.dx).toBe(target.x - NODE_SNAP_GAP);
 });
 
+test("DOM connection ports keep a small dot with a larger hit target", () => {
+  const style = readFileSync("src/style.css", "utf8");
+  const geometry = readFileSync("src/canvas/canvas-geometry-controller.ts", "utf8");
+  expect(style).toContain(".node-port { position:absolute; z-index:4; top:50%; width:25px; height:25px");
+  expect(style).toContain('.node-port::before { content:""; position:absolute; inset:6px');
+  expect(geometry).toContain("hitPort(sx: number, sy: number, radius = 16");
+});
+
 test("node snapping ignores positions outside the screen-space threshold", () => {
   const result = snapNodeGroup({ moving: [snapNode(1, 0, 0)], candidates: [snapNode(2, 150, 0)], dx: 10, dy: 0, zoom: 1 });
   expect(result).toEqual({ dx: 10, dy: 0 });
+});
+
+test("DOM drag and canvas drag share single-card snapping geometry", () => {
+  const nodes = [
+    { id: 1, kind: "prompt", x: 0, y: 0, width: 100, height: 100, title: "", body: "", accent: "#fff" },
+    { id: 2, kind: "prompt", x: 115, y: 0, width: 100, height: 100, title: "", body: "", accent: "#fff" },
+  ];
+  positionDraggedNodes({
+    nodes,
+    origins: new Map([[1, { x: 0, y: 0 }]]),
+    dx: 12,
+    dy: 0,
+    zoom: 1,
+  });
+  expect(nodes[0].x + nodes[0].width + NODE_SNAP_GAP).toBe(nodes[1].x);
+  const lifecycle = readFileSync("src/canvas/dom-pointer-lifecycle.ts", "utf8");
+  expect(lifecycle).toContain("positionDraggedNodes({");
 });
 
 const projectId = "canvas-stress-project";
@@ -423,14 +441,6 @@ test("a queued Pixi image replaces empty actions with progress state", async ({ 
   await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
   await expect(page.locator("#node-layer > .flow-node")).toHaveCount(0);
   expect(await page.evaluate(() => document.querySelectorAll("#canvas-pixi").length)).toBe(1);
-});
-
-test("the Pixi image generation state avoids animated arc paths and duplicate progress", () => {
-  const source = readFileSync("src/canvas/pixi-renderer.ts", "utf8");
-  expect(source).not.toContain(".arc(\n                layout.iconX");
-  expect(source).toContain('`生成中 ${Math.round(progress)}%`');
-  expect(source).toContain(': "正在处理画面"');
-  expect(source).toContain('view.icon.visible = !generating');
 });
 
 test("400 nodes stay GPU-virtualized and recover WebGL context", async ({

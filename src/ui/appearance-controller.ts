@@ -1,3 +1,5 @@
+import type { ThemePreference } from "../services/theme-preference";
+
 export class AppearanceController {
   private transitioning = false;
 
@@ -6,7 +8,8 @@ export class AppearanceController {
       button: HTMLButtonElement;
       pendingMedia: () => number;
       currentTheme: () => "dark" | "light";
-      applyTheme: (theme: "dark" | "light") => void;
+      currentPreference: () => ThemePreference;
+      cycleTheme: () => void;
       repaintMedia: () => void;
       paint: () => void;
     },
@@ -18,9 +21,12 @@ export class AppearanceController {
   refresh() {
     const pending = this.deps.pendingMedia();
     this.deps.button.disabled = this.transitioning || pending > 0;
+    const preference = this.deps.currentPreference();
+    const label = preference === "auto" ? `自动 · ${this.deps.currentTheme() === "light" ? "浅色" : "深色"}` : preference === "light" ? "浅色" : "深色";
+    this.deps.button.querySelector("span")!.textContent = label;
     this.deps.button.title = pending
       ? `等待 ${pending} 个图片资源加载完成`
-      : "切换画布外观";
+      : `主题：${label}（点击切换）`;
   }
 
   private toggle() {
@@ -29,8 +35,7 @@ export class AppearanceController {
     this.refresh();
     document.body.classList.add("theme-click-fade");
     window.setTimeout(() => {
-      const theme = this.deps.currentTheme() === "dark" ? "light" : "dark";
-      this.deps.applyTheme(theme);
+      this.deps.cycleTheme();
       this.deps.repaintMedia();
       this.deps.paint();
       document.body.classList.add("theme-click-return");

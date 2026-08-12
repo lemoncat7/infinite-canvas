@@ -69,7 +69,6 @@ export class CanvasRenderingRuntimeFeature {
       camera: options.camera,
       connectionFeature: this.connection,
       connection: options.connectionController,
-      domOwnedNodeIds: () => options.nodeViews.domOwnedNodeIds(),
       selectedId: () => options.selection.selectedId,
       batchIds: options.selection.batchIds,
       agentIds: options.agentIds,

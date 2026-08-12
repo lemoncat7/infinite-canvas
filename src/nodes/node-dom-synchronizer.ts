@@ -32,12 +32,20 @@ export function synchronizeNodeDom(options: Options) {
   const offsetX = innerWidth / 2 + camera.x,
     offsetY = innerHeight / 2 + camera.y,
     margin = 480,
-    // Mount only the interaction host. Pixi remains the permanent visual
-    // owner; this DOM element contributes panels and native controls only.
-    required = new Set([
-      options.selectedDomVisible ? options.selectedId : 0,
-      options.editingId,
-    ].filter(Boolean));
+    required = new Set(nodes
+      .filter((node) => {
+        const screenX = offsetX + node.x * camera.zoom;
+        const screenY = offsetY + node.y * camera.zoom;
+        return screenX + node.width * camera.zoom > -margin &&
+          screenX < innerWidth + margin &&
+          screenY + node.height * camera.zoom > -margin &&
+          screenY < innerHeight + margin;
+      })
+      .map((node) => node.id));
+  if (options.selectedDomVisible && options.selectedId)
+    required.add(options.selectedId);
+  if (options.editingId) required.add(options.editingId);
+  if (options.draggingId) required.add(options.draggingId);
   const allIds = new Set(nodes.map((node) => node.id));
   options.mountedIds.clear();
   required.forEach((id) => options.mountedIds.add(id));

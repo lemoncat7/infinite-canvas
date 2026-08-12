@@ -37,7 +37,6 @@ export function createWorkspaceShell(options: {
       synchronizeCanvas: () => options.account.auth.synchronize(true),
       loadAssets: () => options.content.assets.load(false),
       status: (message, visible) => options.account.auth.status(message, visible),
-      randomizeTheme: options.account.auth.randomizeTheme,
       applyRoute: () => options.account.auth.applyRoute(),
       notifyError: (message) => options.account.showToast(message, "error"),
     },

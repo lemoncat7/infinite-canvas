@@ -44,6 +44,9 @@ export class CanvasPaintCoordinator {
     const startedAt = this.options.performance.beginFrame();
     this.frame = null;
     if (this.options.interacting()) {
+      // DOM owns the cards, so its single viewport transform must advance in
+      // the same animation frame as the Pixi camera and links.
+      this.positionCardLayer();
       const state = this.options.state();
       const { nodeCount: _nodeCount, indexedNodeCount: _indexed, ...snapshot } = state;
       this.options.renderer()?.updateInteraction(snapshot);

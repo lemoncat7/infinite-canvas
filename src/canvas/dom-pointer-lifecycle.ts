@@ -1,5 +1,6 @@
 import type { FlowNode } from "../nodes/node-types";
 import type { DomNodeDrag } from "../nodes/node-interaction-view";
+import { positionDraggedNodes } from "./node-drag-positioner";
 
 export type DomNodeResize = { id: number; startX: number; startY: number; width: number; height: number };
 
@@ -40,19 +41,24 @@ export class DomPointerLifecycle {
     this.dragState = null; this.resizeState = null; this.cancelFrame();
   };
   private cancelFrame() { if (this.dragFrame !== null) cancelAnimationFrame(this.dragFrame); this.dragFrame = null; }
+  private origins(drag: DomNodeDrag) {
+    return drag.groupInitial ?? new Map([[drag.id, { x: drag.initialX, y: drag.initialY }]]);
+  }
+  private position(drag: DomNodeDrag, dx: number, dy: number) {
+    positionDraggedNodes({
+      nodes: this.options.nodes,
+      origins: this.origins(drag),
+      dx,
+      dy,
+      zoom: this.options.zoom(),
+    });
+  }
   private finishDrag(event: PointerEvent, edgeRelease = false) {
     const drag = this.dragState;
     if (!drag || event.pointerId !== drag.pointerId) return;
     this.cancelFrame();
     const dx = (event.clientX - drag.startX) / this.options.zoom(), dy = (event.clientY - drag.startY) / this.options.zoom();
-    if (drag.moved && drag.groupInitial?.size) for (const [id, origin] of drag.groupInitial) {
-      const item = this.options.nodes.find((candidate) => candidate.id === id);
-      if (item) Object.assign(item, { x: origin.x + dx, y: origin.y + dy });
-    }
-    else if (drag.moved) {
-      const item = this.options.nodes.find((candidate) => candidate.id === drag.id);
-      if (item) Object.assign(item, { x: drag.initialX + dx, y: drag.initialY + dy });
-    }
+    if (drag.moved) this.position(drag, dx, dy);
     if (!drag.moved && drag.agentSelect && !edgeRelease) {
       if (this.options.isAgentSelected(drag.id) || this.options.agentSelectionSize() < 8) this.options.toggleAgentSelection(drag.id);
       else this.options.warnAgentLimit();
@@ -91,20 +97,9 @@ export class DomPointerLifecycle {
     }
     this.cancelFrame();
     this.dragFrame = requestAnimationFrame(() => {
-      if (drag.groupInitial?.size) for (const [id, origin] of drag.groupInitial) {
-        const item = this.options.nodes.find((candidate) => candidate.id === id);
-        if (item) Object.assign(item, { x: origin.x + dx, y: origin.y + dy });
-      } else {
-        const item = this.options.nodes.find((candidate) => candidate.id === drag.id);
-        if (item) {
-          Object.assign(item, { x: drag.initialX + dx, y: drag.initialY + dy });
-          // The element that owns the pointer is the authoritative DOM card
-          // during this drag. Move it in this frame instead of waiting for a
-          // DOM reconciliation after pointerup.
-          drag.element.style.transform = `translate(${item.x}px, ${item.y}px)`;
-        }
-      }
-      this.options.syncElements(drag.groupInitial?.size ? drag.groupInitial.keys() : [drag.id]);
+      this.position(drag, dx, dy);
+      const ids = this.origins(drag).keys();
+      this.options.syncElements(ids);
       this.options.setEditing(); this.options.draw(false); this.dragFrame = null;
     });
   };

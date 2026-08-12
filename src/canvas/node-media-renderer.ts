@@ -1,5 +1,6 @@
 import type { FlowNode } from "../nodes/node-types";
 import type { MediaLifecycleController } from "./media-lifecycle-controller";
+import { CANVAS_THEME } from "./canvas-theme";
 
 export class NodeMediaRenderer {
   constructor(
@@ -92,10 +93,13 @@ export class NodeMediaRenderer {
   private drawImage(target: HTMLCanvasElement, image: HTMLImageElement) {
     const context = target.getContext("2d")!;
     const dark = this.deps.theme() === "dark";
-    context.fillStyle = dark ? "#111a1c" : "#e7efeb";
+    const palette = dark ? CANVAS_THEME.dark : CANVAS_THEME.light;
+    context.fillStyle = palette.mediaEmpty;
     context.fillRect(0, 0, target.width, target.height);
     if (image.complete && image.naturalWidth) {
-      const scale = Math.min(
+      // Card thumbnails are previews, not document viewers. Fill the media
+      // surface consistently and leave uncropped viewing to the preview modal.
+      const scale = Math.max(
         target.width / image.naturalWidth,
         target.height / image.naturalHeight,
       );
@@ -113,7 +117,7 @@ export class NodeMediaRenderer {
     const centerX = target.width / 2;
     const centerY = target.height / 2;
     const size = Math.max(24, Math.min(42, target.width * 0.11));
-    context.strokeStyle = dark ? "#607579" : "#8ba19a";
+    context.strokeStyle = palette.mediaPlaceholder;
     context.lineWidth = Math.max(2, target.width / 180);
     context.strokeRect(centerX - size / 2, centerY - size, size, size);
     context.beginPath();
@@ -121,7 +125,7 @@ export class NodeMediaRenderer {
     context.lineTo(centerX - size * 0.08, centerY - size * 0.48);
     context.lineTo(centerX + size * 0.34, centerY - size * 0.08);
     context.stroke();
-    context.fillStyle = dark ? "#8fa4a7" : "#60736d";
+    context.fillStyle = palette.mediaPlaceholderText;
     context.font = `${Math.max(12, Math.min(18, target.width / 22))}px system-ui`;
     context.textAlign = "center";
     context.fillText(

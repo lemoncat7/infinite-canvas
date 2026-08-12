@@ -140,5 +140,4 @@ export class AuthWorkspaceFeature {
   status(message: string, visible = true) { return this.route.status(message, visible); }
   hideStatus(version: number, delay: number) { this.route.hideStatus(version, delay); }
   applyRoute() { this.route.apply(); }
-  randomizeTheme = () => this.route.randomizeTheme();
 }
