@@ -41,6 +41,19 @@ export class CanvasStore<Node extends CanvasPositionedNode, Link> {
     return true;
   }
 
+  moveNodesByIds(ids: Iterable<number>, dx: number, dy: number) {
+    const movingIds = new Set(ids);
+    const moved: number[] = [];
+    this.nodes.forEach((node) => {
+      if (!movingIds.has(node.id)) return;
+      node.x += dx;
+      node.y += dy;
+      moved.push(node.id);
+    });
+    if (moved.length) this.emit({ type: "node-position", nodeIds: moved });
+    return moved.length > 0;
+  }
+
   notifyStructureChanged() {
     this.emit({ type: "structure" });
   }

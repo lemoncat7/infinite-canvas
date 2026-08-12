@@ -2,6 +2,24 @@ import { expect, test, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { mergeGenerationState } from "../src/services/generation-poller";
 import { labelTextViewport } from "../src/nodes/label-text-layout";
+import { NODE_SNAP_GAP, snapNodeGroup } from "../src/canvas/node-snap-controller";
+
+const snapNode = (id: number, x: number, y: number, width = 100, height = 80) => ({
+  id, x, y, width, height, kind: "prompt" as const, title: "", body: "", accent: "",
+});
+
+test("single node snapping uses a fixed gap", () => {
+  const moving = snapNode(1, 0, 0);
+  const target = snapNode(2, 150, 0);
+  const result = snapNodeGroup({ moving: [moving], candidates: [target], dx: 24, dy: 0, zoom: 1 });
+  expect(result.dx).toBe(26);
+  expect(moving.x + moving.width + result.dx).toBe(target.x - NODE_SNAP_GAP);
+});
+
+test("node snapping ignores positions outside the screen-space threshold", () => {
+  const result = snapNodeGroup({ moving: [snapNode(1, 0, 0)], candidates: [snapNode(2, 150, 0)], dx: 10, dy: 0, zoom: 1 });
+  expect(result).toEqual({ dx: 10, dy: 0 });
+});
 
 const projectId = "canvas-stress-project";
 

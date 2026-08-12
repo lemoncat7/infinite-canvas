@@ -14,6 +14,7 @@ import { CanvasHistoryFeature } from "./canvas-history-feature";
 import { CanvasInputFeature } from "./canvas-input-feature";
 import type { CanvasPersistenceRuntimeFeature } from "./canvas-persistence-runtime-feature";
 import type { CanvasRenderingRuntimeFeature } from "./canvas-rendering-runtime-feature";
+import { snapNodeGroup } from "./node-snap-controller";
 
 type Tone = "success" | "warning" | "error" | "info";
 type Menu = "workspace" | "task" | "user" | "notifications" | "presence";
@@ -194,7 +195,26 @@ export class CanvasInteractionRuntime {
         options.draw(false);
       },
       previewMedia: options.previewMedia,
-      moveNode: (id, dx, dy) => store.moveNodeById(id, dx, dy),
+      moveNodes: (ids, dx, dy) => {
+        const movingIds = new Set(ids);
+        const moving = nodes.filter((node) => movingIds.has(node.id));
+        if (!moving.length) return;
+        // Group movement intentionally stays free-form. Snapping is a single-card aid.
+        if (moving.length !== 1) {
+          store.moveNodesByIds(movingIds, dx, dy);
+          return;
+        }
+        const bounds = {
+          minX: Math.min(...moving.map((node) => node.x)) + dx - 48,
+          minY: Math.min(...moving.map((node) => node.y)) + dy - 48,
+          maxX: Math.max(...moving.map((node) => node.x + node.width)) + dx + 48,
+          maxY: Math.max(...moving.map((node) => node.y + node.height)) + dy + 48,
+        };
+        const candidateIds = new Set(options.presentation().views.spatialIndex.search(bounds));
+        const candidates = nodes.filter((node) => candidateIds.has(node.id) && !movingIds.has(node.id));
+        const snapped = snapNodeGroup({ moving, candidates, dx, dy, zoom: camera.zoom });
+        store.moveNodesByIds(movingIds, snapped.dx, snapped.dy);
+      },
       panCamera: (dx, dy) => store.panCamera(dx, dy),
       closeQuickMenu: () => options.controls().closeQuickMenu(),
       screen: (point) => options.rendering().screen(point),

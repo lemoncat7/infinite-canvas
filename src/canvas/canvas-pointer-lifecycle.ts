@@ -20,7 +20,7 @@ type Options = {
   showSelectedDom: () => void;
   hideSelectedDom: () => void;
   setEditing: () => void;
-  moveNode: (id: number, dx: number, dy: number) => void;
+  moveNodes: (ids: Iterable<number>, dx: number, dy: number) => void;
   panCamera: (dx: number, dy: number) => void;
   connectionActive: () => boolean;
   moveConnection: (event: PointerEvent) => void;
@@ -95,7 +95,8 @@ export class CanvasPointerLifecycle {
     }
     if (this.o.connectionActive()) { this.o.moveConnection(event); return; }
     const dx = event.clientX-pointer.x, dy = event.clientY-pointer.y;
-    if (pointer.draggingNode) for (const id of pointer.draggingGroup ?? [pointer.draggingNode]) this.o.moveNode(id, dx/this.o.zoom(), dy/this.o.zoom());
+    if (pointer.draggingNode)
+      this.o.moveNodes(pointer.draggingGroup ?? [pointer.draggingNode], dx/this.o.zoom(), dy/this.o.zoom());
     else this.o.panCamera(dx, dy);
     pointer.x = event.clientX; pointer.y = event.clientY;
     if (pointer.draggingNode) this.o.draw(true);

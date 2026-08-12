@@ -48,7 +48,7 @@ export class CanvasInputFeature {
     isPromptTitleHit: (node: FlowNode, x: number, y: number) => boolean;
     scrollPrompt: (node: FlowNode, delta: number) => void;
     previewMedia: (node: FlowNode) => void;
-    moveNode: (id: number, dx: number, dy: number) => void;
+    moveNodes: (ids: Iterable<number>, dx: number, dy: number) => void;
     panCamera: (dx: number, dy: number) => void;
     closeQuickMenu: () => void;
     screen: (point: Point) => Point;
@@ -151,7 +151,7 @@ export class CanvasInputFeature {
       showSelectedDom: options.showSelectedDom,
       hideSelectedDom: options.hideSelectedDom,
       setEditing: options.setEditing,
-      moveNode: options.moveNode,
+      moveNodes: options.moveNodes,
       panCamera: options.panCamera,
       connectionActive: options.hasConnection,
       moveConnection: (event) => options.moveConnection(event, false),
