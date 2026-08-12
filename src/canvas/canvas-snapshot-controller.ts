@@ -1,6 +1,17 @@
 import type { FlowLink, FlowNode } from "../nodes/node-types";
 import type { CanvasSyncSnapshot } from "./sync";
 
+function preserveLiveGenerationState(current: FlowNode, source: FlowNode) {
+  if (!current.jobId || current.jobId !== source.jobId) return source;
+  if (current.status !== "running") return source;
+  if (source.status !== "queued" && source.status !== "running") return source;
+  return {
+    ...source,
+    status: "running",
+    progress: Math.max(Number(current.progress ?? 0), Number(source.progress ?? 0)),
+  };
+}
+
 export class CanvasSnapshotController {
   constructor(private readonly options: {
     nodes: FlowNode[];
@@ -36,7 +47,7 @@ export class CanvasSnapshotController {
       const mutable = current as unknown as Record<string, unknown>;
       for (const key of Object.keys(mutable))
         if (!(key in source)) delete mutable[key];
-      Object.assign(current, structuredClone(source));
+      Object.assign(current, structuredClone(preserveLiveGenerationState(current, source)));
       return current;
     });
     nodes.splice(0, nodes.length, ...mergedNodes);

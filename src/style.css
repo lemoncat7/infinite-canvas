@@ -2249,6 +2249,30 @@ body:not(.home-mode) .node-composer-panel{width:600px!important;box-sizing:borde
 body[data-theme="light"] .kind-voice .video-model-popover.voice-model-menu{color:#27272a!important;background:linear-gradient(145deg,#fbfdff,#e3e9ed)!important;border-color:#c7d0d6!important;box-shadow:0 16px 40px rgba(24,24,27,.16)!important;backdrop-filter:none!important}body[data-theme="light"] .kind-voice .video-model-popover.voice-model-menu>button{color:#3f3f46!important;background:transparent!important;border-color:transparent!important}body[data-theme="light"] .kind-voice .video-model-popover.voice-model-menu>button:hover{color:#18181b!important;background:rgba(255,255,255,.72)!important}body[data-theme="dark"] .kind-voice .video-model-popover.voice-model-menu{color:#f4f4f5!important;background:#27272a!important;border-color:#3f3f46!important;box-shadow:0 16px 40px rgba(0,0,0,.38)!important}body[data-theme="dark"] .kind-voice .video-model-popover.voice-model-menu>button{color:#e4e4e7!important;background:transparent!important}body[data-theme="dark"] .kind-voice .video-model-popover.voice-model-menu>button:hover{color:#fff!important;background:#3f3f46!important}
 .kind-tts.selected>.tts-config-panel.node-composer-panel{display:block!important}
 @media(max-width:780px){body:not(.home-mode) .node-composer-panel{width:min(600px,calc(100vw - 20px))!important}.node-composer-panel>textarea{height:132px!important;min-height:132px!important}.tts-voice-readout{max-width:150px}.kind-tts .tts-settings-popover{width:min(380px,calc(100vw - 40px))!important}}
+@media(max-width:780px){
+  body:not(.home-mode) .flow-node.selected>.node-composer-panel{
+    position:absolute!important;
+    z-index:130!important;
+    right:auto!important;
+    bottom:auto!important;
+    left:var(--mobile-panel-left)!important;
+    top:var(--mobile-panel-top)!important;
+    width:var(--mobile-panel-width)!important;
+    max-height:var(--mobile-panel-max-height)!important;
+    overflow-y:auto!important;
+    overscroll-behavior:contain;
+    translate:0 0!important;
+    transform:scale(var(--mobile-panel-scale))!important;
+    transform-origin:top left!important;
+  }
+  body:not(.home-mode) .node-composer-panel>.node-composer-footer{
+    position:sticky!important;
+    bottom:0!important;
+    z-index:2!important;
+    padding-bottom:2px!important;
+    background:var(--ws-surface-solid)!important;
+  }
+}
 
 /* Pixi permanently owns the visible card. The selected DOM node is only an
    interaction host for toolbars and composer panels, so selection never swaps

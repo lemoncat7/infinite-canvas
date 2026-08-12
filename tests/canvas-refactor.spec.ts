@@ -19,6 +19,24 @@ test("generation state never regresses from running to queued", () => {
   ).toBe(38);
 });
 
+test("mobile composer remains inside the visual viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const { canvas } = await mockApi(page, 1);
+  canvas.nodes[0].x = -100;
+  canvas.nodes[0].y = -90;
+  await page.goto("/?canvasPerf=1#/canvas");
+  await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
+  await page.mouse.click(195, 350);
+  const panel = page.locator(".flow-node.selected > .image-config-panel");
+  await expect(panel).toBeVisible();
+  const box = await panel.boundingBox();
+  expect(box).toBeTruthy();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(844);
+  await expect(panel.locator("[data-image-generate]")).toBeInViewport();
+});
+
 function stressCanvas(count = 400) {
   const nodes = Array.from({ length: count }, (_, index) => {
     const column = index % 20;

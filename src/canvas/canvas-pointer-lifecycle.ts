@@ -91,6 +91,10 @@ export class CanvasPointerLifecycle {
       if (pointer.blankCanvas && this.o.selection.selectedId) {
         this.panSelectedElement = this.o.nodeLayer.querySelector<HTMLElement>(`.flow-node[data-id="${this.o.selection.selectedId}"]`);
         this.panSelectedElement?.classList.add("canvas-pan-selected");
+        // The selected card was excluded from Pixi while its DOM editor was
+        // visible. Rebuild the renderer once before entering the camera-only
+        // pan path, otherwise mobile briefly exposes a stale card fragment.
+        this.o.draw(false);
       }
     }
     if (this.o.connectionActive()) { this.o.moveConnection(event); return; }
