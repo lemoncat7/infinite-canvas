@@ -20,6 +20,7 @@ import {
   labelBodyMetrics,
   labelTextViewport,
 } from "../nodes/label-text-layout";
+import { VIDEO_CARD_LAYOUT, videoFrameLayout } from "../nodes/video-card-layout";
 
 function port(node: RenderNode, side: RenderLink["fromSide"]) {
   if (side === "top") return { x: node.x + node.width / 2, y: node.y };
@@ -684,12 +685,18 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         view.body.style.wordWrapWidth = metrics.contentWidth;
         view.meta.visible = false;
       } else if (!mediaOnly && node.kind === "video" && node.role !== "result") {
-        const frameTop = 65,
-          frameGap = 8,
-          frameWidth = (node.width - 44 - frameGap * 2) / 3;
-        for (let index = 0; index < 3; index++)
+        const frameTop = VIDEO_CARD_LAYOUT.frameTop,
+          frameGap = VIDEO_CARD_LAYOUT.frameGap,
+          { frameWidth, frameX } = videoFrameLayout(node.width);
+        for (let index = 0; index < VIDEO_CARD_LAYOUT.frameCount; index++)
           view.detail
-            .roundRect(14 + index * (frameWidth + frameGap), frameTop, frameWidth, 72, 10)
+            .roundRect(
+              frameX(index),
+              frameTop,
+              frameWidth,
+              VIDEO_CARD_LAYOUT.frameHeight,
+              VIDEO_CARD_LAYOUT.frameRadius,
+            )
             .fill({
               color: snapshot.dark ? 0xffffff : 0x74827d,
               alpha: snapshot.dark ? 0.045 : 0.075,
@@ -699,7 +706,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
               alpha: 0.7,
               width: 1,
             });
-        const pillY = frameTop + 85,
+        const pillY = frameTop + VIDEO_CARD_LAYOUT.summaryOffset,
           pillWidths = [38, 47, 43, 42],
           pillGap = 7,
           totalPillWidth = pillWidths.reduce((sum, width) => sum + width, 0) + pillGap * 3;
@@ -712,8 +719,8 @@ export class PixiCanvasRenderer implements CanvasRenderer {
           pillX += width + pillGap;
         });
         view.detail
-          .moveTo(14, node.height - 48)
-          .lineTo(node.width - 14, node.height - 48)
+          .moveTo(VIDEO_CARD_LAYOUT.horizontalPadding, node.height - VIDEO_CARD_LAYOUT.footerHeight)
+          .lineTo(node.width - VIDEO_CARD_LAYOUT.horizontalPadding, node.height - VIDEO_CARD_LAYOUT.footerHeight)
           .stroke({
             color: snapshot.dark ? 0x344247 : 0xd8dfdb,
             alpha: 0.72,
@@ -723,8 +730,8 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         view.markers.forEach((marker, index) => {
           marker.visible = true;
           marker.position.set(
-            14 + frameWidth / 2 + index * (frameWidth + frameGap),
-            frameTop + 36,
+            frameX(index) + frameWidth / 2,
+            frameTop + VIDEO_CARD_LAYOUT.frameHeight / 2,
           );
         });
         view.title.anchor.set(0.5);

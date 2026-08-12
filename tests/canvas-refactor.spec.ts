@@ -3,6 +3,17 @@ import { readFileSync } from "node:fs";
 import { mergeGenerationState } from "../src/services/generation-poller";
 import { labelTextViewport } from "../src/nodes/label-text-layout";
 import { NODE_SNAP_GAP, snapNodeGroup } from "../src/canvas/node-snap-controller";
+import { VIDEO_CARD_LAYOUT, videoFrameLayout } from "../src/nodes/video-card-layout";
+
+test("video card reference frames stay horizontally centered", () => {
+  const width = 240;
+  const layout = videoFrameLayout(width);
+  const lastRight =
+    layout.frameX(VIDEO_CARD_LAYOUT.frameCount - 1) + layout.frameWidth;
+  expect(layout.frameX(0)).toBe(VIDEO_CARD_LAYOUT.horizontalPadding);
+  expect(lastRight).toBeCloseTo(width - VIDEO_CARD_LAYOUT.horizontalPadding);
+  expect(layout.contentRight).toBe(width - VIDEO_CARD_LAYOUT.horizontalPadding);
+});
 
 const snapNode = (id: number, x: number, y: number, width = 100, height = 80) => ({
   id, x, y, width, height, kind: "prompt" as const, title: "", body: "", accent: "",
