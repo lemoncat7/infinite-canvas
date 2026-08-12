@@ -184,6 +184,11 @@ test("a Pixi image opens the existing preview on double click", async ({ page })
   await page.mouse.dblclick(460, 350);
   await expect(page.locator("#asset-preview")).toHaveClass(/open/);
   await expect(page.locator("#preview-name")).toHaveText("预览图片");
+  await page.locator("#close-preview").click();
+  await page.mouse.click(460, 350);
+  await expect(page.locator('.flow-node[data-id="1"].selected')).toHaveCount(1);
+  await page.mouse.dblclick(460, 350);
+  await expect(page.locator("#asset-preview")).toHaveClass(/open/);
 });
 
 test("400 nodes stay GPU-virtualized and recover WebGL context", async ({

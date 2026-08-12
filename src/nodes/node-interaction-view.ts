@@ -153,9 +153,19 @@ export function bindNodePointerInteraction(options: NodePointerOptions) {
       else options.editPrompt(current, element);
       return;
     }
+    // A selected Pixi image is represented by a transparent DOM interaction
+    // host. Its hidden media canvas has no reliable hit rectangle, so the
+    // whole card surface (except controls filtered above) is the preview hit
+    // area, matching the unselected Pixi path.
+    if (current.kind === "image" && current.mediaUrl) {
+      event.preventDefault();
+      event.stopPropagation();
+      options.selectNode(current.id);
+      options.previewMedia(current);
+      return;
+    }
     if (
-      (current.kind !== "image" && current.kind !== "video") ||
-      !current.mediaUrl
+      current.kind !== "video" || !current.mediaUrl
     )
       return;
     const rect = element
