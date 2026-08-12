@@ -651,40 +651,17 @@ export class PixiCanvasRenderer implements CanvasRenderer {
             color: snapshot.dark ? 0x455458 : 0xc5cfcb,
             width: 1,
           });
-        if (generating) {
-          const radius = IMAGE_CARD_LAYOUT.iconSize / 2 - 3;
-          view.detail
-            .circle(layout.iconX, layout.iconY, radius)
-            .stroke({
-              color: snapshot.dark ? 0x425156 : 0xd3dcd8,
-              alpha: 0.9,
-              width: 3,
-            });
-          if (node.status === "running" && progress > 0)
-            view.detail
-              .moveTo(layout.iconX, layout.iconY - radius)
-              .arc(
-                layout.iconX,
-                layout.iconY,
-                radius,
-                -Math.PI / 2,
-                -Math.PI / 2 + Math.PI * 2 * (progress / 100),
-              )
-              .stroke({ color: node.accent, width: 3 });
-        }
         view.icon.position.set(layout.iconX, layout.iconY);
         view.icon.text = generating
-          ? node.status === "queued"
-            ? "···"
-            : "✦"
+          ? "◌"
           : presentation.icon || "";
         view.icon.style.fontSize = 19;
         view.title.anchor.set(0.5);
         view.title.position.set(layout.centerX, layout.titleY);
         view.title.text = generating
           ? node.status === "queued"
-            ? "排队中"
-            : "正在生成"
+            ? "等待生成"
+            : `生成中 ${Math.round(progress)}%`
           : presentation.title;
         view.title.style.fontSize = 13;
         view.subtitle.visible = false;
@@ -692,8 +669,8 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         view.body.position.set(layout.centerX, layout.descriptionY);
         view.body.text = generating
           ? node.status === "queued"
-            ? "等待生成"
-            : `${Math.round(progress)}%`
+            ? "任务已进入队列"
+            : "正在处理画面"
           : presentation.body;
         view.body.style.fontSize = 10;
         view.body.style.align = "center";

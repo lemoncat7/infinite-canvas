@@ -228,9 +228,11 @@ test("a queued Pixi image replaces empty actions with progress state", async ({ 
   expect(await page.evaluate(() => document.querySelectorAll("#canvas-pixi").length)).toBe(1);
 });
 
-test("the Pixi image progress arc starts at its circumference without a center chord", () => {
+test("the Pixi image generation state avoids animated arc paths and duplicate progress", () => {
   const source = readFileSync("src/canvas/pixi-renderer.ts", "utf8");
-  expect(source).toContain(".moveTo(layout.iconX, layout.iconY - radius)\n              .arc(");
+  expect(source).not.toContain(".arc(\n                layout.iconX");
+  expect(source).toContain('`生成中 ${Math.round(progress)}%`');
+  expect(source).toContain(': "正在处理画面"');
 });
 
 test("400 nodes stay GPU-virtualized and recover WebGL context", async ({
