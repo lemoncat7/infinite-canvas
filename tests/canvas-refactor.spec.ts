@@ -1,8 +1,17 @@
 import { expect, test, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { mergeGenerationState } from "../src/services/generation-poller";
+import { labelTextViewport } from "../src/nodes/label-text-layout";
 
 const projectId = "canvas-stress-project";
+
+test("label overflow marker remains inside the last visible line", () => {
+  const viewport = labelTextViewport("一二三四五六七八九十", 4, 2);
+  const lines = viewport.text.split("\n");
+  expect(lines).toHaveLength(2);
+  expect(lines[1]).toBe("五六七…");
+  expect(lines[1].length).toBeLessThanOrEqual(4);
+});
 
 test("generation state never regresses from running to queued", () => {
   expect(

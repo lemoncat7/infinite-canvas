@@ -79,10 +79,15 @@ export function labelTextViewport(
     Math.max(0, Math.round(requestedScroll)),
   );
   const end = Math.min(lines.length, scrollLine + visibleLines);
-  const prefix = scrollLine > 0 ? "…" : "";
-  const suffix = end < lines.length ? "…" : "";
+  const visible = lines.slice(scrollLine, end);
+  if (scrollLine > 0 && visible.length)
+    visible[0] = `…${visible[0].slice(1)}`;
+  if (end < lines.length && visible.length) {
+    const last = visible.length - 1;
+    visible[last] = `${visible[last].replace(/.$/u, "")}…`;
+  }
   return {
-    text: `${prefix}${lines.slice(scrollLine, end).join("\n")}${suffix}`,
+    text: visible.join("\n"),
     scrollLine,
     maxScrollLine,
   };
