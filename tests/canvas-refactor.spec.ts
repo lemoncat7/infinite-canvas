@@ -255,15 +255,14 @@ test("400 nodes stay GPU-virtualized and recover WebGL context", async ({
     ).__canvasPerformance?.reset(),
   );
 
-  await page.mouse.move(900, 700);
+  await page.mouse.move(70, 700);
   await page.mouse.down();
-  await page.mouse.move(700, 570, { steps: 24 });
-  await expect(primaryImage).toHaveClass(/selected/);
-  await expect(primaryImage).toHaveClass(/selected/);
+  await page.mouse.move(250, 610, { steps: 24 });
+  await expect(page.locator("#node-layer")).toHaveClass(/dom-interaction-suspended/);
   await page.mouse.up();
-  // Panning intentionally preserves selection so upstream/downstream links
-  // remain highlighted while the user searches the graph.
-  await expect(page.locator("#node-layer > .flow-node.selected")).toHaveCount(1);
+  // Panning removes the DOM editor while the Pixi selection and its related
+  // link highlight remain in renderer state.
+  await expect(page.locator("#node-layer > .flow-node")).toHaveCount(0);
 
   const perf = await page.evaluate(() =>
     (

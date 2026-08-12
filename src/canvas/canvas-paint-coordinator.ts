@@ -10,6 +10,7 @@ type PaintState = Omit<CanvasRenderSnapshot, "pendingConnection"> & {
 export class CanvasPaintCoordinator {
   private frame: number | null = null;
   private needsDomSync = true;
+  private interactionPan = false;
 
   constructor(private readonly options: {
     performance: CanvasPerformanceMonitor;
@@ -34,9 +35,21 @@ export class CanvasPaintCoordinator {
     if (this.frame === null) this.frame = requestAnimationFrame(this.paint);
   };
 
+  pan = () => {
+    this.interactionPan = true;
+    if (this.frame === null) this.frame = requestAnimationFrame(this.paint);
+  };
+
   paint = () => {
     const startedAt = this.options.performance.beginFrame();
     this.frame = null;
+    if (this.interactionPan && this.options.interacting()) {
+      this.interactionPan = false;
+      this.options.renderer()?.pan(this.options.camera());
+      this.options.performance.endFrame(startedAt);
+      return;
+    }
+    this.interactionPan = false;
     const syncUi = this.needsDomSync && !this.options.interacting();
     if (syncUi) this.needsDomSync = false;
     const state = this.options.state();

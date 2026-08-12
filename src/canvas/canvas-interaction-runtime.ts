@@ -125,9 +125,18 @@ export class CanvasInteractionRuntime {
       marqueeBox: this.batch.marqueeBox,
       batchToolbar: this.batch.toolbar,
       draw: options.draw,
+      pan: () => options.rendering().pan(),
       save: options.save,
       setEditing: () => options.persistence().setEditing(),
       updateEditor: options.updateEditor,
+      showSelectedDom: () => {
+        nodeLayer.classList.remove("dom-interaction-suspended");
+        options.presentation().views.showSelectedDom();
+      },
+      hideSelectedDom: () => {
+        nodeLayer.classList.add("dom-interaction-suspended");
+        options.presentation().views.hideSelectedDom();
+      },
       syncDraggedElements: (ids) =>
         options.presentation().views.syncDraggedElements(ids, nodes),
       refreshBatchSelection: () => this.batch.refresh(),

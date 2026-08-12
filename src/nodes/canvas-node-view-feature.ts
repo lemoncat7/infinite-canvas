@@ -22,6 +22,8 @@ export class CanvasNodeViewFeature {
   readonly mountedIds = new Set<number>();
   readonly spatialIndex = new CanvasSpatialIndex();
   readonly editorCache: PixiEditorCache;
+  private hiddenSelectedDomId = 0;
+  private readonly getSelectedId: () => number;
   private readonly factory: BoundNodeViewFactory;
   private readonly synchronizer: BoundNodeDomSynchronizer;
 
@@ -87,6 +89,7 @@ export class CanvasNodeViewFeature {
     paintVideo: (target: HTMLCanvasElement, url: string) => void;
     notify: (message: string, type: Tone, detail?: string) => void;
   }) {
+    this.getSelectedId = options.getSelectedId;
     this.factory = new BoundNodeViewFactory({
       nodes: options.nodes,
       batchIds: options.getBatchIds(),
@@ -142,6 +145,8 @@ export class CanvasNodeViewFeature {
       links: options.links,
       camera: options.camera,
       getSelectedId: options.getSelectedId,
+      isSelectedDomVisible: () =>
+        this.hiddenSelectedDomId !== options.getSelectedId(),
       getBatchIds: options.getBatchIds,
       getEditingId: options.getEditingId,
       getDraggingId: options.getDraggingId,
@@ -176,6 +181,15 @@ export class CanvasNodeViewFeature {
   }
 
   create(node: FlowNode) { return this.factory.create(node); }
+  showSelectedDom() { this.hiddenSelectedDomId = 0; }
+  hideSelectedDom() {
+    const selectedId = this.getSelectedId();
+    if (selectedId) this.hiddenSelectedDomId = selectedId;
+    // Pixi must immediately resume drawing the selected card while its DOM
+    // editor is being detached; waiting for the next full DOM sync creates a
+    // one-frame blank card during drag.
+    this.mountedIds.clear();
+  }
   sync() { this.synchronizer.sync(); }
   scheduleWarmup() { this.editorCache.scheduleWarmup(); }
   clearEditors() { this.editorCache.clear(); }

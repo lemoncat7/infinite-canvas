@@ -15,6 +15,7 @@ export type NodeDomSyncFlags = {
 type Options = {
   viewport: HTMLElement; layer: HTMLElement; nodes: FlowNode[]; links: FlowLink[];
   camera: { x: number; y: number; zoom: number }; selectedId: number;
+  selectedDomVisible: boolean;
   batchIds: Set<number>; editingId: number; draggingId: number;
   agentSelecting: boolean; agentIds: Set<number>; colorTheme: string;
   swap: { videoId: number; sourceId: number } | null;
@@ -28,7 +29,11 @@ type Options = {
 export function synchronizeNodeDom(options: Options) {
   const { nodes, camera } = options;
   options.viewport.style.transform = `translate3d(${innerWidth / 2 + camera.x}px, ${innerHeight / 2 + camera.y}px,0) scale(${camera.zoom})`;
-  const required = new Set([options.selectedId, options.editingId, options.draggingId].filter(Boolean));
+  const required = new Set([
+    options.selectedDomVisible ? options.selectedId : 0,
+    options.editingId,
+    options.draggingId,
+  ].filter(Boolean));
   const allIds = new Set(nodes.map((node) => node.id));
   options.mountedIds.clear();
   required.forEach((id) => options.mountedIds.add(id));

@@ -18,6 +18,7 @@ type BoundNodeDomOptions = {
   links: FlowLink[];
   camera: Camera;
   getSelectedId: () => number;
+  isSelectedDomVisible: () => boolean;
   getBatchIds: () => Set<number>;
   getEditingId: () => number;
   getDraggingId: () => number;
@@ -62,6 +63,7 @@ export class BoundNodeDomSynchronizer {
       links: options.links,
       camera: options.camera,
       selectedId: options.getSelectedId(),
+      selectedDomVisible: options.isSelectedDomVisible(),
       batchIds: options.getBatchIds(),
       editingId: options.getEditingId(),
       draggingId: options.getDraggingId(),

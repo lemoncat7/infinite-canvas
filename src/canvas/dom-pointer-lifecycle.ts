@@ -9,6 +9,7 @@ type Options = {
   syncElements: (ids: Iterable<number>) => void; refreshBatchSelection: () => void;
   isMultiSelectMode: () => boolean; toggleBatchNode: (id: number) => void;
   selectNode: (id: number) => void; clearSelection: () => void; selectedId: () => number;
+  hideSelectedDom: () => void;
   isAgentSelected: (id: number) => boolean; agentSelectionSize: () => number;
   toggleAgentSelection: (id: number) => void; renderAgentSelection: () => void; warnAgentLimit: () => void;
   moveConnection: (event: PointerEvent) => void; finishConnection: (event: PointerEvent) => void;
@@ -85,7 +86,8 @@ export class DomPointerLifecycle {
       if (drag.nativeControl) { drag.element.setPointerCapture(event.pointerId); event.preventDefault(); }
       drag.element.classList.add("dragging");
       if (drag.groupInitial?.size) this.options.groupMovingElement.classList.add("group-moving");
-      if (!drag.agentSelect && this.options.selectedId() === drag.id) this.options.clearSelection();
+      if (!drag.agentSelect && this.options.selectedId() === drag.id)
+        this.options.hideSelectedDom();
     }
     this.cancelFrame();
     this.dragFrame = requestAnimationFrame(() => {

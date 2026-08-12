@@ -23,9 +23,12 @@ export class CanvasInputFeature {
     marqueeBox: HTMLElement;
     batchToolbar: HTMLElement;
     draw: (syncDom?: boolean) => void;
+    pan: () => void;
     save: () => void;
     setEditing: () => void;
     updateEditor: () => void;
+    showSelectedDom: () => void;
+    hideSelectedDom: () => void;
     syncDraggedElements: (ids: Iterable<number>) => void;
     refreshBatchSelection: () => void;
     clearBatchSelection: () => void;
@@ -83,6 +86,7 @@ export class CanvasInputFeature {
         options.updateEditor();
         options.draw();
       },
+      hideSelectedDom: options.hideSelectedDom,
       selectedId: () => options.selection.selectedId,
       isAgentSelected: (id) => options.getAgentIds().has(id),
       agentSelectionSize: () => options.getAgentIds().size,
@@ -144,6 +148,8 @@ export class CanvasInputFeature {
       cancelCameraAnimation: this.cameraViewport.cancel,
       toggleBatchNode: options.toggleBatchNode,
       updateEditor: options.updateEditor,
+      showSelectedDom: options.showSelectedDom,
+      hideSelectedDom: options.hideSelectedDom,
       setEditing: options.setEditing,
       moveNode: options.moveNode,
       panCamera: options.panCamera,
@@ -153,6 +159,7 @@ export class CanvasInputFeature {
       cancelConnection: options.cancelConnection,
       save: options.save,
       draw: options.draw,
+      pan: options.pan,
       closeQuickMenu: options.closeQuickMenu,
       smoothZoom: this.cameraViewport.smoothBy,
     });

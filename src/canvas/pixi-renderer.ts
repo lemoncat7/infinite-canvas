@@ -864,6 +864,28 @@ export class PixiCanvasRenderer implements CanvasRenderer {
     this.app.renderer.render(this.app.stage);
   }
 
+  /** Interaction hot path: no node/link traversal, allocation, or culling. */
+  pan(camera: CanvasRenderSnapshot["camera"]) {
+    if (this.lost || this.suspended) return;
+    this.world.position.set(innerWidth / 2 + camera.x, innerHeight / 2 + camera.y);
+    this.world.scale.set(camera.zoom);
+    if (this.grid) {
+      this.grid.tileScale.set(camera.zoom);
+      this.grid.tilePosition.set(
+        innerWidth / 2 + camera.x - 21 * camera.zoom,
+        innerHeight / 2 + camera.y - 21 * camera.zoom,
+      );
+    }
+    if (this.lineGrid) {
+      this.lineGrid.tileScale.set(camera.zoom);
+      this.lineGrid.tilePosition.set(
+        innerWidth / 2 + camera.x,
+        innerHeight / 2 + camera.y,
+      );
+    }
+    this.app.renderer.render(this.app.stage);
+  }
+
   suspend() {
     this.suspended = true;
     window.clearTimeout(this.activeLinkTimer);

@@ -17,6 +17,8 @@ type Options = {
   cancelCameraAnimation: () => void;
   toggleBatchNode: (id: number) => void;
   updateEditor: () => void;
+  showSelectedDom: () => void;
+  hideSelectedDom: () => void;
   setEditing: () => void;
   moveNode: (id: number, dx: number, dy: number) => void;
   panCamera: (dx: number, dy: number) => void;
@@ -26,6 +28,7 @@ type Options = {
   cancelConnection: () => void;
   save: () => void;
   draw: (syncDom?: boolean) => void;
+  pan: () => void;
   closeQuickMenu: () => void;
   smoothZoom: (factor: number, anchor: Point) => void;
 };
@@ -57,6 +60,7 @@ export class CanvasPointerLifecycle {
     this.o.interaction.beginPointer({ x: event.clientX, y: event.clientY });
     const hit = this.o.hitNode(event.clientX, event.clientY);
     if (hit) {
+      this.o.showSelectedDom();
       if (this.o.selection.multiSelectMode) {
         if (!this.o.selection.batchIds.has(hit.id)) {
           pointer.down = false; pointer.blankCanvas = false; this.o.toggleBatchNode(hit.id); return;
@@ -70,7 +74,7 @@ export class CanvasPointerLifecycle {
         this.o.updateEditor();
       }
       pointer.blankCanvas = false;
-    }
+    } else this.o.hideSelectedDom();
     this.o.canvas.setPointerCapture(event.pointerId);
     this.o.canvas.classList.add("dragging");
     this.o.draw(false);
@@ -82,8 +86,8 @@ export class CanvasPointerLifecycle {
     if (!pointer.moved && Math.hypot(event.clientX-pointer.startX, event.clientY-pointer.startY) > 4) {
       pointer.moved = true;
       if (pointer.draggingNode === this.o.selection.selectedId) {
-        this.o.nodeLayer.querySelector<HTMLElement>(`.flow-node[data-id="${pointer.draggingNode}"]`)?.classList.remove("selected");
-        this.o.selection.selectedId = 0; this.o.updateEditor();
+        this.o.hideSelectedDom();
+        this.o.updateEditor();
       }
       if (!pointer.blankCanvas) this.o.setEditing();
       if (pointer.blankCanvas && this.o.selection.selectedId) {
@@ -96,13 +100,14 @@ export class CanvasPointerLifecycle {
     if (pointer.draggingNode) for (const id of pointer.draggingGroup ?? [pointer.draggingNode]) this.o.moveNode(id, dx/this.o.zoom(), dy/this.o.zoom());
     else this.o.panCamera(dx, dy);
     pointer.x = event.clientX; pointer.y = event.clientY;
-    this.o.draw(Boolean(pointer.draggingNode));
+    if (pointer.draggingNode) this.o.draw(true);
+    else this.o.pan();
   };
 
   private onUp = (event: PointerEvent) => {
     const pointer = this.o.interaction.pointer;
     if (this.o.connectionActive()) this.o.finishConnection(event);
-    else if (pointer.blankCanvas && !pointer.moved) { this.o.selection.selectedId = 0; this.o.updateEditor(); }
+    else if (pointer.blankCanvas && !pointer.moved) this.o.updateEditor();
     if (pointer.toggleBatchOnRelease && !pointer.moved) this.o.toggleBatchNode(pointer.toggleBatchOnRelease);
     this.o.save(); this.o.interaction.resetPointer(); this.clearPanVisual();
     this.o.canvas.classList.remove("dragging"); this.o.draw();
