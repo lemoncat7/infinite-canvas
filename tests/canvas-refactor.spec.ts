@@ -19,7 +19,7 @@ test("video card Pixi and DOM layouts use the same dynamic reference count", () 
   expect(videoFrameLayout(240, 1).frameCount).toBe(1);
   expect(videoFrameLayout(240, 2).frameCount).toBe(2);
   expect(videoFrameLayout(240, 4).frameCount).toBe(4);
-  expect(videoFrameLayout(240, 8).frameCount).toBe(VIDEO_CARD_LAYOUT.maxFrameCount);
+  expect(videoFrameLayout(240, 8).frameCount).toBe(8);
 });
 
 const snapNode = (id: number, x: number, y: number, width = 100, height = 80) => ({

@@ -183,6 +183,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       meta: Text;
       hint: Text;
       markers: Text[];
+      parameters: Text[];
       media: Sprite;
       mediaUrl?: string;
       mediaRequest: number;
@@ -411,7 +412,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
             },
           }),
           markers = Array.from(
-            { length: VIDEO_CARD_LAYOUT.maxFrameCount },
+            { length: 4 },
             (_, index) =>
               new Text({
                 text: String(index + 1),
@@ -422,8 +423,20 @@ export class PixiCanvasRenderer implements CanvasRenderer {
                 },
               }),
           ),
+          parameters = Array.from(
+            { length: 4 },
+            () => new Text({
+              style: {
+                fill: snapshot.dark ? 0xd4d4d8 : 0x52525b,
+                fontFamily: "system-ui, sans-serif",
+                fontSize: 9,
+                fontWeight: "600",
+              },
+            }),
+          ),
           media = new Sprite(Texture.EMPTY);
         markers.forEach((marker) => marker.anchor.set(0.5));
+        parameters.forEach((parameter) => parameter.anchor.set(0.5));
         title.position.set(14, 13);
         icon.anchor.set(0.5);
         subtitle.position.set(14, 34);
@@ -444,6 +457,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
           meta,
           hint,
           ...markers,
+          ...parameters,
           mediaMask,
         );
         this.cards.addChild(container);
@@ -460,6 +474,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
           meta,
           hint,
           markers,
+          parameters,
           media,
           mediaRequest: 0,
           key: "",
@@ -551,6 +566,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       view.hint.text = "";
       view.hint.visible = false;
       view.markers.forEach((marker) => (marker.visible = false));
+      view.parameters.forEach((parameter) => (parameter.visible = false));
       // Keep the textual card presentation until the asynchronous texture is
       // actually attached. Hiding it merely because a URL exists produces a
       // blank light shell while images decode, reload, or miss the LRU cache.
@@ -719,25 +735,27 @@ export class PixiCanvasRenderer implements CanvasRenderer {
               width: 1,
             });
         const pillY = frameTop + VIDEO_CARD_LAYOUT.summaryOffset,
-          pillWidths = [38, 47, 43, 42],
+          parameterValues = [
+            `${node.videoSettings?.seconds ?? 5} 秒`,
+            node.videoSettings?.referenceMode === "keyframes" ? "关键帧" : "参考图",
+            node.videoSettings?.resolution ?? "720p",
+            node.videoSettings?.aspectRatio ?? "16:9",
+          ],
+          pillWidths = [42, 52, 48, 48],
           pillGap = 7,
           totalPillWidth = pillWidths.reduce((sum, width) => sum + width, 0) + pillGap * 3;
         let pillX = (node.width - totalPillWidth) / 2;
-        pillWidths.forEach((width) => {
+        pillWidths.forEach((width, index) => {
           view.detail
             .roundRect(pillX, pillY, width, 24, 12)
             .fill({ color: snapshot.dark ? 0xffffff : 0x74827d, alpha: 0.055 })
             .stroke({ color: snapshot.dark ? 0x344247 : 0xd8dfdb, width: 1 });
+          const parameter = view.parameters[index];
+          parameter.visible = true;
+          parameter.text = parameterValues[index];
+          parameter.position.set(pillX + width / 2, pillY + 12);
           pillX += width + pillGap;
         });
-        view.detail
-          .moveTo(VIDEO_CARD_LAYOUT.horizontalPadding, node.height - VIDEO_CARD_LAYOUT.footerHeight)
-          .lineTo(node.width - VIDEO_CARD_LAYOUT.horizontalPadding, node.height - VIDEO_CARD_LAYOUT.footerHeight)
-          .stroke({
-            color: snapshot.dark ? 0x344247 : 0xd8dfdb,
-            alpha: 0.72,
-            width: 1,
-          });
         view.icon.visible = false;
         view.markers.forEach((marker, index) => {
           marker.visible = index < frameCount;
@@ -756,10 +774,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         view.body.position.set(node.width / 2, node.height - 28);
         view.body.style.fontSize = 9;
         view.body.style.align = "center";
-        view.meta.anchor.set(0.5);
-        view.meta.text = `${node.videoSettings?.seconds ?? 5} 秒      ${node.videoSettings?.referenceMode === "keyframes" ? "关键帧" : "参考图"}      ${node.videoSettings?.resolution ?? "720p"}      ${node.videoSettings?.aspectRatio ?? "16:9"}`;
-        view.meta.style.fontSize = 9;
-        view.meta.position.set(node.width / 2, pillY + 6);
+        view.meta.visible = false;
       } else if (!mediaOnly && node.kind === "voice") {
         view.detail
           .moveTo(18, node.height - 48)
