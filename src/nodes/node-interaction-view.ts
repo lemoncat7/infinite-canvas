@@ -145,7 +145,12 @@ export function bindNodePointerInteraction(options: NodePointerOptions) {
       event.preventDefault();
       event.stopPropagation();
       options.selectNode(current.id);
-      options.editPrompt(current, element);
+      const rect = element.getBoundingClientRect();
+      if (event.clientY < rect.top + 58 * (rect.height / current.height))
+        element.querySelector<HTMLElement>(".node-label-heading")?.dispatchEvent(
+          new MouseEvent("dblclick", { bubbles: true }),
+        );
+      else options.editPrompt(current, element);
       return;
     }
     if (

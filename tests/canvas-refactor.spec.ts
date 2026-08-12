@@ -149,12 +149,26 @@ test("an idle Pixi label clamps long text and opens DOM editing on double click"
   await page.mouse.click(460, 350);
   const selectedCopy = page.locator(".flow-node.kind-prompt.selected .node-copy");
   await expect(selectedCopy).toBeHidden();
+  const zoomBefore = await page.locator("#zoom-percent").textContent();
+  await page.locator('.flow-node.kind-prompt [data-action="zoom-in"]').click();
+  await expect(page.locator('.flow-node.kind-prompt')).toHaveCSS("--font-scale", "1.1");
   await page.mouse.dblclick(460, 350);
   const editor = page.locator('.flow-node.kind-prompt .node-copy[contenteditable="true"]');
   await expect(editor).toBeVisible();
+  await editor.hover();
+  await page.mouse.wheel(0, 180);
+  await expect(page.locator("#zoom-percent")).toHaveText(zoomBefore || "100%");
   await editor.fill("双击后可以正常编辑标签内容");
   await editor.press("Control+Enter");
   await expect(editor).not.toBeVisible();
+  await page.mouse.dblclick(460, 295);
+  const titleEditor = page.locator(
+    '.flow-node.kind-prompt .node-label-heading[contenteditable="true"]',
+  );
+  await expect(titleEditor).toBeVisible();
+  await titleEditor.fill("可编辑标题");
+  await titleEditor.press("Enter");
+  await expect(titleEditor).not.toBeVisible();
 });
 
 test("400 nodes stay GPU-virtualized and recover WebGL context", async ({

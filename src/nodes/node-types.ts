@@ -42,6 +42,7 @@ export type FlowNode = Point & {
   status?: string;
   mediaUrl?: string;
   fontScale?: number;
+  labelScroll?: number;
   agentAuto?: boolean;
   comicData?: unknown;
   imageSettings?: { size?: string; quality?: string; background?: string };

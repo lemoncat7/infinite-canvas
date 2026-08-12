@@ -13,6 +13,8 @@ export type RenderNode = {
   progress?: number;
   mediaUrl?: string;
   model?: string;
+  fontScale?: number;
+  labelScroll?: number;
   videoSettings?: {
     seconds?: string;
     resolution?: string;

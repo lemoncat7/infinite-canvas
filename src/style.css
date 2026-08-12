@@ -2295,6 +2295,35 @@ body:not(.home-mode) .flow-node.pixi-card-editor.kind-prompt>.node-copy.editing 
 body.renderer-pixi .flow-node.pixi-card-editor.kind-prompt.prompt-inline-editing>.node-copy { display:block!important; }
 body.renderer-pixi .flow-node.pixi-card-editor.kind-prompt>.node-copy[contenteditable="true"] { display:block!important; }
 body.renderer-pixi .flow-node.pixi-card-editor.kind-prompt>.node-copy:not(.editing) { display:none!important; }
+body.renderer-pixi .flow-node.pixi-card-editor.kind-prompt>.node-label-heading.editing {
+  position:absolute!important;
+  top:var(--label-title-top)!important;
+  right:var(--label-x)!important;
+  left:var(--label-x)!important;
+  z-index:25!important;
+  display:block!important;
+  width:auto!important;
+  margin:0!important;
+  padding:0!important;
+  color:var(--ws-text)!important;
+  background:var(--ws-surface-solid)!important;
+  border:0!important;
+  border-bottom:1px solid var(--ws-border)!important;
+  border-radius:0!important;
+  outline:none!important;
+  font-size:var(--label-title-size)!important;
+  font-weight:740!important;
+  line-height:var(--label-title-line)!important;
+  pointer-events:auto!important;
+  user-select:text!important;
+}
+body.renderer-pixi .flow-node.pixi-card-editor.kind-prompt>.node-copy.editing {
+  inset:var(--label-body-top) var(--label-x) var(--label-body-bottom)!important;
+  padding:0!important;
+  font-family:system-ui,sans-serif!important;
+  font-size:var(--label-body-size)!important;
+  line-height:var(--label-body-line)!important;
+}
 
 /* Exact video model-picker appearance; only scrolling differs. */
 .kind-voice .voice-model-picker{position:relative;align-self:center;justify-self:start}.kind-voice .voice-model-picker>summary{display:flex;max-width:310px;box-sizing:border-box;align-items:center;cursor:pointer;list-style:none}.kind-voice .voice-model-picker>summary::-webkit-details-marker{display:none}.kind-voice .voice-model-picker>summary>span{display:grid;width:16px;place-items:center;color:inherit}.kind-voice .voice-model-picker>summary>b{overflow:hidden;max-width:230px;font-weight:500;text-overflow:ellipsis;white-space:nowrap}.kind-voice .voice-model-menu{overflow-x:hidden!important;overscroll-behavior:contain}.kind-voice .voice-model-menu::-webkit-scrollbar{display:none}

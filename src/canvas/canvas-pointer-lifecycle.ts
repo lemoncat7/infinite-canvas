@@ -10,6 +10,9 @@ type Options = {
   zoom: () => number;
   hitNode: (x: number, y: number) => FlowNode | undefined;
   editPrompt: (node: FlowNode) => void;
+  editPromptTitle: (node: FlowNode) => void;
+  isPromptTitleHit: (node: FlowNode, x: number, y: number) => boolean;
+  scrollPrompt: (node: FlowNode, delta: number) => void;
   cancelCameraAnimation: () => void;
   toggleBatchNode: (id: number) => void;
   updateEditor: () => void;
@@ -117,7 +120,9 @@ export class CanvasPointerLifecycle {
     this.o.selection.selectedId = node.id;
     this.o.updateEditor();
     this.o.draw(true);
-    this.o.editPrompt(node);
+    if (this.o.isPromptTitleHit(node, event.clientX, event.clientY))
+      this.o.editPromptTitle(node);
+    else this.o.editPrompt(node);
   };
   private onPageInterruption = () => {
     if (!this.o.interaction.pointer.down) return;
@@ -129,11 +134,19 @@ export class CanvasPointerLifecycle {
     event.preventDefault(); this.o.closeQuickMenu();
     this.o.smoothZoom(Math.exp(-event.deltaY*0.001), { x: event.clientX, y: event.clientY });
   }
-  private onCanvasWheel = (event: WheelEvent) => this.zoom(event);
+  private onCanvasWheel = (event: WheelEvent) => {
+    const node = this.o.hitNode(event.clientX, event.clientY);
+    if (node?.kind === "prompt" && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault();
+      this.o.scrollPrompt(node, event.deltaY);
+      return;
+    }
+    this.zoom(event);
+  };
   private onNodeWheel = (event: WheelEvent) => {
     const target = event.target as HTMLElement | null;
     if (target?.closest(".video-model-popover,.video-settings-popover,.voice-model-menu")) { event.stopPropagation(); return; }
-    if (target?.closest('textarea,input,select,[contenteditable="true"],.node-copy,.image-original-prompt p,.video-result-prompt')) return;
+    if (target?.closest('textarea,input,select,[contenteditable="true"],.node-copy,.image-original-prompt p,.video-result-prompt')) { event.stopPropagation(); return; }
     event.stopPropagation(); this.zoom(event);
   };
 }

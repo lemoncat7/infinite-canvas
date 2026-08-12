@@ -1,4 +1,5 @@
 import type { FlowNode } from "./node-types";
+import { LABEL_TEXT_LAYOUT, labelBodyMetrics } from "./label-text-layout";
 
 export interface NodeViewFlags {
   selected: boolean;
@@ -38,6 +39,15 @@ export function styleNodeEditor(
   element.style.height = `${node.height}px`;
   element.style.setProperty("--accent", node.accent);
   element.style.setProperty("--font-scale", String(node.fontScale ?? 1));
+  const labelMetrics = labelBodyMetrics(node.width, node.height, node.fontScale);
+  element.style.setProperty("--label-x", `${LABEL_TEXT_LAYOUT.horizontalPadding}px`);
+  element.style.setProperty("--label-title-top", `${LABEL_TEXT_LAYOUT.titleTop}px`);
+  element.style.setProperty("--label-title-size", `${labelMetrics.titleFontSize}px`);
+  element.style.setProperty("--label-title-line", `${labelMetrics.titleLineHeight}px`);
+  element.style.setProperty("--label-body-top", `${LABEL_TEXT_LAYOUT.bodyTop}px`);
+  element.style.setProperty("--label-body-bottom", `${LABEL_TEXT_LAYOUT.bodyBottom}px`);
+  element.style.setProperty("--label-body-size", `${labelMetrics.fontSize}px`);
+  element.style.setProperty("--label-body-line", `${labelMetrics.lineHeight}px`);
   if (node.kind === "audio")
     element.style.setProperty("background", "#111820", "important");
   else element.style.removeProperty("background");
@@ -60,6 +70,7 @@ export function nodeDomState(node: FlowNode, flags: NodeViewFlags): unknown[] {
     node.status,
     node.mediaUrl,
     node.fontScale,
+    node.labelScroll,
     node.agentAuto,
     node.imageSettings?.size,
     node.imageSettings?.quality,

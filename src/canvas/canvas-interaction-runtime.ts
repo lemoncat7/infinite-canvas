@@ -1,6 +1,7 @@
 import type { RuntimeFoundation } from "../app/runtime-foundation";
 import type { CanvasNodePresentationRuntime } from "../nodes/canvas-node-presentation-runtime";
 import type { CanvasNodeRuntimeFeature } from "../nodes/canvas-node-runtime-feature";
+import { labelBodyMetrics, labelTextViewport } from "../nodes/label-text-layout";
 import type { CanvasGenerationRuntime } from "../services/canvas-generation-composition";
 import type { CanvasControlsRuntime } from "../ui/canvas-controls-runtime";
 import type { CanvasGuideMessage } from "../ui/canvas-guide-controller";
@@ -156,6 +157,31 @@ export class CanvasInteractionRuntime {
           options.nodeRuntime().beginTextEdit(node, element);
           options.draw(true);
         }
+      },
+      editPromptTitle: (node) => {
+        const element = nodeLayer.querySelector<HTMLElement>(
+          `.flow-node[data-id="${node.id}"]`,
+        );
+        element?.querySelector<HTMLElement>(".node-label-heading")?.dispatchEvent(
+          new MouseEvent("dblclick", { bubbles: true }),
+        );
+      },
+      isPromptTitleHit: (node, x, y) => {
+        const point = options.rendering().world({ x, y });
+        return point.y >= node.y + 22 && point.y < node.y + 58;
+      },
+      scrollPrompt: (node, delta) => {
+        const direction = Math.sign(delta);
+        if (!direction) return;
+        const metrics = labelBodyMetrics(node.width, node.height, node.fontScale);
+        const viewport = labelTextViewport(
+          node.body,
+          Math.max(8, Math.floor(metrics.contentWidth / metrics.fontSize)),
+          metrics.visibleLines,
+          (node.labelScroll ?? 0) + direction * 2,
+        );
+        node.labelScroll = viewport.scrollLine;
+        options.draw(false);
       },
       moveNode: (id, dx, dy) => store.moveNodeById(id, dx, dy),
       panCamera: (dx, dy) => store.panCamera(dx, dy),

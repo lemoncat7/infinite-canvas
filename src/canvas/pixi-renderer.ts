@@ -14,6 +14,11 @@ import type {
   RenderNode,
 } from "./renderer";
 import { PixiTextureCache } from "./pixi-texture-cache";
+import {
+  LABEL_TEXT_LAYOUT,
+  labelBodyMetrics,
+  labelTextViewport,
+} from "../nodes/label-text-layout";
 
 function port(node: RenderNode, side: RenderLink["fromSide"]) {
   if (side === "top") return { x: node.x + node.width / 2, y: node.y };
@@ -541,6 +546,8 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         node.progress,
         node.role,
         node.model,
+        node.fontScale,
+        node.labelScroll,
         JSON.stringify(node.videoSettings),
         JSON.stringify(node.voiceSettings),
         JSON.stringify(node.ttsSettings),
@@ -650,26 +657,34 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         view.hint.position.set(node.width / 2, buttonY + 10);
         view.hint.style.fontSize = 10;
       } else if (!mediaOnly && node.kind === "prompt") {
-        const maxBodyLines = Math.max(1, Math.floor((node.height - 82) / 18));
-        view.body.text = this.clampPromptText(
+        const metrics = labelBodyMetrics(node.width, node.height, node.fontScale);
+        view.body.text = labelTextViewport(
           node.body || "暂无描述",
-          Math.max(8, Math.floor((node.width - 44) / 11)),
-          maxBodyLines,
-        );
-        view.title.style.fontSize = 16;
+          Math.max(8, Math.floor(metrics.contentWidth / metrics.fontSize)),
+          metrics.visibleLines,
+          node.labelScroll ?? 0,
+        ).text;
+        view.title.style.fontSize = metrics.titleFontSize;
+        view.title.style.lineHeight = metrics.titleLineHeight;
         view.title.style.fontWeight = "700";
         view.title.anchor.set(0);
-        view.title.position.set(22, 32);
+        view.title.position.set(
+          LABEL_TEXT_LAYOUT.horizontalPadding,
+          LABEL_TEXT_LAYOUT.titleTop,
+        );
         view.subtitle.visible = false;
         view.icon.visible = false;
         view.body.anchor.set(0);
-        view.body.position.set(22, 62);
-        view.body.style.fontSize = 11;
-        view.body.style.lineHeight = 18;
+        view.body.position.set(
+          LABEL_TEXT_LAYOUT.horizontalPadding,
+          LABEL_TEXT_LAYOUT.bodyTop,
+        );
+        view.body.style.fontSize = metrics.fontSize;
+        view.body.style.lineHeight = metrics.lineHeight;
         view.body.style.align = "left";
         view.body.style.breakWords = true;
         view.body.style.whiteSpace = "pre-line";
-        view.body.style.wordWrapWidth = Math.max(80, node.width - 44);
+        view.body.style.wordWrapWidth = metrics.contentWidth;
         view.meta.visible = false;
       } else if (!mediaOnly && node.kind === "video" && node.role !== "result") {
         const frameTop = 65,
@@ -879,23 +894,6 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       /^(\/api\/(?:public\/)?assets\/[^/]+)\/content(?:\/.*)?$/,
       "$1/thumbnail",
     );
-  }
-
-  private clampPromptText(value: string, columns: number, maxLines: number) {
-    const normalized = value.replace(/\r/g, "").trim();
-    if (!normalized) return "暂无描述";
-    let used = 0;
-    const limit = Math.max(columns, columns * maxLines);
-    const output = Array.from(normalized).reduce((text, character) => {
-      if (used >= limit) return text;
-      if (character === "\n") {
-        used = Math.ceil((used + 1) / columns) * columns;
-        return used <= limit ? `${text}\n` : text;
-      }
-      used += /[\u0000-\u00ff]/.test(character) ? 0.55 : 1;
-      return used <= limit ? text + character : text;
-    }, "");
-    return output.length < normalized.length ? `${output.trimEnd()}…` : output;
   }
 
   private renderPendingConnection(snapshot: CanvasRenderSnapshot) {
