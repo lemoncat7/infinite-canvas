@@ -24,6 +24,37 @@ test("video card Pixi and DOM layouts use the same dynamic reference count", () 
   expect(videoFrameLayout(240, 8).frameCount).toBe(8);
 });
 
+test("Pixi video card paints linked reference thumbnails", async ({ page }) => {
+  const { canvas } = await mockApi(page, 2);
+  canvas.nodes.splice(0, canvas.nodes.length,
+    { id: 1, kind: "image", x: -400, y: -100, width: 240, height: 180, title: "素材", body: "", accent: "#7da9df", mediaUrl: "/api/assets/test-image/content/test.png" },
+    { id: 2, kind: "video", role: "generator", x: -100, y: -100, width: 280, height: 220, title: "视频生成", body: "测试视频", accent: "#7da9df", videoSettings: { seconds: "5", resolution: "720p", aspectRatio: "16:9", referenceMode: "references" } },
+  );
+  canvas.links.splice(0, canvas.links.length, { from: 1, to: 2, fromSide: "right", toSide: "left" });
+  await page.goto("/?canvasPerf=1#/canvas");
+  const pixi = page.locator("#canvas-pixi");
+  await expect(pixi).toBeVisible({ timeout: 15_000 });
+  await expect.poll(async () => page.evaluate(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>("#canvas-pixi");
+    if (!canvas) return 0;
+    const context = canvas.getContext("webgl2") || canvas.getContext("webgl");
+    return context ? 1 : 0;
+  })).toBe(1);
+  await page.waitForTimeout(1000);
+  if (process.env.CANVAS_VISUAL_AUDIT)
+    await page.screenshot({ path: "test-results/video-reference-pixi.png" });
+});
+
+test("selected DOM video card repaints linked reference thumbnails", () => {
+  const source = readFileSync("src/canvas/node-media-renderer.ts", "utf8");
+  const repaint = source.slice(
+    source.indexOf("repaintUrl(url"),
+    source.indexOf("repaintAll()"),
+  );
+  expect(repaint).toContain("[data-reference-url=");
+  expect(repaint).toContain("this.drawImage(target, image)");
+});
+
 const snapNode = (id: number, x: number, y: number, width = 100, height = 80) => ({
   id, x, y, width, height, kind: "prompt" as const, title: "", body: "", accent: "",
 });

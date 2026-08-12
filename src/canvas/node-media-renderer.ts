@@ -58,6 +58,11 @@ export class NodeMediaRenderer {
         );
         if (target) this.drawImage(target, image);
       });
+    this.deps.nodeLayer
+      .querySelectorAll<HTMLCanvasElement>(
+        `[data-reference-url="${CSS.escape(url)}"]`,
+      )
+      .forEach((target) => this.drawImage(target, image));
   }
 
   repaintAll() {
