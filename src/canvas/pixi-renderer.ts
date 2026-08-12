@@ -184,6 +184,9 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       hint: Text;
       markers: Text[];
       parameters: Text[];
+      referenceSprites: Sprite[];
+      referenceUrls: string[];
+      referenceRequests: number[];
       media: Sprite;
       mediaUrl?: string;
       mediaRequest: number;
@@ -434,6 +437,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
               },
             }),
           ),
+          referenceSprites: Sprite[] = [],
           media = new Sprite(Texture.EMPTY);
         markers.forEach((marker) => marker.anchor.set(0.5));
         parameters.forEach((parameter) => parameter.anchor.set(0.5));
@@ -449,6 +453,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
           shadow,
           shell,
           media,
+          ...referenceSprites,
           detail,
           icon,
           title,
@@ -475,6 +480,9 @@ export class PixiCanvasRenderer implements CanvasRenderer {
           hint,
           markers,
           parameters,
+          referenceSprites,
+          referenceUrls: [],
+          referenceRequests: [],
           media,
           mediaRequest: 0,
           key: "",
@@ -709,12 +717,20 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         view.body.style.wordWrapWidth = metrics.contentWidth;
         view.meta.visible = false;
       } else if (!mediaOnly && node.kind === "video" && node.role !== "result") {
-        const referenceCount = (incomingByTarget.get(node.id) ?? [])
+        const references = (incomingByTarget.get(node.id) ?? [])
             .map((link) => byId.get(link.from))
-            .filter((source) => source?.kind === "image").length,
+            .filter((source): source is RenderNode => source?.kind === "image"),
+          referenceCount = references.length,
           frameTop = VIDEO_CARD_LAYOUT.frameTop,
           frameGap = VIDEO_CARD_LAYOUT.frameGap,
           { frameWidth, frameX, frameCount } = videoFrameLayout(node.width, referenceCount);
+        this.syncReferenceSprites(
+          view,
+          references.map((source) => source.mediaUrl ? this.thumbnailUrl(source.mediaUrl) : ""),
+          frameX,
+          frameWidth,
+          frameTop,
+        );
         for (let index = 0; index < frameCount; index++)
           view.detail
             .roundRect(
@@ -869,6 +885,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
     for (const [id, view] of this.cardViews)
       if (!activeCardIds.has(id)) {
         this.detachMedia(view);
+        this.detachReferenceSprites(view);
         view.container.destroy({ children: true });
         this.cardViews.delete(id);
       }
@@ -1001,6 +1018,70 @@ export class PixiCanvasRenderer implements CanvasRenderer {
     view.media.visible = false;
   }
 
+  private syncReferenceSprites(
+    view: {
+      container: Container;
+      detail: Graphics;
+      referenceSprites: Sprite[];
+      referenceUrls: string[];
+      referenceRequests: number[];
+    },
+    urls: string[],
+    frameX: (index: number) => number,
+    frameWidth: number,
+    frameTop: number,
+  ) {
+    while (view.referenceSprites.length < urls.length) {
+      const sprite = new Sprite(Texture.EMPTY);
+      sprite.visible = false;
+      view.referenceSprites.push(sprite);
+      view.referenceUrls.push("");
+      view.referenceRequests.push(0);
+      view.container.addChildAt(sprite, view.container.getChildIndex(view.detail));
+    }
+    view.referenceSprites.forEach((sprite, index) => {
+      const url = urls[index] || "";
+      sprite.position.set(frameX(index), frameTop);
+      sprite.width = frameWidth;
+      sprite.height = VIDEO_CARD_LAYOUT.frameHeight;
+      if (url === view.referenceUrls[index]) {
+        sprite.visible = Boolean(url && sprite.texture !== Texture.EMPTY);
+        return;
+      }
+      const previous = view.referenceUrls[index];
+      if (previous) this.textures.release(previous);
+      view.referenceUrls[index] = url;
+      const request = ++view.referenceRequests[index];
+      sprite.texture = Texture.EMPTY;
+      sprite.visible = false;
+      if (!url) return;
+      void this.textures.acquire(url).then((texture) => {
+        if (view.referenceUrls[index] !== url || view.referenceRequests[index] !== request)
+          return;
+        sprite.texture = texture;
+        sprite.visible = true;
+        if (this.lastSnapshot) this.render(this.lastSnapshot);
+      }).catch((error) => {
+        if (view.referenceUrls[index] === url)
+          console.warn("[canvas] reference thumbnail load failed", url, error);
+      });
+    });
+  }
+
+  private detachReferenceSprites(view: {
+    referenceSprites: Sprite[];
+    referenceUrls: string[];
+    referenceRequests: number[];
+  }) {
+    view.referenceUrls.forEach((url) => { if (url) this.textures.release(url); });
+    view.referenceUrls.fill("");
+    view.referenceRequests.forEach((_, index) => view.referenceRequests[index]++);
+    view.referenceSprites.forEach((sprite) => {
+      sprite.texture = Texture.EMPTY;
+      sprite.visible = false;
+    });
+  }
+
   private thumbnailUrl(url: string) {
     return url.replace(
       /^(\/api\/(?:public\/)?assets\/[^/]+)\/content(?:\/.*)?$/,
@@ -1044,6 +1125,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
     this.textures.clear();
     for (const view of this.cardViews.values()) {
       this.detachMedia(view);
+      this.detachReferenceSprites(view);
       view.key = "";
     }
     document.body.classList.remove("canvas-context-lost");
