@@ -60,7 +60,6 @@ export class CanvasPointerLifecycle {
     this.o.interaction.beginPointer({ x: event.clientX, y: event.clientY });
     const hit = this.o.hitNode(event.clientX, event.clientY);
     if (hit) {
-      this.o.showSelectedDom();
       if (this.o.selection.multiSelectMode) {
         if (!this.o.selection.batchIds.has(hit.id)) {
           pointer.down = false; pointer.blankCanvas = false; this.o.toggleBatchNode(hit.id); return;
@@ -71,7 +70,6 @@ export class CanvasPointerLifecycle {
       } else {
         this.o.selection.selectedId = hit.id;
         pointer.draggingNode = hit.id;
-        this.o.updateEditor();
       }
       pointer.blankCanvas = false;
     } else this.o.hideSelectedDom();
@@ -112,6 +110,10 @@ export class CanvasPointerLifecycle {
       this.o.updateEditor();
     }
     if (pointer.toggleBatchOnRelease && !pointer.moved) this.o.toggleBatchNode(pointer.toggleBatchOnRelease);
+    if (pointer.draggingNode && !pointer.moved) {
+      this.o.showSelectedDom();
+      this.o.updateEditor();
+    }
     this.o.save(); this.o.interaction.resetPointer(); this.clearPanVisual();
     this.o.canvas.classList.remove("dragging"); this.o.draw();
   };

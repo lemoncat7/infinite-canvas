@@ -492,3 +492,15 @@ test("card creation, generation and repeated dragging never reveal foreign panel
 
   expect(errors).toEqual([]);
 });
+
+test("dragging a Pixi card never mounts its DOM editor on pointer down", async ({ page }) => {
+  await mockApi(page, 1);
+  await page.goto("/?canvasPerf=1#/canvas");
+  await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
+  await page.mouse.move(460, 350);
+  await page.mouse.down();
+  await expect(page.locator("#node-layer > .flow-node")).toHaveCount(0);
+  await page.mouse.move(560, 410, { steps: 4 });
+  await expect(page.locator("#node-layer > .flow-node")).toHaveCount(0);
+  await page.mouse.up();
+});
