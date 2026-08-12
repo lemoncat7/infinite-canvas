@@ -107,7 +107,10 @@ export class CanvasPointerLifecycle {
   private onUp = (event: PointerEvent) => {
     const pointer = this.o.interaction.pointer;
     if (this.o.connectionActive()) this.o.finishConnection(event);
-    else if (pointer.blankCanvas && !pointer.moved) this.o.updateEditor();
+    else if (pointer.blankCanvas && !pointer.moved) {
+      this.o.selection.selectedId = 0;
+      this.o.updateEditor();
+    }
     if (pointer.toggleBatchOnRelease && !pointer.moved) this.o.toggleBatchNode(pointer.toggleBatchOnRelease);
     this.o.save(); this.o.interaction.resetPointer(); this.clearPanVisual();
     this.o.canvas.classList.remove("dragging"); this.o.draw();

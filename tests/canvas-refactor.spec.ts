@@ -286,6 +286,8 @@ test("400 nodes stay GPU-virtualized and recover WebGL context", async ({
   // Panning removes the DOM editor while the Pixi selection and its related
   // link highlight remain in renderer state.
   await expect(page.locator("#node-layer > .flow-node")).toHaveCount(0);
+  await page.mouse.click(70, 700);
+  await expect(page.locator("#node-layer > .flow-node.selected")).toHaveCount(0);
 
   const perf = await page.evaluate(() =>
     (

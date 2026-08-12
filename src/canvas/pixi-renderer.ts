@@ -651,14 +651,39 @@ export class PixiCanvasRenderer implements CanvasRenderer {
             color: snapshot.dark ? 0x455458 : 0xc5cfcb,
             width: 1,
           });
+        if (generating) {
+          const radius = IMAGE_CARD_LAYOUT.iconSize / 2 - 3;
+          view.detail
+            .circle(layout.iconX, layout.iconY, radius)
+            .stroke({
+              color: snapshot.dark ? 0x425156 : 0xd3dcd8,
+              alpha: 0.9,
+              width: 3,
+            });
+          if (node.status === "running" && progress > 0)
+            view.detail
+              .arc(
+                layout.iconX,
+                layout.iconY,
+                radius,
+                -Math.PI / 2,
+                -Math.PI / 2 + Math.PI * 2 * (progress / 100),
+              )
+              .stroke({ color: node.accent, width: 3 });
+        }
         view.icon.position.set(layout.iconX, layout.iconY);
+        view.icon.text = generating
+          ? node.status === "queued"
+            ? "···"
+            : "✦"
+          : presentation.icon || "";
         view.icon.style.fontSize = 19;
         view.title.anchor.set(0.5);
         view.title.position.set(layout.centerX, layout.titleY);
         view.title.text = generating
           ? node.status === "queued"
-            ? "图片任务排队中"
-            : "正在生成图片"
+            ? "排队中"
+            : "正在生成"
           : presentation.title;
         view.title.style.fontSize = 13;
         view.subtitle.visible = false;
@@ -666,8 +691,8 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         view.body.position.set(layout.centerX, layout.descriptionY);
         view.body.text = generating
           ? node.status === "queued"
-            ? "等待可用的生成位置"
-            : `生成进度 ${Math.round(progress)}%`
+            ? "等待生成"
+            : `${Math.round(progress)}%`
           : presentation.body;
         view.body.style.fontSize = 10;
         view.body.style.align = "center";
@@ -693,12 +718,8 @@ export class PixiCanvasRenderer implements CanvasRenderer {
             alpha: 0.9,
             width: 1,
           });
-        view.hint.text = generating
-          ? node.status === "queued"
-            ? "已进入生成队列"
-            : `${Math.round(progress)}%`
-          : "↑  上传          ▦  资产库";
-        view.hint.visible = true;
+        view.hint.text = "↑  上传          ▦  资产库";
+        view.hint.visible = !generating;
         view.hint.anchor.set(0.5);
         view.hint.position.set(
           layout.centerX,
@@ -866,7 +887,10 @@ export class PixiCanvasRenderer implements CanvasRenderer {
             alpha: snapshot.dark ? 0.2 : 0.22,
             width: 1,
           });
-      if (node.status === "queued" || node.status === "running") {
+      if (
+        (node.status === "queued" || node.status === "running") &&
+        node.kind !== "image"
+      ) {
         const progress = Math.max(0, Math.min(100, node.progress || 0));
         view.shell
           .rect(0, node.height - 3, node.width, 3)
