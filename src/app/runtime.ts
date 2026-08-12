@@ -51,6 +51,12 @@ const interactionRuntime: CanvasInteractionRuntime = new CanvasInteractionRuntim
   refreshModels: bindings.refreshNodeModels,
   modelName: bindings.modelName,
   updateEditor: bindings.updateEditor,
+  previewMedia: (node) =>
+    contentRuntime.assets.openPreview(
+      node.mediaUrl!,
+      node.title,
+      node.kind === "video" ? "video" : "image",
+    ),
   draw: bindings.draw,
   save: bindings.scheduleSave,
   showGuide: bindings.showGuide,

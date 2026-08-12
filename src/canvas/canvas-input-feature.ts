@@ -44,6 +44,7 @@ export class CanvasInputFeature {
     editPromptTitle: (node: FlowNode) => void;
     isPromptTitleHit: (node: FlowNode, x: number, y: number) => boolean;
     scrollPrompt: (node: FlowNode, delta: number) => void;
+    previewMedia: (node: FlowNode) => void;
     moveNode: (id: number, dx: number, dy: number) => void;
     panCamera: (dx: number, dy: number) => void;
     closeQuickMenu: () => void;
@@ -139,6 +140,7 @@ export class CanvasInputFeature {
       editPromptTitle: options.editPromptTitle,
       isPromptTitleHit: options.isPromptTitleHit,
       scrollPrompt: options.scrollPrompt,
+      previewMedia: options.previewMedia,
       cancelCameraAnimation: this.cameraViewport.cancel,
       toggleBatchNode: options.toggleBatchNode,
       updateEditor: options.updateEditor,

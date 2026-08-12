@@ -14,6 +14,7 @@ import type {
   RenderNode,
 } from "./renderer";
 import { PixiTextureCache } from "./pixi-texture-cache";
+import { IMAGE_CARD_LAYOUT, imageEmptyLayout } from "../nodes/image-card-layout";
 import {
   LABEL_TEXT_LAYOUT,
   labelBodyMetrics,
@@ -631,30 +632,62 @@ export class PixiCanvasRenderer implements CanvasRenderer {
           .circle(node.width, node.height / 2, 5)
           .fill({ color: node.accent });
       if (!mediaOnly && node.kind === "image" && !node.mediaUrl) {
-        view.icon.position.set(node.width / 2, node.height / 2 - 49);
+        const layout = imageEmptyLayout(node.width, node.height);
+        view.detail
+          .roundRect(
+            layout.iconX - IMAGE_CARD_LAYOUT.iconSize / 2,
+            layout.iconY - IMAGE_CARD_LAYOUT.iconSize / 2,
+            IMAGE_CARD_LAYOUT.iconSize,
+            IMAGE_CARD_LAYOUT.iconSize,
+            IMAGE_CARD_LAYOUT.iconRadius,
+          )
+          .fill({
+            color: snapshot.dark ? 0xffffff : 0x71807b,
+            alpha: snapshot.dark ? 0.045 : 0.07,
+          })
+          .stroke({
+            color: snapshot.dark ? 0x455458 : 0xc5cfcb,
+            width: 1,
+          });
+        view.icon.position.set(layout.iconX, layout.iconY);
+        view.icon.style.fontSize = 19;
         view.title.anchor.set(0.5);
-        view.title.position.set(node.width / 2, node.height / 2 - 8);
+        view.title.position.set(layout.centerX, layout.titleY);
         view.title.style.fontSize = 13;
         view.subtitle.visible = false;
         view.body.anchor.set(0.5);
-        view.body.position.set(node.width / 2, node.height / 2 + 18);
+        view.body.position.set(layout.centerX, layout.descriptionY);
         view.body.style.fontSize = 10;
         view.body.style.align = "center";
         view.meta.visible = false;
-        const buttonY = node.height / 2 + 52;
         view.detail
-          .roundRect(node.width / 2 - 64, buttonY, 56, 30, 9)
-          .roundRect(node.width / 2 + 8, buttonY, 66, 30, 9)
+          .roundRect(
+            layout.actionsX,
+            layout.actionsY,
+            IMAGE_CARD_LAYOUT.uploadWidth,
+            IMAGE_CARD_LAYOUT.actionHeight,
+            9,
+          )
+          .roundRect(
+            layout.actionsX + IMAGE_CARD_LAYOUT.uploadWidth + IMAGE_CARD_LAYOUT.actionGap,
+            layout.actionsY,
+            IMAGE_CARD_LAYOUT.libraryWidth,
+            IMAGE_CARD_LAYOUT.actionHeight,
+            9,
+          )
           .fill({ color: snapshot.dark ? 0xffffff : 0x687772, alpha: 0.035 })
           .stroke({
             color: snapshot.dark ? 0x344247 : 0xd2d9d5,
             alpha: 0.9,
             width: 1,
           });
-        view.hint.text = "↑ 上传        ▦ 资产库";
+        view.hint.text = "↑  上传          ▦  资产库";
         view.hint.visible = true;
         view.hint.anchor.set(0.5);
-        view.hint.position.set(node.width / 2, buttonY + 10);
+        view.hint.position.set(
+          layout.centerX,
+          layout.actionsY + IMAGE_CARD_LAYOUT.actionHeight / 2,
+        );
         view.hint.style.fontSize = 10;
       } else if (!mediaOnly && node.kind === "prompt") {
         const metrics = labelBodyMetrics(node.width, node.height, node.fontScale);

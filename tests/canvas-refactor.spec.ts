@@ -171,6 +171,21 @@ test("an idle Pixi label clamps long text and opens DOM editing on double click"
   await expect(titleEditor).not.toBeVisible();
 });
 
+test("a Pixi image opens the existing preview on double click", async ({ page }) => {
+  const { canvas } = await mockApi(page, 1);
+  Object.assign(canvas.nodes[0], {
+    kind: "image",
+    title: "预览图片",
+    mediaUrl: "/api/assets/test-image/content/test.png",
+  });
+  await page.goto("/?canvasPerf=1#/canvas");
+  await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator("#node-layer > .flow-node")).toHaveCount(0);
+  await page.mouse.dblclick(460, 350);
+  await expect(page.locator("#asset-preview")).toHaveClass(/open/);
+  await expect(page.locator("#preview-name")).toHaveText("预览图片");
+});
+
 test("400 nodes stay GPU-virtualized and recover WebGL context", async ({
   page,
 }) => {

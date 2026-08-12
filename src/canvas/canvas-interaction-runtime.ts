@@ -40,6 +40,7 @@ export class CanvasInteractionRuntime {
     refreshModels: () => void;
     modelName: (value?: string) => string;
     updateEditor: () => void;
+    previewMedia: (node: import("../nodes/node-types").FlowNode) => void;
     draw: (syncDom?: boolean) => void;
     save: (recordHistory?: boolean) => void;
     showGuide: (message: CanvasGuideMessage) => void;
@@ -183,6 +184,7 @@ export class CanvasInteractionRuntime {
         node.labelScroll = viewport.scrollLine;
         options.draw(false);
       },
+      previewMedia: options.previewMedia,
       moveNode: (id, dx, dy) => store.moveNodeById(id, dx, dy),
       panCamera: (dx, dy) => store.panCamera(dx, dy),
       closeQuickMenu: () => options.controls().closeQuickMenu(),

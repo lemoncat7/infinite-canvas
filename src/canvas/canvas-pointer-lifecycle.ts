@@ -13,6 +13,7 @@ type Options = {
   editPromptTitle: (node: FlowNode) => void;
   isPromptTitleHit: (node: FlowNode, x: number, y: number) => boolean;
   scrollPrompt: (node: FlowNode, delta: number) => void;
+  previewMedia: (node: FlowNode) => void;
   cancelCameraAnimation: () => void;
   toggleBatchNode: (id: number) => void;
   updateEditor: () => void;
@@ -114,7 +115,17 @@ export class CanvasPointerLifecycle {
   };
   private onDoubleClick = (event: MouseEvent) => {
     const node = this.o.hitNode(event.clientX, event.clientY);
-    if (node?.kind !== "prompt") return;
+    if (!node) return;
+    if (node.kind === "image" && node.mediaUrl) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.o.selection.selectedId = node.id;
+      this.o.updateEditor();
+      this.o.draw(true);
+      this.o.previewMedia(node);
+      return;
+    }
+    if (node.kind !== "prompt") return;
     event.preventDefault();
     event.stopPropagation();
     this.o.selection.selectedId = node.id;
