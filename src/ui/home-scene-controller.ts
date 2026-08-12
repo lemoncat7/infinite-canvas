@@ -1,11 +1,7 @@
 export class HomeSceneController {
   private readonly scenes: HTMLElement[];
   private readonly sceneButtons: HTMLElement[];
-  private progress = 0;
   private target = 0;
-  private frame = 0;
-  private start = 0;
-  private startedAt = 0;
   private touchY = 0;
   private wheelDelta = 0;
   private wheelResetTimer = 0;
@@ -26,42 +22,22 @@ export class HomeSceneController {
 
   setTarget(value: number) {
     const next = Math.max(0, Math.min(3, Math.round(value)));
-    if (next === this.target && this.frame) return;
-    this.start = this.progress;
+    if (next === this.target && this.page.dataset.scene === String(next)) return;
     this.target = next;
-    this.startedAt = performance.now();
-    if (!this.frame) this.frame = requestAnimationFrame(this.animate);
-  }
-
-  private readonly animate = (now: number) => {
-    const elapsed = Math.min(
-      1,
-      Math.max(0, (now - this.startedAt) / 700),
-    );
-    const eased = 1 - Math.pow(1 - elapsed, 3);
-    this.progress = this.start + (this.target - this.start) * eased;
-    if (elapsed >= 1) this.progress = this.target;
-    this.page.style.setProperty("--home-progress", this.progress.toFixed(4));
     this.scenes.forEach((element, index) => {
-        const distance = index - this.progress;
-        element.classList.toggle("scene-dormant", Math.abs(distance) > 1.05);
-        element.style.setProperty("--scene-distance", distance.toFixed(4));
-        element.style.setProperty(
-          "--scene-presence",
-          Math.max(0, 1 - Math.abs(distance)).toFixed(4),
-        );
-      });
-    const scene = Math.max(0, Math.min(3, Math.round(this.progress)));
-    this.page.dataset.scene = String(scene);
+      element.classList.toggle("scene-before", index < next);
+      element.classList.toggle("scene-active", index === next);
+      element.classList.toggle("scene-after", index > next);
+      element.classList.toggle("scene-dormant", Math.abs(index - next) > 1);
+    });
+    this.page.dataset.scene = String(next);
     this.sceneButtons.forEach((button) =>
         button.classList.toggle(
           "active",
-          Number(button.dataset.homeScene) === scene,
+          Number(button.dataset.homeScene) === next,
         ),
       );
-    if (elapsed < 1) this.frame = requestAnimationFrame(this.animate);
-    else this.frame = 0;
-  };
+  }
 
   private bind() {
     this.page.addEventListener(
