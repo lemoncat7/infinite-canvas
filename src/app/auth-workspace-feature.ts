@@ -1,5 +1,6 @@
 import type { FlowLink, FlowNode } from "../nodes/node-types";
 import { SessionActivityController } from "../services/session-activity";
+import { setSessionRecoveryHandler } from "../services/api";
 import { AuthModalController } from "../ui/auth-modal-controller";
 import { HomeSceneController } from "../ui/home-scene-controller";
 import { HomeShowcaseController } from "../ui/home-showcase-controller";
@@ -47,11 +48,11 @@ export class AuthWorkspaceFeature {
     this.showcase = new HomeShowcaseController(
       document.querySelector<HTMLElement>("#home-gallery")!,
       preview,
-      document.querySelector<HTMLElement>(".home-showcase")!,
     );
     this.activity = new SessionActivityController({
       isAuthenticated: () => Boolean(this.currentUser),
-      logout: (message) => this.logout(message),
+      sessionExpired: (message) => this.logout(message, false),
+      lockWorkspace: () => this.session.lockWorkspace(),
     });
     this.authModal = new AuthModalController({
       modal: loginModal,
@@ -121,8 +122,9 @@ export class AuthWorkspaceFeature {
       clearUser: () => { this.currentUser = null; },
       notify: options.notify,
     });
+    setSessionRecoveryHandler(() => this.session.synchronize(true));
     this.route.bind();
-    new HomeSceneController(homePage, loginModal, preview);
+    new HomeSceneController(homePage);
     this.renderCallback = options.onUserRendered;
   }
 
@@ -136,7 +138,7 @@ export class AuthWorkspaceFeature {
   ensureCurrentProject() { return this.session.ensureCurrentProject(); }
   synchronize(force = false) { return this.session.synchronize(force); }
   enter() { return this.session.enter(); }
-  logout(message?: string) { return this.session.logout(message); }
+  logout(message?: string, revokeDevice = true) { return this.session.logout(message, revokeDevice); }
   status(message: string, visible = true) { return this.route.status(message, visible); }
   hideStatus(version: number, delay: number) { this.route.hideStatus(version, delay); }
   applyRoute() { this.route.apply(); }

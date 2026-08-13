@@ -44,6 +44,7 @@ import { ComicStreamState } from "./comic/stream-state.js";
 import { createComicStageReader } from "./comic/stage-reader.js";
 import { applyComicAuditRepairs, comicAuditSubset } from "./comic/audit.js";
 import { comicAssetPrompt, comicAuditPrompt, comicScenePrompt, comicSceneViewPrompt, comicShotExpansionPrompt, comicShotPlanPrompt, comicStoryPrompt } from "./comic/prompts.js";
+import { SESSION_IDLE_MS, SessionStore, TRUSTED_DEVICE_MS } from "./auth/session-store.js";
 
 type CanvasPayload = {
   nodes: unknown[];
@@ -81,6 +82,7 @@ const SQL = await initSqlJs();
 const database: Database = existsSync(databasePath)
   ? new SQL.Database(readFileSync(databasePath))
   : new SQL.Database();
+const sessionStore = new SessionStore(database);
 database.run(`
   CREATE TABLE IF NOT EXISTS canvases (id TEXT PRIMARY KEY, title TEXT NOT NULL, document TEXT NOT NULL, updated_at TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, node_id INTEGER NOT NULL, kind TEXT NOT NULL, prompt TEXT NOT NULL, model TEXT NOT NULL, status TEXT NOT NULL, progress INTEGER NOT NULL DEFAULT 0, result_url TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -129,6 +131,8 @@ ensureColumn("jobs", "retry_count", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("notifications", "priority", "TEXT NOT NULL DEFAULT 'normal'");
 ensureColumn("notifications", "auto_popup", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("sessions", "last_activity_at", "TEXT");
+ensureColumn("sessions", "trusted_family_id", "TEXT");
+sessionStore.initialize();
 ensureColumn("project_canvases", "version", "INTEGER NOT NULL DEFAULT 1");
 ensureColumn("project_canvases", "reset_version", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("project_canvases", "next_node_id", "INTEGER NOT NULL DEFAULT 1");
@@ -3394,9 +3398,10 @@ app.post("/auth/register", async (request, reply) => {
     );
     createDefaultProject(userId, now);
   }
-  const token = createSession(userId, now);
+  const trustedToken = sessionStore.createTrustedDevice(userId, String(request.headers["user-agent"] ?? ""));
+  const token = sessionStore.createSession(userId, now, sessionStore.trustedFamilyId(trustedToken));
   persist();
-  setSessionCookie(request, reply, token);
+  setAuthCookies(request, reply, token, trustedToken);
   if (!legacy)
     database.run("UPDATE users SET credits = 5 WHERE id = ?", [userId]);
   const createdUser = getOne(
@@ -3433,9 +3438,10 @@ app.post("/auth/login", async (request, reply) => {
     );
   if (!user || !verifyPassword(password, String(user.password_hash ?? "")))
     return reply.code(401).send({ error: "用户名、邮箱或密码错误" });
-  const token = createSession(String(user.id));
+  const trustedToken = sessionStore.createTrustedDevice(String(user.id), String(request.headers["user-agent"] ?? ""));
+  const token = sessionStore.createSession(String(user.id), new Date().toISOString(), sessionStore.trustedFamilyId(trustedToken));
   persist();
-  setSessionCookie(request, reply, token);
+  setAuthCookies(request, reply, token, trustedToken);
   return {
     id: user.id,
     name: user.name,
@@ -3450,32 +3456,52 @@ app.post("/auth/login", async (request, reply) => {
 });
 app.post("/auth/logout", async (request, reply) => {
   const token = sessionToken(request);
-  if (token)
-    database.run("DELETE FROM sessions WHERE id = ?", [sessionId(token)]);
+  sessionStore.revokeSession(token);
+  sessionStore.revokeTrustedDevice(trustedDeviceToken(request));
   persist();
-  clearSessionCookie(request, reply);
+  clearAuthCookies(request, reply);
+  return { ok: true };
+});
+app.post("/auth/refresh", async (request, reply) => {
+  const result = sessionStore.rotateTrustedDevice(trustedDeviceToken(request), String(request.headers["user-agent"] ?? ""));
+  if (result.status !== "ok") {
+    persist();
+    clearAuthCookies(request, reply);
+    return reply.code(401).send({ error: "Trusted device expired", reason: result.status });
+  }
+  persist();
+  setAuthCookies(request, reply, result.sessionToken, result.trustedToken);
+  return { ok: true };
+});
+app.get("/auth/devices", async (request, reply) => {
+  const user = requireUser(request, reply);
+  if (!user) return;
+  return sessionStore.listTrustedDevices(String(user.id), trustedDeviceToken(request));
+});
+app.delete("/auth/devices/:deviceId", async (request, reply) => {
+  const user = requireUser(request, reply);
+  if (!user) return;
+  const { deviceId } = request.params as { deviceId: string };
+  if (!sessionStore.revokeDeviceById(String(user.id), deviceId))
+    return reply.code(404).send({ error: "设备不存在" });
+  persist();
+  return { ok: true };
+});
+app.post("/auth/devices/revoke-others", async (request, reply) => {
+  const user = requireUser(request, reply);
+  if (!user) return;
+  if (!sessionStore.revokeOtherDevices(String(user.id), trustedDeviceToken(request)))
+    return reply.code(409).send({ error: "当前设备凭证不可用" });
+  persist();
   return { ok: true };
 });
 app.post("/auth/activity", async (request, reply) => {
   const token = sessionToken(request);
-  if (!token) return reply.code(401).send({ error: "Unauthorized" });
-  const id = sessionId(token),
-    now = new Date(),
-    cutoff = new Date(now.getTime() - sessionIdleTimeoutMs).toISOString(),
-    session = getOne(
-      "SELECT id FROM sessions WHERE id=? AND expires_at>? AND COALESCE(last_activity_at,created_at)>?",
-      [id, now.toISOString(), cutoff],
-    );
-  if (!session) {
-    database.run("DELETE FROM sessions WHERE id=?", [id]);
+  if (!sessionStore.touchSession(token)) {
     persist();
     clearSessionCookie(request, reply);
     return reply.code(401).send({ error: "Session expired" });
   }
-  database.run("UPDATE sessions SET last_activity_at=? WHERE id=?", [
-    now.toISOString(),
-    id,
-  ]);
   persist();
   return { ok: true };
 });
@@ -5195,25 +5221,17 @@ function sessionId(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 function sessionToken(request: FastifyRequest) {
+  return cookieToken(request, "flow_session");
+}
+function trustedDeviceToken(request: FastifyRequest) {
+  return cookieToken(request, "flow_trusted_device");
+}
+function cookieToken(request: FastifyRequest, name: string) {
   const cookie = String(request.headers.cookie ?? "")
     .split(";")
     .map((part) => part.trim())
-    .find((part) => part.startsWith("flow_session="));
-  return cookie ? decodeURIComponent(cookie.slice("flow_session=".length)) : "";
-}
-const sessionIdleTimeoutMs = Math.max(
-  60_000,
-  Number(process.env.SESSION_IDLE_TIMEOUT_MS || 30 * 60 * 1000),
-);
-function createSession(userId: string, createdAt = new Date().toISOString()) {
-  const token = randomBytes(32).toString("base64url"),
-    expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-  database.run("DELETE FROM sessions WHERE expires_at <= ?", [createdAt]);
-  database.run(
-    "INSERT INTO sessions (id, user_id, created_at, expires_at, last_activity_at) VALUES (?, ?, ?, ?, ?)",
-    [sessionId(token), userId, createdAt, expiresAt, createdAt],
-  );
-  return token;
+    .find((part) => part.startsWith(`${name}=`));
+  return cookie ? decodeURIComponent(cookie.slice(name.length + 1)) : "";
 }
 function currentUser(request: FastifyRequest) {
   const authorization = String(request.headers.authorization || ""),
@@ -5226,7 +5244,7 @@ function currentUser(request: FastifyRequest) {
   const token = sessionToken(request);
   if (!token) return undefined;
   const now = new Date(),
-    idleCutoff = new Date(now.getTime() - sessionIdleTimeoutMs).toISOString();
+    idleCutoff = new Date(now.getTime() - SESSION_IDLE_MS).toISOString();
   return getOne(
     `SELECT users.id, users.name, users.username, users.email, users.invite_code AS inviteCode, users.created_at AS createdAt, users.credits, users.reserved_credits AS reservedCredits, users.is_admin AS isAdmin FROM sessions JOIN users ON users.id = sessions.user_id
   WHERE sessions.id = ? AND sessions.expires_at > ? AND COALESCE(sessions.last_activity_at,sessions.created_at) > ?`,
@@ -5266,14 +5284,28 @@ function setSessionCookie(
 ) {
   reply.header(
     "set-cookie",
-    `flow_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${30 * 24 * 60 * 60}${secureRequest(request) ? "; Secure" : ""}`,
+    `flow_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.ceil(SESSION_IDLE_MS / 1000)}${secureRequest(request) ? "; Secure" : ""}`,
   );
+}
+function setAuthCookies(request: FastifyRequest, reply: FastifyReply, session: string, trusted: string) {
+  const secure = secureRequest(request) ? "; Secure" : "";
+  reply.header("set-cookie", [
+    `flow_session=${encodeURIComponent(session)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.ceil(SESSION_IDLE_MS / 1000)}${secure}`,
+    `flow_trusted_device=${encodeURIComponent(trusted)}; Path=/api/auth; HttpOnly; SameSite=Lax; Max-Age=${Math.ceil(TRUSTED_DEVICE_MS / 1000)}${secure}`,
+  ]);
 }
 function clearSessionCookie(request: FastifyRequest, reply: FastifyReply) {
   reply.header(
     "set-cookie",
     `flow_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureRequest(request) ? "; Secure" : ""}`,
   );
+}
+function clearAuthCookies(request: FastifyRequest, reply: FastifyReply) {
+  const secure = secureRequest(request) ? "; Secure" : "";
+  reply.header("set-cookie", [
+    `flow_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`,
+    `flow_trusted_device=; Path=/api/auth; HttpOnly; SameSite=Lax; Max-Age=0${secure}`,
+  ]);
 }
 function emptyCanvas() {
   return JSON.stringify({

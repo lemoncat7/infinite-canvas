@@ -90,9 +90,10 @@ export class WorkspaceSessionController {
     }
   }
 
-  async logout(message?: string) {
+  async logout(message?: string, revokeDevice = true) {
     await this.options.stopSave(true);
-    await this.options.apiFetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    if (revokeDevice)
+      await this.options.apiFetch("/api/auth/logout", { method: "POST" }).catch(() => {});
     this.options.clearUser();
     this.options.clearToken();
     this.options.nodes.splice(0);
@@ -103,5 +104,15 @@ export class WorkspaceSessionController {
     location.hash = "#/";
     this.options.applyRoute();
     if (message) this.options.notify(message, "warning");
+  }
+
+  async lockWorkspace() {
+    if (location.hash !== "#/canvas") return;
+    await this.options.stopSave();
+    this.options.clearSelection();
+    this.options.closeUserMenu();
+    location.hash = "#/";
+    this.options.applyRoute();
+    this.options.notify("工作区已锁定，再次进入将先同步最新画布", "warning");
   }
 }

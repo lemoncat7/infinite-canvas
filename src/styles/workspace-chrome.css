@@ -1,9 +1,7 @@
 /* Workspace chrome owns the shared top bar and node-card shell.
    Node-specific files own content layout only. */
 body:not(.home-mode)[data-theme] {
-  --chrome-glass:
-    radial-gradient(ellipse at 10% -35%,color-mix(in srgb,#fff 42%,transparent),transparent 45%),
-    linear-gradient(145deg,color-mix(in srgb,var(--ui-surface-raised) 34%,transparent),color-mix(in srgb,var(--ui-surface-solid) 22%,transparent));
+  --chrome-glass:var(--ui-menu-material);
   --chrome-glass-border:color-mix(in srgb,var(--ui-border-strong) 48%,color-mix(in srgb,#fff 54%,transparent));
   --chrome-glass-shadow:0 18px 48px color-mix(in srgb,var(--ui-bg) 34%,transparent),inset 0 1px color-mix(in srgb,#fff 68%,transparent),inset 0 -1px color-mix(in srgb,var(--ui-accent) 18%,transparent);
   --chrome-surface-raised:color-mix(in srgb,var(--ui-surface-raised) 92%,transparent);
@@ -39,7 +37,7 @@ body:not(.home-mode)[data-theme] .quick-node-menu header span { color:var(--ui-t
 body:not(.home-mode)[data-theme] .quick-node-menu :is(header small,button small) { color:var(--ui-muted); }
 body:not(.home-mode)[data-theme] .quick-node-menu button { color:var(--ui-text-secondary); background:transparent; }
 body:not(.home-mode)[data-theme] .quick-node-menu button:hover,
-body:not(.home-mode)[data-theme] .quick-node-menu button:focus-visible { color:var(--ui-text); background:var(--ui-accent-soft); }
+body:not(.home-mode)[data-theme] .quick-node-menu button:focus-visible { color:var(--ui-text); background:var(--ui-menu-item-hover); }
 body:not(.home-mode)[data-theme] .quick-node-icon { color:var(--ui-text-secondary); background:color-mix(in srgb,var(--ui-surface-raised) 30%,transparent); border-color:var(--ui-border); box-shadow:inset 0 1px color-mix(in srgb,#fff 38%,transparent); }
 body:not(.home-mode)[data-theme] .topbar {
   height:64px;
@@ -76,6 +74,13 @@ body:not(.home-mode)[data-theme] .main-nav button:hover { color:var(--ui-text); 
 body:not(.home-mode)[data-theme] .main-nav button.active { color:var(--ui-text); background:var(--ui-surface-raised); box-shadow:0 3px 12px color-mix(in srgb,var(--ui-bg) 15%,transparent),inset 0 1px color-mix(in srgb,#fff 42%,transparent); }
 body:not(.home-mode)[data-theme] .topbar .actions > button,
 body:not(.home-mode)[data-theme] .topbar .actions > .task-monitor-button { min-width:36px; height:36px; padding:0 10px; color:var(--ui-text-secondary); background:transparent; border:1px solid transparent; border-radius:10px; box-shadow:none; }
+body:not(.home-mode)[data-theme] .topbar .actions > button,
+body:not(.home-mode)[data-theme] .topbar .actions > .task-monitor-button,
+body:not(.home-mode)[data-theme] .topbar .saved { white-space:nowrap; }
+@media (max-width:1040px) {
+  body:not(.home-mode)[data-theme] .topbar .actions > #reset,
+  body:not(.home-mode)[data-theme] .topbar .actions > .start-empty-images-button { display:none!important; }
+}
 body:not(.home-mode)[data-theme] .topbar .actions > button:hover,
 body:not(.home-mode)[data-theme] .topbar .actions > .task-monitor-button:hover { color:var(--ui-text); background:var(--ui-accent-soft); border-color:var(--ui-border); }
 body:not(.home-mode)[data-theme] .topbar .actions > .share { color:var(--ui-accent-contrast); background:var(--ui-gradient-accent); border-color:transparent; box-shadow:0 7px 20px var(--ui-accent-glow); }
@@ -94,7 +99,7 @@ body:not(.home-mode)[data-theme] .canvas-dock::after {
   border-radius:18px;
 }
 body:not(.home-mode)[data-theme] .canvas-dock button { color:var(--ui-text-secondary); background:transparent; }
-body:not(.home-mode)[data-theme] .canvas-dock button:hover { color:var(--ui-text); background:var(--ui-accent-soft); }
+body:not(.home-mode)[data-theme] .canvas-dock button:hover { color:var(--ui-text); background:var(--ui-menu-item-hover); }
 body:not(.home-mode)[data-theme] .canvas-dock > i { background:var(--ui-border-strong); }
 
 body:not(.home-mode)[data-theme] .flow-node .node-floating-tools {

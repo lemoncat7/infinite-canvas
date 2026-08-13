@@ -23,14 +23,7 @@ export class HomeShowcaseController {
   constructor(
     private readonly gallery: HTMLElement,
     private readonly preview: HTMLElement,
-    section: HTMLElement,
   ) {
-    const observer = new IntersectionObserver((entries) => {
-      if (!entries.some((entry) => entry.isIntersecting)) return;
-      section.classList.add("revealed");
-      observer.disconnect();
-    }, { threshold: 0.12 });
-    observer.observe(section);
     preview.querySelector(":scope > button")!.addEventListener("click", () => this.close());
     preview.addEventListener("click", (event) => {
       if (event.target === preview) this.close();
