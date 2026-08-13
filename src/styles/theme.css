@@ -92,9 +92,9 @@ body[data-theme="dark"],
     linear-gradient(150deg,rgba(29,47,62,.98),rgba(17,29,41,.98));
   --ui-gradient-card-media:linear-gradient(145deg,#172532,#0e1822);
   --ui-menu-material:
-    radial-gradient(ellipse at 10% -34%,rgba(190,202,214,.13),transparent 46%),
-    linear-gradient(135deg,rgba(49,48,45,.76),rgba(24,23,21,.7));
-  --ui-menu-item-hover:rgba(226,232,238,.09);
+    radial-gradient(ellipse at 10% -34%,rgba(145,177,207,.18),transparent 46%),
+    linear-gradient(145deg,rgba(42,57,72,.86),rgba(20,31,43,.9) 58%,rgba(13,22,32,.92));
+  --ui-menu-item-hover:rgba(134,169,207,.12);
   color-scheme:dark;
 }
 
@@ -147,7 +147,6 @@ body[data-theme] .workspace-boot-status i {
 /* Workspace shell, navigation and canvas controls */
 body:not(.home-mode)[data-theme] .glass,
 body:not(.home-mode)[data-theme] .topbar,
-body:not(.home-mode)[data-theme] .canvas-dock,
 body:not(.home-mode)[data-theme] .workspace-panel,
 body:not(.home-mode)[data-theme] .workspace-boot-status {
   color:var(--ui-text); background:var(--ui-gradient-surface); border-color:var(--ui-border);
@@ -155,13 +154,10 @@ body:not(.home-mode)[data-theme] .workspace-boot-status {
 }
 body:not(.home-mode)[data-theme] .main-nav { border-color:var(--ui-border); }
 body:not(.home-mode)[data-theme] .main-nav button,
-body:not(.home-mode)[data-theme] .canvas-dock button,
 body:not(.home-mode)[data-theme] .panel-close { color:var(--ui-muted); background:transparent; }
 body:not(.home-mode)[data-theme] .main-nav button:hover,
 body:not(.home-mode)[data-theme] .main-nav button.active,
-body:not(.home-mode)[data-theme] .canvas-dock button:hover,
 body:not(.home-mode)[data-theme] .panel-close:hover { color:var(--ui-text); background:var(--ui-accent-soft); }
-body:not(.home-mode)[data-theme] .canvas-dock > i,
 body:not(.home-mode)[data-theme] .context-menu i { background:var(--ui-border); }
 body:not(.home-mode)[data-theme] .dock-create-hint,
 body:not(.home-mode)[data-theme] .zoom-slider-wrap button,
@@ -272,7 +268,6 @@ body[data-theme] .prompt-agent-panel.agent-capsule .agent-goal textarea { font-s
 body[data-theme] .prompt-agent-panel.agent-capsule .agent-goal textarea::placeholder { font-size:11px; }
 
 @media (max-width:780px) {
-  body[data-theme] :is(.topbar,.canvas-dock,.workspace-panel,.prompt-agent-panel,.comic-dialogue-panel) { background:color-mix(in srgb,var(--ui-surface-solid) 94%,transparent); }
 }
 
 /* High-specificity legacy components are scoped below. Comic studio owns its theme in comic-studio.css. */

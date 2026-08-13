@@ -89,6 +89,13 @@ body:not(.home-mode)[data-theme] .topbar .saved { min-width:0; margin:0 7px 0 0;
 body:not(.home-mode)[data-theme] .topbar .saved::before { margin-right:6px; color:var(--ui-success); }
 
 body:not(.home-mode)[data-theme] .canvas-dock {
+  position:fixed;
+  z-index:6;
+  right:20px;
+  bottom:18px;
+  display:flex;
+  align-items:center;
+  gap:3px;
   padding:7px;
   border-radius:20px;
 }
@@ -98,9 +105,21 @@ body:not(.home-mode)[data-theme] .canvas-dock::after {
     linear-gradient(112deg,color-mix(in srgb,#fff 36%,transparent),transparent 44%);
   border-radius:18px;
 }
-body:not(.home-mode)[data-theme] .canvas-dock button { color:var(--ui-text-secondary); background:transparent; }
+body:not(.home-mode)[data-theme] .canvas-dock button { position:relative; display:flex; min-width:62px; height:54px; padding:6px 9px; flex-direction:column; align-items:center; justify-content:center; gap:5px; color:var(--ui-text-secondary); background:transparent; border:0; border-radius:12px; transition:color .16s ease,background .16s ease; }
 body:not(.home-mode)[data-theme] .canvas-dock button:hover { color:var(--ui-text); background:var(--ui-menu-item-hover); }
 body:not(.home-mode)[data-theme] .canvas-dock > i { background:var(--ui-border-strong); }
+body:not(.home-mode)[data-theme] .canvas-dock button b { display:grid; width:24px; height:24px; place-items:center; line-height:1; }
+body:not(.home-mode)[data-theme] .canvas-dock button b svg { width:21px; height:21px; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round; }
+body:not(.home-mode)[data-theme] .canvas-dock button span { font-size:11px; font-weight:650; letter-spacing:.01em; white-space:nowrap; }
+body:not(.home-mode)[data-theme] .canvas-dock > i { width:1px; height:30px; margin:0 6px; }
+body:not(.home-mode)[data-theme] .canvas-dock button:disabled { opacity:.55; cursor:wait; pointer-events:none; }
+body:not(.home-mode)[data-theme] .canvas-dock .dock-agent-trigger { width:58px; min-width:58px; padding:6px 5px; }
+
+@media (max-width:780px) {
+  body:not(.home-mode)[data-theme] .canvas-dock { right:10px; bottom:10px; max-width:calc(100vw - 20px); backdrop-filter:blur(10px) saturate(108%); }
+  body:not(.home-mode)[data-theme] .canvas-dock button { min-width:54px; }
+  body:not(.home-mode)[data-theme] .canvas-dock .dock-agent-trigger { width:52px; min-width:52px; }
+}
 
 body:not(.home-mode)[data-theme] .flow-node .node-floating-tools {
   top:-8px;
