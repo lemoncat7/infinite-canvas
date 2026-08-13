@@ -13,6 +13,7 @@ export class ServiceStatusController {
       detail: "正在后台尝试重新连接，恢复后会自动同步。",
       tone: "offline",
       priority: 100,
+      required: true,
     } : {
       key: "service-status",
       title: "已重新连接",

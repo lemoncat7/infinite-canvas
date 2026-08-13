@@ -7,6 +7,12 @@ import { positionDraggedNodes } from "../src/canvas/node-drag-positioner";
 import { VIDEO_CARD_LAYOUT, videoFrameLayout } from "../src/nodes/video-card-layout";
 import { NODE_CARD_STYLE } from "../src/nodes/node-card-style";
 
+test("shared toolbar styling only lays out actions allowed by the node type contract", () => {
+  const chrome = readFileSync("src/styles/workspace-chrome.css", "utf8");
+  expect(chrome).toContain(".node-floating-tools button:not([hidden])");
+  expect(chrome).not.toContain(".node-floating-tools button[hidden]");
+});
+
 test("video card reference frames stay horizontally centered", () => {
   const width = 240;
   const layout = videoFrameLayout(width, 3);
@@ -78,7 +84,7 @@ test("DOM-owned card follows pointer in the drag animation frame", () => {
 });
 
 test("interaction suspension follows renderer ownership", () => {
-  const style = readFileSync("src/style.css", "utf8");
+  const style = readFileSync("src/style.css", "utf8") + readFileSync("src/styles/theme.css", "utf8");
   expect(style).toContain('#node-layer.dom-interaction-suspended > .flow-node .node-config-panel');
   expect(style).not.toContain('#node-layer.dom-interaction-suspended > .flow-node { display:none');
 });

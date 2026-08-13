@@ -28,11 +28,9 @@ body[data-theme] {
   --ui-gradient-selection:linear-gradient(120deg,rgba(104,137,174,.25) 0%,rgba(241,246,250,.97) 52%,rgba(216,229,242,.94) 100%);
   --ui-gradient-progress:linear-gradient(90deg,#738aa4 0%,#829dbb 48%,#627f9f 100%);
   --ui-gradient-card:
-    radial-gradient(circle at 92% 4%,rgba(112,151,194,.13),transparent 37%),
-    linear-gradient(145deg,#fbfcfd 0%,#f0f4f8 58%,#e7eef6 100%);
+    linear-gradient(150deg,rgba(252,253,254,.96),rgba(235,241,247,.94));
   --ui-gradient-card-hover:
-    radial-gradient(circle at 82% 8%,rgba(101,145,193,.2),transparent 42%),
-    linear-gradient(145deg,#fff 0%,#edf3f8 55%,#dfeaf4 100%);
+    linear-gradient(150deg,#fff,rgba(229,238,247,.98));
   --ui-gradient-card-media:linear-gradient(145deg,#edf2f7,#dce7f2);
   --ui-danger:#b64050;
   --ui-danger-soft:rgba(182,64,80,.09);
@@ -85,11 +83,9 @@ body[data-theme="dark"],
   --ui-gradient-selection:linear-gradient(120deg,rgba(103,139,180,.34) 0%,rgba(24,38,52,.96) 54%,rgba(16,27,38,.96) 100%);
   --ui-gradient-progress:linear-gradient(90deg,#789abd 0%,#a1c0df 48%,#6d91b7 100%);
   --ui-gradient-card:
-    radial-gradient(circle at 92% 4%,rgba(102,151,205,.18),transparent 38%),
-    linear-gradient(145deg,#162330 0%,#121c26 58%,#0e1721 100%);
+    linear-gradient(150deg,rgba(24,38,51,.97),rgba(14,24,34,.96));
   --ui-gradient-card-hover:
-    radial-gradient(circle at 82% 8%,rgba(116,169,224,.27),transparent 43%),
-    linear-gradient(145deg,#1a2a39 0%,#142230 56%,#101a25 100%);
+    linear-gradient(150deg,rgba(29,47,62,.98),rgba(17,29,41,.98));
   --ui-gradient-card-media:linear-gradient(145deg,#172532,#0e1822);
   color-scheme:dark;
 }
@@ -213,7 +209,7 @@ body:not(.home-mode)[data-theme] :is(.image-config-panel summary:hover,.video-co
 
 /* Menus, popovers, dialogs and sidebars */
 body:not(.home-mode)[data-theme] :is(
-  .quick-node-menu,.context-menu,.image-config-panel,.video-config-panel,.voice-config-panel,
+  .context-menu,.image-config-panel,.video-config-panel,.voice-config-panel,
   .tts-config-panel,.node-config-panel,
   .image-model-menu,.video-model-popover,.image-settings-popover,.video-settings-popover,
   .voice-settings-popover,.video-result-prompt,#workspace-user-menu,.prompt-agent-panel,
@@ -273,7 +269,7 @@ body[data-theme] :is(.project-controls svg,.asset-search span) { color:var(--ui-
 body[data-theme] :is(.home-login-modal input,.project-dialog input,.feedback-modal input,.feedback-modal textarea) { font-size:14px; }
 body[data-theme] :is(.image-config-panel > textarea,.video-config-panel > textarea,.tts-config-panel textarea) { font-size:15px; line-height:1.6; }
 body[data-theme] .prompt-agent-panel.agent-capsule .agent-goal textarea { font-size:15px; line-height:1.45; }
-body[data-theme] .prompt-agent-panel.agent-capsule .agent-goal textarea::placeholder { font-size:12px; }
+body[data-theme] .prompt-agent-panel.agent-capsule .agent-goal textarea::placeholder { font-size:11px; }
 
 @media (max-width:780px) {
   body[data-theme] :is(.topbar,.canvas-dock,.workspace-panel,.prompt-agent-panel,.comic-dialogue-panel) { background:color-mix(in srgb,var(--ui-surface-solid) 94%,transparent); }
@@ -281,7 +277,7 @@ body[data-theme] .prompt-agent-panel.agent-capsule .agent-goal textarea::placeho
 
 /* High-specificity legacy components. Keep this section explicit so an older
    component rule cannot reintroduce cream, lime or saturated cyan. */
-body[data-theme] :is(#workspace-user-menu,.comic-chat-studio,.comic-studio,.comic-brief-side,.comic-plan-side,.feedback-modal > section,.notification-modal > section,.app-update-popover,.canvas-batch-toolbar,.touch-link-action) {
+body[data-theme] :is(#workspace-user-menu,.comic-chat-studio,.comic-studio,.comic-brief-side,.comic-plan-side,.feedback-modal > section,.notification-modal > section,.canvas-batch-toolbar,.touch-link-action) {
   color:var(--ui-text)!important;
   background:var(--ui-gradient-surface)!important;
   border-color:var(--ui-border)!important;
@@ -407,17 +403,33 @@ body:not(.home-mode)[data-theme] :is(
   color:var(--ui-text)!important;
   background-color:var(--ui-surface-solid)!important;
   background-image:var(--ui-gradient-card)!important;
-  border-color:var(--ui-border)!important;
-  box-shadow:var(--ui-shadow-sm)!important;
+  border-color:color-mix(in srgb,var(--ui-border-strong) 72%,transparent)!important;
+  box-shadow:0 10px 28px color-mix(in srgb,var(--ui-bg) 18%,transparent),inset 0 1px color-mix(in srgb,#fff 34%,transparent)!important;
 }
-body:not(.home-mode)[data-theme] .flow-node:hover { border-color:var(--ui-border-strong)!important; box-shadow:var(--ui-shadow-lg)!important; }
-body:not(.home-mode)[data-theme] .flow-node.selected { border-color:var(--ui-accent)!important; box-shadow:0 0 0 2px var(--ui-accent-soft),var(--ui-shadow-lg)!important; }
+body:not(.home-mode)[data-theme] .flow-node { border-radius:16px!important; }
+body:not(.home-mode)[data-theme] .flow-node:not(.node-result) {
+  box-shadow:0 10px 28px color-mix(in srgb,var(--ui-bg) 20%,transparent),inset 0 1px color-mix(in srgb,#fff 38%,transparent)!important;
+}
+body:not(.home-mode)[data-theme] .flow-node:hover {
+  background-image:var(--ui-gradient-card-hover)!important;
+  border-color:var(--ui-border-strong)!important;
+  box-shadow:0 15px 38px color-mix(in srgb,var(--ui-bg) 26%,transparent),inset 0 1px color-mix(in srgb,#fff 38%,transparent)!important;
+}
+body:not(.home-mode)[data-theme] .flow-node.selected {
+  background-image:var(--ui-gradient-card-hover)!important;
+  border-color:color-mix(in srgb,var(--ui-accent) 48%,var(--ui-border-strong))!important;
+  box-shadow:0 0 0 3px var(--ui-accent-soft),0 16px 40px color-mix(in srgb,var(--ui-bg) 28%,transparent),inset 0 1px color-mix(in srgb,#fff 40%,transparent)!important;
+}
+body:not(.home-mode)[data-theme] .flow-node.dragging {
+  box-shadow:0 18px 42px color-mix(in srgb,var(--ui-bg) 34%,transparent)!important;
+}
 body:not(.home-mode)[data-theme] :is(.node-media,.image-empty-state,.audio-player-slot) {
   color:var(--ui-muted)!important;
   background-color:var(--ui-surface-muted)!important;
   background-image:var(--ui-gradient-card-media)!important;
   border-color:var(--ui-border)!important;
 }
+body:not(.home-mode)[data-theme] .flow-node :is(.node-media,.image-empty-state) { border-radius:15px!important; }
 body:not(.home-mode)[data-theme] :is(.node-copy,.image-empty-state small,.video-node-heading small,.audio-result-hint,.audio-result-meta) { color:var(--ui-muted)!important; }
 body:not(.home-mode)[data-theme] :is(.image-empty-state b,.video-node-heading b,.audio-result-heading strong,.tts-node-text b) { color:var(--ui-text)!important; }
 body:not(.home-mode)[data-theme] :is(.image-empty-state > span,.image-source-actions button,.video-reference-slot,.video-result-model) {
@@ -595,6 +607,4 @@ body[data-theme] .notification-item.read > i { background:var(--ui-muted)!import
 
 body[data-theme] .project-particles::before { background:radial-gradient(circle,var(--ui-accent-soft),transparent 67%)!important; }
 body[data-theme] .project-particles i,
-body[data-theme] :is(.agent-particle-burst,.canvas-guide-particle-field) i { background:var(--ui-accent)!important; box-shadow:0 0 0 2px var(--ui-accent-soft),0 0 14px var(--ui-accent-glow)!important; }
-body[data-theme] .app-update-popover::before,
-body[data-theme] .app-update-popover::after { background:var(--ui-gradient-surface)!important; border-color:var(--ui-border)!important; }
+body[data-theme] .agent-particle-burst i { background:var(--ui-accent)!important; box-shadow:0 0 0 2px var(--ui-accent-soft),0 0 14px var(--ui-accent-glow)!important; }

@@ -203,6 +203,7 @@ export class ComicStudioFeature {
           tone: "online",
           priority: 58,
           duration: 10000,
+          smart: { kind: "discovery", cooldownMs: 7 * 864e5, maxShows: 2, dismissible: true },
           actions: [
             { label: "知道了", run: () => options.hideGuide("comic-empty-images-guide") },
             {

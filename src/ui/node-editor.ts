@@ -32,7 +32,7 @@ function nodeToolActions(node: FlowNode) {
     return new Set<NodeToolAction>([
       "info",
       ...(node.mediaUrl
-        ? (["download", "clear-image"] as NodeToolAction[])
+        ? (["preview", "download", "clear-image"] as NodeToolAction[])
         : (["image-upload", "image-library", "generate"] as NodeToolAction[])),
       "delete",
     ]);
@@ -42,7 +42,17 @@ function nodeToolActions(node: FlowNode) {
       ...(node.mediaUrl ? (["download"] as NodeToolAction[]) : []),
       "delete",
     ]);
-  if (node.kind === "video" || node.kind === "voice" || node.kind === "tts")
+  if (node.kind === "video")
+    return new Set<NodeToolAction>([
+      "info",
+      ...(node.role === "result"
+        ? (["preview", "download"] as NodeToolAction[])
+        : (["generate"] as NodeToolAction[])),
+      "delete",
+    ]);
+  if (node.kind === "tts")
+    return new Set<NodeToolAction>(["info", "generate", "delete"]);
+  if (node.kind === "voice")
     return new Set<NodeToolAction>(["info", "delete"]);
   if (node.kind === "prompt")
     return new Set<NodeToolAction>(["info", "edit", "zoom-in", "zoom-out", "delete"]);
@@ -67,8 +77,9 @@ export function renderNodeToolbar(
       const content = toolContent[action];
       if (content && button.dataset.toolRendered !== "true") {
         button.dataset.toolRendered = "true";
-        button.innerHTML = `<span class="node-tool-content"><svg viewBox="0 0 24 24" aria-hidden="true">${content.icon}</svg><span>${content.label}</span></span>`;
+        button.innerHTML = `<span class="node-tool-content"><span>${content.label}</span></span>`;
         button.title = content.label;
+        button.setAttribute("aria-label", content.label);
       }
     });
 }

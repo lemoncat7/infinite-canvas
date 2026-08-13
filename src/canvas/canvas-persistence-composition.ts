@@ -57,6 +57,7 @@ export function createCanvasPersistenceComposition(options: {
       detail: "正在停止本地保存并强制载入服务器上的完整版本。",
       tone: "offline",
       priority: 110,
+      required: true,
     }),
     updateEditor: options.updateEditor,
     draw: options.draw,

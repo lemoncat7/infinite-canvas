@@ -19,6 +19,7 @@ export class ToastController {
         tone: "online",
         priority: 44,
         duration: 4200,
+        smart: { kind: "assist", cooldownMs: 3 * 864e5, maxShows: 3, dismissible: true },
       });
       return;
     }

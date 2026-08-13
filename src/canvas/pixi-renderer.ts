@@ -31,6 +31,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
   private linksKey = "";
   private activeLinkTimer = 0;
   private hasActiveLinks = false;
+  private activeDashOffset = 0;
   private lost = false;
   private suspended = false;
 
@@ -179,13 +180,53 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         highlighted = link.from === snapshot.selectedId || link.to === snapshot.selectedId || index === snapshot.hoveredLinkIndex || index === snapshot.touchSelectedLinkIndex,
         active = [from.status, to.status].some((status) => status === "queued" || status === "running");
       if (active) activeCount++;
-      (active ? this.activeLinks : this.links).moveTo(a.x, a.y).bezierCurveTo(ca.x, ca.y, cb.x, cb.y, b.x, b.y).stroke({
+      const style = {
         color: highlighted ? palette.linkHighlight : palette.link,
         alpha: highlighted ? 0.94 : 0.64,
         width: highlighted ? 3 : 2.25,
-      });
+      };
+      if (active) this.drawDashedBezier(this.activeLinks, a, ca, cb, b, style, this.activeDashOffset);
+      else this.links.moveTo(a.x, a.y).bezierCurveTo(ca.x, ca.y, cb.x, cb.y, b.x, b.y).stroke(style);
     });
     this.setActiveLinkAnimation(activeCount > 0);
+  }
+
+  private drawDashedBezier(
+    graphics: Graphics,
+    a: { x: number; y: number },
+    ca: { x: number; y: number },
+    cb: { x: number; y: number },
+    b: { x: number; y: number },
+    style: { color: number; alpha: number; width: number },
+    offset: number,
+  ) {
+    const point = (t: number) => {
+      const inverse = 1 - t;
+      return {
+        x: inverse ** 3 * a.x + 3 * inverse ** 2 * t * ca.x + 3 * inverse * t ** 2 * cb.x + t ** 3 * b.x,
+        y: inverse ** 3 * a.y + 3 * inverse ** 2 * t * ca.y + 3 * inverse * t ** 2 * cb.y + t ** 3 * b.y,
+      };
+    };
+    const segments = 64;
+    const dash = 12;
+    const gap = 8;
+    const cycle = dash + gap;
+    let previous = a;
+    let distance = offset % cycle;
+    for (let index = 1; index <= segments; index++) {
+      const current = point(index / segments);
+      const length = Math.hypot(current.x - previous.x, current.y - previous.y);
+      const steps = Math.max(1, Math.ceil(length / 4));
+      for (let step = 1; step <= steps; step++) {
+        const fromRatio = (step - 1) / steps;
+        const toRatio = step / steps;
+        const from = { x: previous.x + (current.x - previous.x) * fromRatio, y: previous.y + (current.y - previous.y) * fromRatio };
+        const to = { x: previous.x + (current.x - previous.x) * toRatio, y: previous.y + (current.y - previous.y) * toRatio };
+        if (distance % cycle < dash) graphics.moveTo(from.x, from.y).lineTo(to.x, to.y).stroke(style);
+        distance += length / steps;
+      }
+      previous = current;
+    }
   }
 
   private renderPendingConnection(snapshot: CanvasRenderSnapshot) {
@@ -205,9 +246,13 @@ export class PixiCanvasRenderer implements CanvasRenderer {
     }
     if (this.activeLinkTimer || this.suspended || this.lost) return;
     const animate = () => {
-      this.activeLinkTimer = 0;
+      this.activeLinkTimer = -1;
       if (this.suspended || this.lost || !this.hasActiveLinks) return;
-      this.activeLinks.alpha = 0.66 + (Math.sin(performance.now() / 420) + 1) * 0.15;
+      this.activeDashOffset = (this.activeDashOffset - 2.8 + 20) % 20;
+      if (this.lastSnapshot) this.renderLinkGeometry(
+        this.lastSnapshot,
+        new Map(this.lastSnapshot.nodes.map((node) => [node.id, node])),
+      );
       this.app.renderer.render(this.app.stage);
       this.activeLinkTimer = window.setTimeout(animate, 80);
     };

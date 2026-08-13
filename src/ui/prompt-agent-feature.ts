@@ -6,6 +6,8 @@ import { PromptAgentControls } from "./prompt-agent-controls";
 import { PromptAgentLifecycleController } from "./prompt-agent-lifecycle-controller";
 import { PromptAgentRequestController } from "./prompt-agent-request-controller";
 import { createPromptAgentShell } from "./prompt-agent-shell";
+import type { CanvasGuideMessage } from "./canvas-guide-controller";
+import { promptAgentGuidance } from "./prompt-agent-guidance";
 
 type Tone = "success" | "warning" | "error";
 
@@ -37,6 +39,8 @@ export class PromptAgentFeature {
     loadVoices: (providerId: string) => void;
     decodePrompt: (value: string) => string;
     toast: (message: string, tone: Tone) => void;
+    showGuide: (message: CanvasGuideMessage) => boolean | void;
+    hideGuide: (key?: string) => void;
   }) {
     const trigger = document.querySelector<HTMLButtonElement>("#prompt-agent-trigger")!;
     this.panel = createPromptAgentShell().panel;
@@ -52,6 +56,8 @@ export class PromptAgentFeature {
         options.draw();
       },
       isBusy: () => Boolean(this.requests?.busy),
+      onMenuOpened: () => this.showFeatureGuide(),
+      onModeSelected: (mode) => this.showModeGuide(mode),
     });
     this.context = new PromptAgentContextController({
       panel: this.panel,
@@ -121,9 +127,41 @@ export class PromptAgentFeature {
   }
 
   selectedNodes() { return this.context.selectedNodes(); }
-  renderContext(reset = false) { this.context.render(reset); }
+  renderContext(reset = false) {
+    this.context.render(reset);
+    this.controls.setMaterialCount(this.selectedIds.size);
+  }
   close() { this.lifecycle.close(); }
   disperse() { this.animation.disperse(true); }
+
+  private showFeatureGuide() {
+    const storageKey = "flow-inspiration-guide:v2";
+    if (localStorage.getItem(storageKey) === "acknowledged") return;
+    this.options.showGuide({
+      key: "inspiration-introduction-v2",
+      title: "灵感支持多种创作方式",
+      detail: "漫剧用于完整创作；音色生成角色声音；创作可引用画布素材；通用与 Agnes 只生成提示词。",
+      tone: "online",
+      priority: 90,
+      required: true,
+      actions: [{ label: "知道了", primary: true, run: () => {
+        localStorage.setItem(storageKey, "acknowledged");
+        this.options.hideGuide("inspiration-introduction-v2");
+      }}],
+    });
+  }
+
+  private showModeGuide(mode: "create" | "general" | "agnes" | "voice") {
+    const { title, detail } = promptAgentGuidance(mode, this.selectedIds.size);
+    this.options.showGuide({
+      key: `inspiration-mode-${mode}-v2`,
+      title,
+      detail,
+      priority: 35,
+      duration: 6200,
+      smart: { kind: "discovery", cooldownMs: 7 * 864e5, maxShows: 2, dismissible: true },
+    });
+  }
 
   private playMeteor(nodeId: number) {
     const node = this.options.nodes.find((item) => item.id === nodeId);

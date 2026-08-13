@@ -143,9 +143,7 @@ export class PromptAgentAnimationController {
 
   private handleTrigger(event: Event) {
     event.stopPropagation();
-    const touchToggle = matchMedia("(pointer: coarse)").matches || innerWidth <= 800;
-    if (touchToggle && this.options.panel.classList.contains("open")) {
-      this.options.onCancel();
+    if (this.options.panel.classList.contains("open")) {
       this.disperse(false);
       return;
     }

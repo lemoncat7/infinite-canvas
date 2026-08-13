@@ -12,6 +12,13 @@ export type CanvasGuideMessage = {
   priority?: number;
   duration?: number;
   actions?: CanvasGuideAction[];
+  required?: boolean;
+  smart?: {
+    kind: "assist" | "discovery";
+    cooldownMs?: number;
+    maxShows?: number;
+    dismissible?: boolean;
+  };
 };
 
 export class CanvasGuideController {
@@ -19,8 +26,10 @@ export class CanvasGuideController {
   private key = "";
   private priority = -1;
   private timer = 0;
-  private hideTimer = 0;
   private frame = 0;
+  private queue: CanvasGuideMessage[] = [];
+  private supportsPopover = false;
+  private deferredTimer = 0;
 
   constructor(
     private readonly escapeHtml: (value: string) => string,
@@ -31,13 +40,56 @@ export class CanvasGuideController {
     return Boolean(this.key && (!key || this.key === key));
   }
 
+  private storageKey(message: CanvasGuideMessage) { return `flow-smart-guide:${message.key}`; }
+
+  private readState(message: CanvasGuideMessage) {
+    try {
+      return JSON.parse(localStorage.getItem(this.storageKey(message)) || "{}") as { shown?: number; lastShown?: number; disabled?: boolean };
+    } catch { return {}; }
+  }
+
+  private writeState(message: CanvasGuideMessage, state: { shown?: number; lastShown?: number; disabled?: boolean }) {
+    try { localStorage.setItem(this.storageKey(message), JSON.stringify(state)); } catch { /* Storage can be unavailable in private mode. */ }
+  }
+
+  private isInteractionBusy() {
+    const active = document.activeElement;
+    return document.hidden
+      || document.querySelector("#canvas.dragging,.flow-node.dragging,.is-dragging,.prompt-agent-panel.is-busy,.comic-studio.is-busy") !== null
+      || Boolean(active?.matches("textarea,input,[contenteditable='true']"));
+  }
+
+  private scheduleWhenIdle(message: CanvasGuideMessage) {
+    if (!this.queue.some((item) => item.key === message.key)) this.queue.push(message);
+    if (this.deferredTimer) return;
+    const retry = () => {
+      this.deferredTimer = 0;
+      if (this.key || this.isInteractionBusy()) {
+        this.deferredTimer = window.setTimeout(retry, 700);
+        return;
+      }
+      const next = this.queue.shift();
+      if (next) this.show(next);
+    };
+    this.deferredTimer = window.setTimeout(retry, 700);
+  }
+
   private position(notice: HTMLElement) {
     const trigger = document.querySelector<HTMLElement>(this.triggerSelector);
-    if (!trigger || !notice.isConnected) return;
-    const icon = trigger.querySelector<HTMLElement>("b") || trigger;
+    if (!notice.isConnected) return;
+    const triggerRect = trigger?.getBoundingClientRect();
+    const triggerVisible = Boolean(triggerRect && triggerRect.width > 0 && triggerRect.height > 0 && triggerRect.bottom > 0 && triggerRect.top < innerHeight);
+    const width = notice.offsetWidth;
+    if (!triggerVisible || !triggerRect) {
+      notice.dataset.anchored = "false";
+      notice.style.left = `${Math.max(12, innerWidth - width - 12)}px`;
+      notice.style.bottom = "max(12px, env(safe-area-inset-bottom))";
+      return;
+    }
+    notice.dataset.anchored = "true";
+    const icon = trigger!.querySelector<HTMLElement>("b svg") || trigger!.querySelector<HTMLElement>("b") || trigger!;
     const rect = icon.getBoundingClientRect();
     const anchorX = rect.left + rect.width / 2;
-    const width = notice.offsetWidth;
     const left = Math.max(12, Math.min(innerWidth - width - 12, anchorX - 18));
     const tailX = Math.max(10, Math.min(width - 10, anchorX - left));
     notice.style.left = `${left}px`;
@@ -54,14 +106,14 @@ export class CanvasGuideController {
         return;
       }
       const trigger = document.querySelector<HTMLElement>(this.triggerSelector);
-      const icon = trigger?.querySelector<HTMLElement>("b") || trigger;
-      if (icon) {
-        const rect = icon.getBoundingClientRect();
-        const signature = `${rect.left.toFixed(2)}:${rect.top.toFixed(2)}:${rect.width.toFixed(2)}:${notice.offsetWidth}`;
-        if (signature !== previous) {
-          previous = signature;
-          this.position(notice);
-        }
+      const icon = trigger?.querySelector<HTMLElement>("b svg") || trigger?.querySelector<HTMLElement>("b") || trigger;
+      const rect = icon?.getBoundingClientRect();
+      const signature = rect
+        ? `${rect.left.toFixed(2)}:${rect.top.toFixed(2)}:${rect.width.toFixed(2)}:${notice.offsetWidth}:${innerWidth}:${innerHeight}`
+        : `safe:${notice.offsetWidth}:${innerWidth}:${innerHeight}`;
+      if (signature !== previous) {
+        previous = signature;
+        this.position(notice);
       }
       this.frame = requestAnimationFrame(update);
     };
@@ -71,28 +123,14 @@ export class CanvasGuideController {
   private ensureBubble() {
     if (this.bubble) return this.bubble;
     this.bubble = document.createElement("aside");
-    this.bubble.className = "app-update-popover service-status-popover";
+    this.bubble.className = "canvas-guide-popover";
+    this.supportsPopover = typeof this.bubble.showPopover === "function";
+    if (this.supportsPopover) this.bubble.setAttribute("popover", "manual");
+    this.bubble.setAttribute("role", "status");
+    this.bubble.setAttribute("aria-live", "polite");
     this.bubble.hidden = true;
     document.body.append(this.bubble);
     return this.bubble;
-  }
-
-  private burst(notice: HTMLElement) {
-    const rect = notice.getBoundingClientRect();
-    const field = document.createElement("div");
-    field.className = "canvas-guide-particle-field";
-    field.style.left = `${rect.left + rect.width / 2}px`;
-    field.style.top = `${rect.top + rect.height / 2}px`;
-    field.innerHTML = Array.from({ length: 24 }, () => {
-      const angle = Math.random() * Math.PI * 2;
-      const distance = 38 + Math.random() * 104;
-      const startX = (Math.random() - 0.5) * Math.min(84, rect.width * 0.34);
-      const startY = (Math.random() - 0.5) * Math.min(34, rect.height * 0.5);
-      const size = 3 + Math.random() * 5;
-      return `<i style="left:${startX}px;top:${startY}px;width:${size}px;height:${size}px;--guide-px:${Math.cos(angle) * distance}px;--guide-py:${Math.sin(angle) * distance * (0.58 + Math.random() * 0.55)}px;--guide-delay:${Math.random() * 70}ms"></i>`;
-    }).join("");
-    document.body.append(field);
-    window.setTimeout(() => field.remove(), 860);
   }
 
   hide(key?: string) {
@@ -104,29 +142,56 @@ export class CanvasGuideController {
     this.key = "";
     this.priority = -1;
     if (this.bubble && !this.bubble.hidden) {
-      window.clearTimeout(this.hideTimer);
-      this.burst(this.bubble);
+      if (this.supportsPopover && this.bubble.matches(":popover-open")) this.bubble.hidePopover();
       this.bubble.hidden = true;
       this.bubble.classList.remove("is-entering", "is-leaving");
     }
+    const next = this.queue.shift();
+    if (next) queueMicrotask(() => this.show(next));
   }
 
   show(message: CanvasGuideMessage) {
+    if (!message.required && message.smart) {
+      const state = this.readState(message);
+      const maxShows = message.smart.maxShows ?? (message.smart.kind === "discovery" ? 2 : 3);
+      const cooldown = message.smart.cooldownMs ?? (message.smart.kind === "discovery" ? 7 * 864e5 : 864e5);
+      if (state.disabled || (state.shown ?? 0) >= maxShows || Date.now() - (state.lastShown ?? 0) < cooldown) return false;
+      if (this.isInteractionBusy()) {
+        this.scheduleWhenIdle(message);
+        return true;
+      }
+    }
     const priority = message.priority ?? 20;
-    const duration = message.duration ?? (priority <= 40 ? 2800 : 0);
-    if (this.key && this.key !== message.key && priority < this.priority)
-      return false;
+    const duration = message.required ? 0 : message.duration ?? (priority <= 40 ? 4200 : 0);
+    if (this.key && this.key !== message.key) {
+      if (priority <= this.priority || this.bubble?.dataset.required === "true") {
+        if (!this.queue.some((item) => item.key === message.key)) this.queue.push(message);
+        return true;
+      }
+      this.queue.unshift(message);
+      this.hide(this.key);
+      return true;
+    }
     const notice = this.ensureBubble();
     window.clearTimeout(this.timer);
-    window.clearTimeout(this.hideTimer);
     this.timer = 0;
-    this.hideTimer = 0;
     this.key = message.key;
     this.priority = priority;
-    notice.className = `app-update-popover service-status-popover ${message.tone ?? "neutral"}${message.actions?.length ? " interactive" : ""}`;
-    notice.innerHTML = `<span><b>${this.escapeHtml(message.title)}</b><small>${this.escapeHtml(message.detail)}</small>${message.actions?.length ? "<em></em>" : ""}</span>`;
+    const hasActions = Boolean(message.actions?.length || message.smart?.dismissible);
+    notice.className = `canvas-guide-popover ${message.tone ?? "neutral"}${hasActions ? " interactive" : ""}`;
+    notice.dataset.required = String(Boolean(message.required));
+    notice.setAttribute("aria-live", message.required ? "assertive" : "polite");
+    notice.innerHTML = `<span><b>${this.escapeHtml(message.title)}</b><small>${this.escapeHtml(message.detail)}</small>${hasActions ? "<em></em>" : ""}</span>`;
     const actions = notice.querySelector<HTMLElement>("em");
-    message.actions?.forEach((action) => {
+    const messageActions = [...(message.actions ?? [])];
+    if (message.smart?.dismissible) messageActions.unshift({
+      label: "不再提醒",
+      run: () => {
+        this.writeState(message, { ...this.readState(message), disabled: true });
+        this.hide(message.key);
+      },
+    });
+    messageActions.forEach((action) => {
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = action.label;
@@ -135,10 +200,18 @@ export class CanvasGuideController {
       actions?.append(button);
     });
     notice.hidden = false;
+    if (this.supportsPopover && !notice.matches(":popover-open")) {
+      try { notice.showPopover(); } catch { this.supportsPopover = false; }
+    }
     notice.classList.remove("is-leaving", "is-entering");
+    this.position(notice);
     void notice.offsetWidth;
     notice.classList.add("is-entering");
     this.follow(notice);
+    if (message.smart) {
+      const state = this.readState(message);
+      this.writeState(message, { ...state, shown: (state.shown ?? 0) + 1, lastShown: Date.now() });
+    }
     if (duration > 0)
       this.timer = window.setTimeout(() => this.hide(message.key), duration);
     return true;

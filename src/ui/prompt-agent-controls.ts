@@ -1,10 +1,13 @@
 import type { PromptAgentMode } from "../nodes/comic-types";
+import { promptAgentGuidance } from "./prompt-agent-guidance";
 
 type PromptAgentControlsOptions = {
   panel: HTMLElement;
   onComic: () => void;
   onModeChanged: (mode: PromptAgentMode) => void;
   isBusy: () => boolean;
+  onMenuOpened?: () => void;
+  onModeSelected?: (mode: PromptAgentMode) => void;
 };
 
 export class PromptAgentControls {
@@ -13,6 +16,7 @@ export class PromptAgentControls {
   complexity: "simple" | "detailed" = "simple";
   readonly modelSelect = document.createElement("select");
   readonly goalInput: HTMLTextAreaElement;
+  private materialCount = 0;
 
   constructor(private readonly options: PromptAgentControlsOptions) {
     const stored = localStorage.getItem(
@@ -43,9 +47,9 @@ export class PromptAgentControls {
       .forEach((button) =>
         button.classList.toggle("active", button.dataset.agentMode === mode),
       );
-    panel.querySelector<HTMLElement>(".agent-mode")!.classList.remove("open");
+    panel.querySelector<HTMLElement>(".inspiration-mode")!.classList.remove("open");
     panel
-      .querySelector<HTMLElement>(".agent-prompt-submenu")!
+      .querySelector<HTMLElement>(".inspiration-strategy")!
       .classList.remove("open");
     panel
       .querySelector<HTMLButtonElement>("[data-agent-mode-trigger]")!
@@ -53,14 +57,7 @@ export class PromptAgentControls {
     panel.classList.remove("prompt-result-open");
     panel.querySelector<HTMLElement>("article")!.hidden = true;
     const promptOnly = mode === "general" || mode === "agnes";
-    this.goalInput.placeholder =
-      mode === "create"
-        ? "告诉我你想创造什么…"
-        : mode === "voice"
-          ? "输入想要音色的描述"
-          : mode === "agnes"
-            ? "描述需要转换为 Agnes 视频提示词的镜头…"
-            : "描述需要生成提示词的画面或需求…";
+    this.refreshGuidance();
     panel
       .querySelector<HTMLButtonElement>(".agent-submit")!
       .setAttribute(
@@ -75,17 +72,29 @@ export class PromptAgentControls {
     this.options.onModeChanged(mode);
   }
 
+  setMaterialCount(count: number) {
+    this.materialCount = count;
+    this.refreshGuidance();
+  }
+
+  guidance() { return promptAgentGuidance(this.mode, this.materialCount); }
+
+  private refreshGuidance() {
+    this.goalInput.placeholder = this.guidance().placeholder;
+  }
+
   private bindEvents() {
     const panel = this.options.panel;
     panel
       .querySelector("[data-agent-mode-trigger]")!
       .addEventListener("click", (event) => {
         event.stopPropagation();
-        const control = panel.querySelector<HTMLElement>(".agent-mode")!;
+        const control = panel.querySelector<HTMLElement>(".inspiration-mode")!;
         const open = control.classList.toggle("open");
         panel
           .querySelector<HTMLButtonElement>("[data-agent-mode-trigger]")!
           .setAttribute("aria-expanded", String(open));
+        if (open) this.options.onMenuOpened?.();
       });
     panel
       .querySelectorAll<HTMLButtonElement>("[data-agent-mode]")
@@ -93,6 +102,7 @@ export class PromptAgentControls {
         button.addEventListener("click", (event) => {
           event.stopPropagation();
           this.setMode(button.dataset.agentMode as PromptAgentMode);
+          this.options.onModeSelected?.(button.dataset.agentMode as PromptAgentMode);
         }),
       );
     panel
@@ -100,7 +110,7 @@ export class PromptAgentControls {
       .addEventListener("click", (event) => {
         event.stopPropagation();
         const submenu = panel.querySelector<HTMLElement>(
-          ".agent-prompt-submenu",
+          ".inspiration-strategy",
         )!;
         const open = submenu.classList.toggle("open");
         panel
@@ -114,8 +124,8 @@ export class PromptAgentControls {
         this.options.onComic();
       });
     document.addEventListener("click", (event) => {
-      if (!(event.target as HTMLElement | null)?.closest(".agent-mode")) {
-        panel.querySelector<HTMLElement>(".agent-mode")?.classList.remove("open");
+      if (!(event.target as HTMLElement | null)?.closest(".inspiration-mode")) {
+        panel.querySelector<HTMLElement>(".inspiration-mode")?.classList.remove("open");
         panel
           .querySelector<HTMLButtonElement>("[data-agent-mode-trigger]")
           ?.setAttribute("aria-expanded", "false");
@@ -157,12 +167,12 @@ export class PromptAgentControls {
   }
 
   private resizeGoal() {
-    this.goalInput.style.height = "42px";
+    this.goalInput.style.height = "38px";
     const height = Math.min(
-      62,
-      Math.max(42, this.goalInput.scrollHeight),
+      58,
+      Math.max(38, this.goalInput.scrollHeight),
     );
     this.goalInput.style.height = `${height}px`;
-    this.options.panel.classList.toggle("has-wrapped-goal", height > 44);
+    this.options.panel.classList.toggle("has-wrapped-goal", height > 40);
   }
 }

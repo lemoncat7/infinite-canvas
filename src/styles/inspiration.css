@@ -1,0 +1,33 @@
+/* Inspiration owns its structure; all colors come from the shared UI tokens. */
+.inspiration-mode { position:relative; flex:0 0 76px; order:1; }
+.inspiration-mode > button { display:flex; width:76px; height:42px; align-items:center; justify-content:center; gap:6px; padding:0 8px; color:var(--ui-text-secondary); background:var(--ui-surface-muted); border:1px solid var(--ui-border); border-radius:999px; cursor:pointer; }
+.inspiration-mode > button:hover { color:var(--ui-text); background:var(--ui-accent-soft); border-color:var(--ui-border-strong); }
+.inspiration-mode > button span { color:var(--ui-accent); font-size:12px; }
+.inspiration-mode > button b { overflow:hidden; max-width:42px; font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+.inspiration-mode > button i,.inspiration-strategy > button i { width:6px; height:6px; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; opacity:.55; }
+.inspiration-mode > button i { margin:-3px 1px 0 2px; rotate:45deg; transition:rotate .18s,translate .18s; }
+.inspiration-mode.open > button i { rotate:225deg; translate:0 3px; }
+.inspiration-mode-menu { position:absolute; z-index:20; left:0; bottom:calc(100% + 12px); display:none; width:244px; gap:4px; padding:8px; color:var(--ui-text); background:color-mix(in srgb,var(--ui-surface-raised) 84%,transparent); border:1px solid var(--ui-border); border-radius:14px; box-shadow:var(--ui-shadow-lg); backdrop-filter:blur(20px) saturate(118%); }
+.inspiration-mode.open .inspiration-mode-menu { display:grid; animation:composer-in .18s ease; }
+.inspiration-mode-menu button { display:grid; position:relative; width:100%; gap:3px; padding:10px 12px; color:var(--ui-text-secondary); background:transparent; border:0; border-radius:11px; text-align:left; cursor:pointer; }
+.inspiration-mode-menu button:hover { color:var(--ui-text); background:var(--ui-accent-soft); }
+.inspiration-mode-menu button.active { color:var(--ui-text); background:var(--ui-accent-soft); }
+.inspiration-mode-menu button.active::after { position:absolute; right:12px; top:15px; content:'✓'; color:var(--ui-accent); font-size:11px; }
+.inspiration-mode-menu b { font-size:12px; }
+.inspiration-mode-menu small { padding-right:18px; color:var(--ui-muted); font-size:10px; line-height:1.35; }
+.inspiration-strategy { display:grid; gap:4px; }
+.inspiration-strategy > button { grid-template-columns:1fr auto; }
+.inspiration-strategy > button :is(b,small) { grid-column:1; }
+.inspiration-strategy > button i { grid-column:2; grid-row:1 / span 2; align-self:center; rotate:-45deg; transition:rotate .18s; }
+.inspiration-strategy.open > button i { rotate:45deg; }
+.inspiration-strategy > div { display:none; gap:3px; margin:0 0 2px 10px; padding-left:7px; border-left:1px solid var(--ui-border); }
+.inspiration-strategy.open > div { display:grid; animation:composer-in .16s ease; }
+.inspiration-strategy > div > button { padding:8px 10px; }
+.prompt-agent-panel.is-busy .inspiration-mode-menu { pointer-events:none; opacity:.58; }
+
+@media (max-width:780px) {
+  .inspiration-mode { flex-basis:42px; }
+  .inspiration-mode > button { width:42px; padding:0; }
+  .inspiration-mode > button :is(b,i) { display:none; }
+  .inspiration-mode-menu { position:fixed; right:10px; bottom:146px; left:10px; width:auto; }
+}

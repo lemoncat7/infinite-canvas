@@ -65,6 +65,8 @@ export class CanvasWorkspaceContentRuntime {
         loadVoices: (providerId) => { void options.tts.loadVoices(providerId); },
         decodePrompt: decodePromptClipboardText,
         toast: options.toast,
+        showGuide: options.showGuide,
+        hideGuide: options.hideGuide,
       },
       comic: {
         nodes,

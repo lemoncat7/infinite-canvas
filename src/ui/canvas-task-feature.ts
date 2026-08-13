@@ -1,15 +1,9 @@
 import type { FlowLink, FlowNode } from "../nodes/node-types";
 import { PendingTaskCancellationController } from "../nodes/pending-task-cancellation-controller";
 import { TaskMonitorController } from "./task-monitor-controller";
+import type { CanvasGuideMessage } from "./canvas-guide-controller";
 
 type ToastTone = "success" | "warning" | "error" | "info";
-type GuideMessage = {
-  key: string;
-  title: string;
-  detail: string;
-  tone: "online";
-  duration: number;
-};
 
 export class CanvasTaskFeature<TUser extends { credits?: number; reservedCredits?: number }> {
   private readonly monitor: TaskMonitorController;
@@ -38,7 +32,7 @@ export class CanvasTaskFeature<TUser extends { credits?: number; reservedCredits
     save: () => void;
     updateEditor: () => void;
     draw: () => void;
-    showGuide: (message: GuideMessage) => void;
+    showGuide: (message: CanvasGuideMessage) => void;
     toast: (message: string, tone: ToastTone, detail?: string) => void;
   }) {
     this.cancellation = new PendingTaskCancellationController<TUser>({
@@ -80,6 +74,7 @@ export class CanvasTaskFeature<TUser extends { credits?: number; reservedCredits
         detail: "已有图片、提示词为空或已经进入任务的节点会被自动跳过。",
         tone: "online",
         duration: 2800,
+        smart: { kind: "assist", cooldownMs: 864e5, maxShows: 3 },
       });
       return;
     }
@@ -103,6 +98,7 @@ export class CanvasTaskFeature<TUser extends { credits?: number; reservedCredits
       detail: `${ready} 个立即进入队列${waiting ? `，${waiting} 个将在上游图片完成后自动继续` : ""}。可在旁边的“任务”中查看进度。`,
       tone: "online",
       duration: 5200,
+      smart: { kind: "assist", cooldownMs: 12 * 36e5, maxShows: 4 },
     });
   }
 

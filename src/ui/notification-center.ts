@@ -71,7 +71,8 @@ export class NotificationCenterController {
   }
 
   private bindEvents() {
-    this.options.openButton.addEventListener("click", () => {
+    this.options.openButton.addEventListener("click", (event) => {
+      event.stopPropagation();
       const opening = !this.options.modal.classList.contains("open");
       this.options.closeTopbarMenus(opening);
       if (!opening) return;
