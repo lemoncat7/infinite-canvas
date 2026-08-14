@@ -1,4 +1,5 @@
 import type { GenerationInput, GenerationProvider, GenerationUpdate } from './types.js'
+import sharp from 'sharp'
 
 type ImageResponse = { data?: Array<{ url?: string; b64_json?: string; revised_prompt?: string }>; error?: { message?: string } }
 
@@ -16,17 +17,28 @@ export class OpenAiImageProvider implements GenerationProvider {
     if (input.kind !== 'image') throw new Error('OpenAI Image Adapter 仅支持图片任务')
     onUpdate({ status: 'running', progress: 15 })
     const mode = input.inputUrls?.length ? 'edit' : 'create'
+    const transparent = input.parameters?.background === 'transparent'
+    const attempts = transparent ? 3 : 1
     let response: Response | undefined, payload: ImageResponse | undefined
-    for (let attempt = 1; attempt <= 1; attempt++) {
+    for (let attempt = 1; attempt <= attempts; attempt++) {
       const startedAt = Date.now()
       response = undefined
       console.info('[image-generation-request]', { stage: 'started', mode, attempt, model: input.model || 'gpt-image-2' })
       try {
-        response = input.inputUrls?.length ? await this.edit(input) : await this.create(input)
+        const requestInput = attempt === 1 ? input : {
+          ...input,
+          prompt: `${input.prompt}\nCritical output validation: return a PNG with a real alpha channel and genuinely transparent pixels outside the subject. An opaque white or colored background is invalid.`,
+        }
+        response = input.inputUrls?.length ? await this.edit(requestInput) : await this.create(requestInput)
         console.info('[image-generation-request]', { stage: 'headers', mode, attempt, elapsedMs: Date.now() - startedAt, status: response.status, contentType: response.headers.get('content-type'), contentLength: response.headers.get('content-length') })
         payload = await response.json() as ImageResponse
         const image = payload.data?.[0]
         console.info('[image-generation-request]', { stage: 'body', mode, attempt, elapsedMs: Date.now() - startedAt, status: response.status, keys: Object.keys(payload), dataCount: payload.data?.length ?? 0, imageKeys: image ? Object.keys(image) : [], hasError: Boolean(payload.error) })
+        if (response.ok && transparent && image && !(await imageHasUsefulTransparency(image))) {
+          console.warn('[image-generation-request]', { stage: 'transparency-rejected', mode, attempt, elapsedMs: Date.now() - startedAt })
+          if (attempt < attempts) continue
+          throw new Error('透明背景验收失败：模型连续返回不含有效 Alpha 的图片')
+        }
         break
       } catch (error) {
         const bodyStage = Boolean(response), timedOut = error instanceof Error && error.name === 'TimeoutError'
@@ -81,6 +93,19 @@ function base64ImageMime(value: string) {
   if (bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp'
   if (bytes.subarray(0, 6).toString('ascii').startsWith('GIF8')) return 'image/gif'
   return 'image/png'
+}
+
+export async function imageHasUsefulTransparency(image: { url?: string; b64_json?: string }) {
+  let bytes: Buffer
+  if (image.b64_json) bytes = Buffer.from(image.b64_json, 'base64')
+  else if (image.url) {
+    const response = await fetch(image.url, { signal: AbortSignal.timeout(90000) })
+    if (!response.ok) throw new Error(`透明背景验收读取图片失败（${response.status}）`)
+    bytes = Buffer.from(await response.arrayBuffer())
+  } else return false
+  const metadata = await sharp(bytes).metadata()
+  if (!metadata.hasAlpha) return false
+  return !(await sharp(bytes).stats()).isOpaque
 }
 
 function required(name: string) { const value = process.env[name]; if (!value) throw new Error(`${name} is required when GENERATION_PROVIDER=openai-image`); return value }
