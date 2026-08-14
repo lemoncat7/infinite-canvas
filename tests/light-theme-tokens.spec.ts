@@ -10,6 +10,32 @@ test("one theme source owns both cold neutral token systems", () => {
   expect(theme).toContain("--ws-bg:var(--ui-bg)");
   expect(theme).toContain("body[data-theme]");
   expect(theme).toContain('body[data-theme="dark"]');
+  expect(theme).toContain('--ui-bg:#05090f');
+  expect(theme).toContain('--ui-dock-material:');
+  expect(theme).toContain('radial-gradient(ellipse 66% 52% at 86% -10%');
+});
+
+test("dock and dialogue materials can evolve independently", () => {
+  const theme = readFileSync("src/styles/theme.css", "utf8");
+  const chrome = readFileSync("src/styles/workspace-chrome.css", "utf8");
+  const inspiration = readFileSync("src/styles/inspiration.css", "utf8");
+  const comic = readFileSync("src/styles/comic-studio.css", "utf8");
+  for (const token of ["--ui-dock-material", "--ui-inspiration-material", "--ui-comic-menu-material"])
+    expect(theme).toContain(token);
+  expect(chrome).toContain("background-image:var(--ui-dock-material)");
+  expect(inspiration).toContain("background-image:var(--ui-inspiration-material)");
+  expect(comic).toContain("background-image:var(--ui-comic-menu-material)");
+  expect(comic).not.toContain("--comic-menu:");
+  expect(chrome).not.toContain("--chrome-glass:var(--ui-dock-material)");
+});
+
+test("comic studio owns one exact light and dark palette", () => {
+  const comic = readFileSync("src/styles/comic-studio.css", "utf8");
+  expect(comic).toContain('--comic-panel:rgba(238,244,249,.72)');
+  expect(comic).toContain('body[data-theme="dark"]');
+  expect(comic).toContain('--comic-panel:rgba(11,25,38,.95)');
+  expect(comic).toContain('--comic-composer-surface:linear-gradient(145deg,rgba(47,70,90,.82),rgba(20,38,54,.88))');
+  expect(comic).not.toContain('--comic-panel:color-mix');
 });
 
 test("legacy stylesheet no longer owns home or workspace theme systems", () => {
@@ -18,16 +44,22 @@ test("legacy stylesheet no longer owns home or workspace theme systems", () => {
   expect(legacy).not.toContain("Canvas workspace — shared Viora mist / graphite theme");
   expect(legacy).not.toContain("--ws-bg:#0b1113");
   expect(legacy).not.toContain("--ws-bg:#eef3ef");
+  expect(legacy).toContain('.agent-capsule > article:not(.inspiration-result)');
+  expect(legacy).not.toContain('.agent-capsule > article,.agent-capsule > select');
 });
 
 test("light theme explicitly covers every major product surface", () => {
   const theme = readFileSync("src/styles/theme.css", "utf8");
+  const chrome = readFileSync("src/styles/workspace-chrome.css", "utf8");
+  const comic = readFileSync("src/styles/comic-studio.css", "utf8");
   for (const selector of [
-    ".topbar", ".canvas-dock", ".flow-node", ".context-menu", ".workspace-panel",
-    ".project-card", ".asset-library-panel", ".comic-chat-studio", ".comic-plan-side",
+    ".topbar", ".flow-node", ".context-menu", ".workspace-panel",
+    ".project-card", ".asset-library-panel",
     ".feedback-modal", ".notification-modal", ".voice-config-panel", ".tts-config-panel",
     ".prompt-agent-panel", "#workspace-user-menu", "body[data-theme] .home-page",
   ]) expect(theme).toContain(selector);
+  expect(chrome).toContain(".canvas-dock");
+  for (const selector of [".comic-chat-studio", ".comic-plan-side"]) expect(comic).toContain(selector);
 });
 
 test("light theme source contains no warm legacy palette", () => {

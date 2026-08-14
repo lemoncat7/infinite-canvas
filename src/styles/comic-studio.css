@@ -1,20 +1,36 @@
 /* Comic studio owns its complete visual language here. */
 :root {
-  --comic-panel:color-mix(in srgb,var(--ui-surface) 76%,transparent);
-  --comic-panel-raised:color-mix(in srgb,var(--ui-surface-raised) 58%,transparent);
+  --comic-panel:rgba(238,244,249,.72);
+  --comic-panel-raised:rgba(255,255,255,.54);
   --comic-hairline: color-mix(in srgb, var(--ws-border) 82%, transparent);
   --comic-hover: color-mix(in srgb, var(--ws-accent) 12%, transparent);
-  --comic-primary:var(--ui-gradient-accent);
+  --comic-primary:linear-gradient(145deg,#6e91b5,#536f96);
   --comic-glow: color-mix(in srgb,var(--ws-accent) 28%,transparent);
-  --comic-shadow:var(--ui-shadow-lg);
-  --comic-user-surface:var(--ui-gradient-selection);
-  --comic-user-text:var(--ui-text);
-  --comic-composer-surface:color-mix(in srgb,var(--ui-surface-raised) 74%,transparent);
-  --comic-control:color-mix(in srgb,var(--ui-surface-muted) 76%,transparent);
-  --comic-control-hover:var(--ui-menu-item-hover);
-  --comic-menu:var(--ui-menu-material);
-  --comic-shine:var(--ui-accent-hover);
-  --comic-shine-soft:var(--ui-accent-glow);
+  --comic-shadow:0 28px 80px rgba(3,12,22,.34),0 4px 16px rgba(3,12,22,.12);
+  --comic-user-surface:linear-gradient(145deg,rgba(109,143,180,.24),rgba(108,121,165,.14));
+  --comic-user-text:#24384b;
+  --comic-composer-surface:rgba(251,253,255,.72);
+  --comic-control:linear-gradient(145deg,rgba(255,255,255,.62),rgba(222,232,241,.46));
+  --comic-control-hover:linear-gradient(145deg,rgba(255,255,255,.88),rgba(214,227,239,.66));
+  --comic-shine:#537da6;
+  --comic-shine-soft:rgba(72,113,154,.34);
+}
+
+body[data-theme="dark"] {
+  --comic-panel:rgba(11,25,38,.95);
+  --comic-panel-raised:rgba(45,69,89,.66);
+  --comic-hairline:rgba(174,207,237,.21);
+  --comic-hover:rgba(143,182,220,.16);
+  --comic-primary:linear-gradient(145deg,#8fb6dc,#668fb8);
+  --comic-glow:rgba(126,176,224,.3);
+  --comic-shadow:0 30px 88px rgba(0,0,0,.48),0 5px 18px rgba(0,0,0,.2);
+  --comic-user-surface:linear-gradient(135deg,rgba(99,151,199,.43),rgba(69,93,148,.32));
+  --comic-user-text:#f1f6fb;
+  --comic-composer-surface:linear-gradient(145deg,rgba(47,70,90,.82),rgba(20,38,54,.88));
+  --comic-control:linear-gradient(145deg,rgba(57,80,99,.78),rgba(29,48,64,.76));
+  --comic-control-hover:linear-gradient(145deg,rgba(75,101,123,.84),rgba(40,63,82,.82));
+  --comic-shine:#c7ddf1;
+  --comic-shine-soft:rgba(135,177,217,.36);
 }
 
 .agent-comic-entry { min-width:86px; }
@@ -118,8 +134,9 @@
 .comic-label-control { position:relative; }
 .comic-chat-studio > header button[data-comic-label-picker] { width:auto; min-width:96px; }
 .comic-label-menu {
-  position:absolute; z-index:8; right:0; top:calc(100% + 10px); display:none; width:280px; max-height:330px;
-  padding:7px; overflow:auto; color:var(--ws-text); background-color:transparent; background-image:var(--comic-menu); border:1px solid var(--comic-hairline);
+  position:absolute; z-index:8; right:0; top:calc(100% + 10px); display:none; width:min(280px,calc(100vw - 48px)); max-height:330px;
+  box-sizing:border-box;
+  padding:7px; overflow:auto; color:var(--ws-text); background-color:transparent; background-image:var(--ui-comic-menu-material); border:1px solid var(--comic-hairline);
   border-radius:14px; box-shadow:0 22px 56px rgba(3,12,22,.34),inset 0 1px rgba(255,255,255,.07); backdrop-filter:blur(28px) saturate(118%); scrollbar-width:none;
 }
 .comic-label-menu.open { display:grid; gap:3px; animation:comic-message-in .16s ease both; }
@@ -250,11 +267,11 @@
   .comic-studio > header { min-height:60px; padding:0 10px 0 14px; }.comic-studio > header h2 { font-size:15px; }
   .comic-studio > header nav { gap:2px; }.comic-studio > header nav button { min-width:40px; height:40px; padding:0 7px; }
   .comic-chat-studio > header [data-comic-side],.comic-chat-studio > header [data-comic-scheme] { display:flex; }
-  .comic-chat-studio > header [data-comic-label-picker] { width:40px; min-width:40px; }.comic-chat-studio > header [data-comic-label-picker] b { display:none; }
-  .comic-chat-studio > header [data-comic-new] span { display:none; }
+  .comic-chat-studio > header [data-comic-label-picker] { width:auto; min-width:58px; }
+  .comic-chat-studio > header [data-comic-new] { min-width:72px; }
   .comic-conversation { padding:16px 14px 12px; }.comic-message { max-width:94%; }
   .comic-composer { margin:0 10px 10px; }
-  .comic-label-menu { position:fixed; top:68px; right:10px; width:calc(100vw - 20px); box-sizing:border-box; }
+  .comic-label-menu { top:calc(100% + 10px); right:0; width:min(280px,calc(100vw - 48px)); }
   .comic-brief-side,.comic-plan-side { display:none; z-index:73; border-radius:16px; }
   .comic-brief-side.mobile-open { display:grid; }.comic-plan-side.mobile-open:not([hidden]) { display:flex; }
   .comic-mobile-tabs { display:grid; grid-template-columns:1fr 1fr; gap:4px; padding:4px; background:var(--comic-panel-raised); border:1px solid var(--comic-hairline); border-radius:11px; }

@@ -93,15 +93,26 @@ export async function runGenerationJob(options: {
   }
 }
 
-export async function hydrateGenerationPrompts(nodes: FlowNode[]) {
+export async function hydrateGenerationState(nodes: FlowNode[]) {
   await Promise.all(nodes
-    .filter((node) => node.jobId && (!node.generationPrompt || node.body === "生成完成 · 结果已回写"))
+    .filter((node) => node.jobId)
     .map(async (node) => {
       try {
         const job = await fetchGenerationJob(node.jobId!);
-        if (!job.prompt) return;
-        node.generationPrompt = job.prompt;
-        if (node.body === "生成完成 · 结果已回写" || node.body === job.prompt) node.body = "";
+        node.status = job.status;
+        node.progress = Number(job.progress ?? 0);
+        if (job.result_url) node.mediaUrl = job.result_url;
+        if (job.result_metadata) {
+          try {
+            const metadata = JSON.parse(job.result_metadata);
+            if (metadata && typeof metadata === "object") node.videoResult = metadata;
+          } catch { /* 保留旧任务中可用的画布元数据。 */ }
+        }
+        if (job.prompt) {
+          node.generationPrompt = job.prompt;
+          if (node.body === "生成完成 · 结果已回写" || node.body === job.prompt)
+            node.body = "";
+        }
       } catch { /* 保留现有内容，等待用户手动修正 */ }
     }));
 }

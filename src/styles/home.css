@@ -25,7 +25,7 @@ body.home-mode .home-v2 { position:fixed; inset:0; display:grid; grid-template-r
 .home-v2 > * { position:relative; z-index:1; }
 .home-v2 .home-nav { position:relative; z-index:20; width:min(var(--home-max),calc(100% - 40px)); height:72px; box-sizing:border-box; padding:0 4px; color:var(--ui-text); background:transparent; border:0; box-shadow:none; }
 .home-v2 .home-logo { color:var(--ui-text); gap:10px; }
-.home-v2 .home-logo > span { width:34px; height:34px; }
+.home-v2 .home-logo > span { width:32px; height:32px; flex:none; }
 .home-v2 .home-logo strong { font-size:16px; font-weight:650; letter-spacing:-.035em; }
 .home-v2 .home-nav .home-logo strong { display:flex; align-items:baseline; gap:5px; }
 .home-v2 .home-nav .home-logo strong small { color:var(--ui-muted); font-size:9px; font-weight:580; letter-spacing:.015em; }
@@ -227,8 +227,8 @@ body.home-mode .home-v2 { position:fixed; inset:0; display:grid; grid-template-r
   .home-v2 .home-process,.home-v2 .home-showcase { align-content:start; padding-top:54px; }
   .home-v2 :is(.home-continuity,.home-asset-orbit,.home-recovery) { grid-template-columns:1fr; align-content:center; gap:28px; }
   .home-v2 :is(.home-continuity,.home-asset-orbit,.home-recovery) h2 { font-size:clamp(38px,12vw,54px); }
-  .home-scene-rail { right:8px; }
-  .home-scene-rail button span,.home-scroll-cue span { display:none; }
+  .home-scene-rail { display:none; }
+  .home-scroll-cue span { display:none; }
   .home-feature-grid { grid-template-columns:1fr; }
   .home-feature-grid article { min-height:220px; }
   .home-v2 .home-showcase > header { display:grid; }

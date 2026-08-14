@@ -1,5 +1,5 @@
 import type { FlowLink, FlowNode } from "../nodes/node-types";
-import { hydrateGenerationPrompts } from "../services/generation";
+import { hydrateGenerationState } from "../services/generation";
 import { normalizeCanvasDocument } from "./document-normalizer";
 import { repairRestoredCanvas } from "./restoration";
 import { diffCanvasSnapshots, normalizeCanvasLinks, type CanvasSyncSnapshot } from "./sync";
@@ -64,7 +64,7 @@ export class CanvasLoadCoordinator {
       document.links = normalized.links;
       this.deps.clearViews();
       this.deps.nodes.splice(0, this.deps.nodes.length, ...normalized.nodes);
-      await hydrateGenerationPrompts(this.deps.nodes);
+      await hydrateGenerationState(this.deps.nodes);
       this.deps.links.splice(
         0,
         this.deps.links.length,

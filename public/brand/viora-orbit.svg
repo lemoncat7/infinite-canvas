@@ -5,6 +5,17 @@
       <stop offset=".5" stop-color="#5599DD"/>
       <stop offset="1" stop-color="#8277E8"/>
     </linearGradient>
+    <linearGradient id="sheen" x1="18" y1="38" x2="110" y2="86" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#78D9FF" stop-opacity="0"/>
+      <stop offset=".36" stop-color="#B7ECFF"/>
+      <stop offset=".54" stop-color="#FFFFFF"/>
+      <stop offset=".7" stop-color="#D9BDFF"/>
+      <stop offset="1" stop-color="#8D7CFF" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="lineGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="2.4" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
   </defs>
   <circle cx="64" cy="64" r="42" stroke="url(#orbit)" stroke-width="10"/>
   <circle cx="64" cy="64" r="25" fill="#EAF6FF" fill-opacity=".82"/>
@@ -12,4 +23,10 @@
   <circle cx="25" cy="71" r="7" fill="#77C7F6"/>
   <circle cx="103" cy="49" r="7" fill="#8277E8"/>
   <circle cx="65" cy="58" r="4.5" fill="#FFFFFF" stroke="#5D9DDE" stroke-width="3"/>
+  <circle cx="64" cy="64" r="42" fill="none" stroke="url(#sheen)" stroke-width="11" stroke-linecap="round" stroke-dasharray="72 192" filter="url(#lineGlow)">
+    <animate attributeName="stroke-dashoffset" from="264" to="0" dur="2.8s" repeatCount="indefinite"/>
+  </circle>
+  <path d="M25 71c13-17 27-22 41-14 13 7 22 7 37-8" fill="none" stroke="url(#sheen)" stroke-width="8" stroke-linecap="round" stroke-dasharray="34 72" filter="url(#lineGlow)">
+    <animate attributeName="stroke-dashoffset" from="106" to="0" dur="1.8s" repeatCount="indefinite"/>
+  </path>
 </svg>
