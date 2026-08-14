@@ -95,7 +95,6 @@ export class CanvasRenderingRuntimeFeature {
       state: state.snapshot,
       rebuildIndexes: () => this.connection.rebuild(),
       syncDom: () => options.nodeViews.sync(),
-      warmEditors: () => options.nodeViews.scheduleWarmup(),
       updateTasks: options.updateTasks,
       updateHistory: options.updateHistory,
       log: options.log,

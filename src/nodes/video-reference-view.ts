@@ -23,7 +23,7 @@ interface VideoReferenceViewOptions {
   scheduleSave: () => void;
   commitHistory: () => void;
   draw: () => void;
-  paintImage: (canvas: HTMLCanvasElement, url: string) => void;
+  paintThumbnail: (surface: HTMLElement, url: string) => void;
 }
 
 export function syncVideoReferenceView(options: VideoReferenceViewOptions) {
@@ -40,7 +40,7 @@ export function syncVideoReferenceView(options: VideoReferenceViewOptions) {
     scheduleSave,
     commitHistory,
     draw,
-    paintImage,
+    paintThumbnail,
   } = options;
   if (node.kind === "video") {
     const emptyState =
@@ -74,7 +74,7 @@ export function syncVideoReferenceView(options: VideoReferenceViewOptions) {
             getSwap()?.videoId === node.id &&
             getSwap()!.sourceId === source.id;
           return source.mediaUrl
-            ? `<i class="has-image${selected ? " swap-selected" : ""}" data-video-reference-source="${source.id}" title="参考图 ${index + 1} · 点击选择交换"><canvas class="reference-image" width="180" height="120" data-reference-url="${escapeHtml(source.mediaUrl)}"></canvas><b>${index + 1}</b></i>`
+            ? `<i class="has-image${selected ? " swap-selected" : ""}" data-video-reference-source="${source.id}" title="参考图 ${index + 1} · 点击选择交换"><span class="reference-image" data-reference-url="${escapeHtml(source.mediaUrl)}"></span><b>${index + 1}</b></i>`
             : `<i class="is-waiting${selected ? " swap-selected" : ""}" data-video-reference-source="${source.id}" title="参考图 ${index + 1} · 点击选择交换"><span>${index + 1}</span><small>等待</small></i>`;
         })
         .join("");
@@ -208,11 +208,11 @@ export function syncVideoReferenceView(options: VideoReferenceViewOptions) {
         });
       if (onscreen)
         emptyState
-          .querySelectorAll<HTMLCanvasElement>("[data-reference-url]")
-          .forEach((canvas) => {
-            if (canvas.dataset.paintedUrl !== canvas.dataset.referenceUrl) {
-              canvas.dataset.paintedUrl = canvas.dataset.referenceUrl;
-              paintImage(canvas, canvas.dataset.referenceUrl!);
+          .querySelectorAll<HTMLElement>("[data-reference-url]")
+          .forEach((surface) => {
+            if (surface.dataset.paintedUrl !== surface.dataset.referenceUrl) {
+              surface.dataset.paintedUrl = surface.dataset.referenceUrl;
+              paintThumbnail(surface, surface.dataset.referenceUrl!);
             }
           });
     }

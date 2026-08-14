@@ -1,5 +1,5 @@
 import { apiFetch } from "../services/api";
-import { mediaThumbnailUrl } from "../canvas/node-media-renderer";
+import { mediaThumbnailUrl } from "../canvas/thumbnail-surface-renderer";
 
 type ShowcaseAsset = {
   id: string;

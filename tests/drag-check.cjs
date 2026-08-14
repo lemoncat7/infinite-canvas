@@ -38,13 +38,13 @@ const { chromium } = require('playwright')
   const textMove = await dragAndMeasure(textNode, 120, 70)
   const imageMove = await dragAndMeasure(imageNode, 120, 70)
   const imageElements = await imageNode.locator('img').count()
-  const mediaCanvases = await imageNode.locator('.node-media-canvas').count()
-  const backgroundImage = await imageNode.locator('.node-media').evaluate(element => getComputedStyle(element).backgroundImage)
-  const result = { textMove, imageMove, imageElements, mediaCanvases, backgroundImage, popupCount, pageCount: context.pages().length, url: page.url(), navigations }
+  const mediaSurfaces = await imageNode.locator('.node-media-surface').count()
+  const backgroundImage = await imageNode.locator('.node-media-surface').evaluate(element => getComputedStyle(element).backgroundImage)
+  const result = { textMove, imageMove, imageElements, mediaSurfaces, backgroundImage, popupCount, pageCount: context.pages().length, url: page.url(), navigations }
   console.log(JSON.stringify(result))
   const stable = Math.abs(textMove.dx - 120) < 2 && Math.abs(textMove.dy - 70) < 2 && Math.abs(imageMove.dx - 120) < 2 && Math.abs(imageMove.dy - 70) < 2
   await dragAndMeasure(textNode, -120, -70)
   await dragAndMeasure(imageNode, -120, -70)
-  if (!stable || imageElements !== 0 || mediaCanvases !== 1 || backgroundImage !== 'none' || popupCount !== 0 || context.pages().length !== 1 || page.url() !== 'http://127.0.0.1:4173/') process.exitCode = 1
+  if (!stable || imageElements !== 0 || mediaSurfaces !== 1 || backgroundImage === 'none' || popupCount !== 0 || context.pages().length !== 1 || page.url() !== 'http://127.0.0.1:4173/') process.exitCode = 1
   await browser.close()
 })().catch(error => { console.error(error); process.exit(1) })

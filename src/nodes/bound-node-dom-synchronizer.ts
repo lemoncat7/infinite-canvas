@@ -1,5 +1,5 @@
 import type { FlowLink, FlowNode, NodeKind, TtsProviderOption, TtsVoiceOption } from "./node-types";
-import { synchronizeNodeDom } from "./node-dom-synchronizer";
+import { synchronizeNodeDom, type NodeDomStateRecord } from "./node-dom-synchronizer";
 import { syncBasicNodeContent } from "./node-dom-state";
 import { syncVoiceTtsAudioPanels } from "./voice-node-sync";
 import { syncVideoReferenceView } from "./video-reference-view";
@@ -29,7 +29,7 @@ type BoundNodeDomOptions = {
   setSwap: (value: Swap) => void;
   mountedIds: Set<number>;
   detached: Map<number, HTMLElement>;
-  states: Map<number, unknown[]>;
+  states: Map<number, NodeDomStateRecord>;
   cacheDetached: (id: number, element: HTMLElement) => void;
   createElement: (node: FlowNode) => HTMLElement;
   isGenerating: (node: FlowNode) => boolean;
@@ -42,8 +42,8 @@ type BoundNodeDomOptions = {
   scheduleSave: () => void;
   commitHistory: () => void;
   draw: () => void;
-  paintImage: (target: HTMLCanvasElement, url: string) => void;
-  paintVideo: (target: HTMLCanvasElement, url: string) => void;
+  paintThumbnail: (target: HTMLElement, url: string) => void;
+  clearThumbnail: (target: HTMLElement) => void;
   normalizePrompt: (value?: string) => string;
   displayModelName: (value?: string) => string;
   decodePrompt: (value?: string) => string;
@@ -106,7 +106,7 @@ export class BoundNodeDomSynchronizer {
           scheduleSave: options.scheduleSave,
           commitHistory: options.commitHistory,
           draw: options.draw,
-          paintImage: options.paintImage,
+          paintThumbnail: options.paintThumbnail,
         });
         renderNodeToolbar(element, node, locked);
         syncImageNodePanel({
@@ -139,8 +139,8 @@ export class BoundNodeDomSynchronizer {
           onscreen,
           locked,
           workflowWaiting,
-          paintImage: options.paintImage,
-          paintVideo: options.paintVideo,
+          paintThumbnail: options.paintThumbnail,
+          clearThumbnail: options.clearThumbnail,
         });
       },
     });

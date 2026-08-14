@@ -25,7 +25,6 @@ export class CanvasRenderFeature {
     state: () => PaintState;
     rebuildIndexes: () => void;
     syncDom: () => void;
-    warmEditors: () => void;
     updateTasks: () => void;
     updateHistory: () => void;
     log: (event: string, details: unknown) => void;
@@ -48,7 +47,6 @@ export class CanvasRenderFeature {
       renderer: () => this.renderer,
       rebuildIndexes: options.rebuildIndexes,
       syncDom: options.syncDom,
-      warmEditors: options.warmEditors,
       updateTasks: options.updateTasks,
       updateHistory: options.updateHistory,
     });

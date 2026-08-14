@@ -33,14 +33,16 @@ test("video card keeps one empty slot then follows the exact reference count", (
   expect(videoFrameLayout(240, 8).frameCount).toBe(8);
 });
 
-test("selected DOM video card repaints linked reference thumbnails", () => {
-  const source = readFileSync("src/canvas/node-media-renderer.ts", "utf8");
-  const repaint = source.slice(
-    source.indexOf("repaintUrl(url"),
-    source.indexOf("repaintAll()"),
-  );
-  expect(repaint).toContain("[data-reference-url=");
-  expect(repaint).toContain("this.drawImage(target, image)");
+test("card thumbnails use one non-draggable surface renderer", () => {
+  const renderer = readFileSync("src/canvas/thumbnail-surface-renderer.ts", "utf8");
+  const factory = readFileSync("src/nodes/node-view-factory.ts", "utf8");
+  const references = readFileSync("src/nodes/video-reference-view.ts", "utf8");
+  expect(renderer).toContain("class ThumbnailSurfaceRenderer");
+  expect(renderer).toContain("target.style.backgroundImage");
+  expect(factory).toContain('class="node-media-surface"');
+  expect(factory).not.toContain('class="node-media-canvas"');
+  expect(references).toContain('<span class="reference-image"');
+  expect(references).not.toContain('<canvas class="reference-image"');
 });
 
 test("selected video generator supports pointer drag reference swapping", () => {
@@ -118,7 +120,7 @@ test("dragging one selected video reference onto another swaps its order", async
   );
   await page.goto("/?canvasPerf=1#/canvas");
   await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
-  await page.mouse.click(710, 390);
+  await page.locator('.flow-node[data-id="3"] .video-node-summary').click();
   const frames = page.locator(".flow-node.selected .video-storyboard [data-video-reference-source]");
   await expect(frames).toHaveCount(2);
   const first = await frames.nth(0).boundingBox(), second = await frames.nth(1).boundingBox();
@@ -131,6 +133,78 @@ test("dragging one selected video reference onto another swaps its order", async
   await expect(frames.nth(1)).toHaveAttribute("data-video-reference-source", "1");
   await expect(frames.nth(0).locator("b")).toHaveText("1");
   await expect(frames.nth(1).locator("b")).toHaveText("2");
+});
+
+test("generation and card dragging preserve material thumbnail surfaces", async ({ page }) => {
+  const { canvas } = await mockApi(page, 3, true);
+  canvas.nodes.splice(0, canvas.nodes.length,
+    { id: 1, kind: "image", x: -440, y: -150, width: 220, height: 180, title: "素材一", body: "素材一", accent: "#7da9df", mediaUrl: "/api/assets/test-image/content/test.png" },
+    { id: 2, kind: "image", x: -440, y: 80, width: 220, height: 180, title: "素材二", body: "素材二", accent: "#7da9df", mediaUrl: "/api/assets/test-image/content/test.png" },
+    { id: 3, kind: "video", role: "generator", x: -80, y: -100, width: 290, height: 225, title: "视频生成", body: "镜头缓慢推进", accent: "#7da9df", videoSettings: { seconds: "5", resolution: "720p", aspectRatio: "16:9", referenceMode: "references" } },
+  );
+  canvas.links.splice(0, canvas.links.length,
+    { from: 1, to: 3, fromSide: "right", toSide: "left", inputOrder: 1 },
+    { from: 2, to: 3, fromSide: "right", toSide: "left", inputOrder: 2 },
+  );
+  await page.goto("/?canvasPerf=1#/canvas");
+  await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
+  const video = page.locator('.flow-node[data-id="3"]');
+  await video.click();
+  const thumbnails = page.locator(
+    '.flow-node .node-media-surface[data-thumbnail-url],.flow-node .reference-image[data-thumbnail-url]',
+  );
+  await expect(thumbnails).toHaveCount(4);
+  await expect.poll(() => thumbnails.evaluateAll((surfaces) =>
+    surfaces.every((surface) =>
+      (surface as HTMLElement).dataset.thumbnailState === "ready" &&
+      getComputedStyle(surface).backgroundImage !== "none"),
+  )).toBe(true);
+
+  const image = page.locator('.flow-node[data-id="1"]');
+  await image.click({ position: { x: 110, y: 90 } });
+  await image.locator("[data-image-generate]").evaluate(
+    (button: HTMLButtonElement) => button.click(),
+  );
+  await expect(image).not.toHaveClass(/selected/);
+  await expect(thumbnails).toHaveCount(4);
+  await expect.poll(() => thumbnails.evaluateAll((surfaces) =>
+    surfaces.every((surface) =>
+      (surface as HTMLElement).dataset.thumbnailState === "ready" &&
+      getComputedStyle(surface).backgroundImage !== "none"),
+  )).toBe(true);
+
+  await video.locator(".video-node-summary").click();
+  await video.locator("[data-video-generate]").click();
+  await expect(video).not.toHaveClass(/selected/);
+  await expect(thumbnails).toHaveCount(4);
+  await expect.poll(() => thumbnails.evaluateAll((surfaces) =>
+    surfaces.every((surface) =>
+      (surface as HTMLElement).dataset.thumbnailState === "ready" &&
+      getComputedStyle(surface).backgroundImage !== "none"),
+  )).toBe(true);
+
+  let popupCount = 0;
+  page.on("popup", () => { popupCount += 1; });
+  await video.locator(".video-node-summary").click();
+  const before = await video.boundingBox();
+  expect(before).toBeTruthy();
+  await page.mouse.move(before!.x + before!.width - 24, before!.y + 28);
+  await page.mouse.down();
+  await page.mouse.move(before!.x + before!.width + 70, before!.y + 88, { steps: 8 });
+  await page.mouse.up();
+  const after = await video.boundingBox();
+  expect(after).toBeTruthy();
+  expect(after!.x).toBeGreaterThan(before!.x + 40);
+  expect(popupCount).toBe(0);
+});
+
+test("node cache only retains rendered DOM and state identity includes the element", () => {
+  const cache = readFileSync("src/canvas/pixi-editor-cache.ts", "utf8");
+  const synchronizer = readFileSync("src/nodes/node-dom-synchronizer.ts", "utf8");
+  expect(cache).not.toContain("scheduleWarmup");
+  expect(cache).not.toContain("createElement");
+  expect(synchronizer).toContain("previous?.element === element");
+  expect(synchronizer).toContain("{ element, value: state }");
 });
 
 const snapNode = (id: number, x: number, y: number, width = 100, height = 80) => ({

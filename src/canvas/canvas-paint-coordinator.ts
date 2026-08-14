@@ -25,7 +25,6 @@ export class CanvasPaintCoordinator {
     renderer: () => CanvasRenderer | undefined;
     rebuildIndexes: () => void;
     syncDom: () => void;
-    warmEditors: () => void;
     updateTasks: () => void;
     updateHistory: () => void;
   }) {}
@@ -75,7 +74,6 @@ export class CanvasPaintCoordinator {
 
   private syncUi(state: PaintState) {
     this.options.syncDom();
-    this.options.warmEditors();
     this.options.updateTasks();
     this.options.updateHistory();
     const zoom = Math.round(state.camera.zoom * 100);

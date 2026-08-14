@@ -12,6 +12,11 @@ export type NodeDomSyncFlags = {
   colorTheme: string; videoDependency: string; swapSourceId: number;
 };
 
+export type NodeDomStateRecord = {
+  element: HTMLElement;
+  value: unknown[];
+};
+
 type Options = {
   viewport: HTMLElement; layer: HTMLElement; nodes: FlowNode[]; links: FlowLink[];
   camera: { x: number; y: number; zoom: number }; selectedId: number;
@@ -19,7 +24,7 @@ type Options = {
   batchIds: Set<number>; editingId: number; draggingId: number;
   agentSelecting: boolean; agentIds: Set<number>; colorTheme: string;
   swap: { videoId: number; sourceId: number } | null;
-  mountedIds: Set<number>; detached: Map<number, HTMLElement>; states: Map<number, unknown[]>;
+  mountedIds: Set<number>; detached: Map<number, HTMLElement>; states: Map<number, NodeDomStateRecord>;
   cacheDetached: (id: number, element: HTMLElement) => void;
   createElement: (node: FlowNode) => HTMLElement;
   isGenerating: (node: FlowNode) => boolean;
@@ -92,8 +97,8 @@ export function synchronizeNodeDom(options: Options) {
     };
     styleNodeEditor(element, node, flags);
     const state = nodeDomState(node, flags), previous = options.states.get(node.id);
-    if (nodeDomStateEquals(previous, state)) continue;
-    options.states.set(node.id, state);
+    if (previous?.element === element && nodeDomStateEquals(previous.value, state)) continue;
+    options.states.set(node.id, { element, value: state });
     options.syncNode(element, node, flags);
   }
 }

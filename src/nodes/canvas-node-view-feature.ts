@@ -12,13 +12,14 @@ import type {
 } from "./node-types";
 import { BoundNodeDomSynchronizer } from "./bound-node-dom-synchronizer";
 import { BoundNodeViewFactory } from "./bound-node-view-factory";
+import type { NodeDomStateRecord } from "./node-dom-synchronizer";
 
 type Tone = "success" | "warning" | "error" | "info";
 type Swap = { videoId: number; sourceId: number } | null;
 type CustomNodeModel = { id: string; kind: "image" | "video"; name: string; model: string };
 
 export class CanvasNodeViewFeature {
-  readonly states = new Map<number, unknown[]>();
+  readonly states = new Map<number, NodeDomStateRecord>();
   readonly mountedIds = new Set<number>();
   readonly spatialIndex = new CanvasSpatialIndex();
   readonly editorCache: PixiEditorCache;
@@ -34,7 +35,6 @@ export class CanvasNodeViewFeature {
     nodes: FlowNode[];
     links: FlowLink[];
     camera: { x: number; y: number; zoom: number };
-    world: (point: Point) => Point;
     getSelectedId: () => number;
     setSelectedId: (id: number) => void;
     getBatchIds: () => Set<number>;
@@ -86,8 +86,8 @@ export class CanvasNodeViewFeature {
     previewVoice: (node: FlowNode) => void | Promise<void>;
     generateTts: (node: FlowNode) => void | Promise<void>;
     copyPrompt: (value?: string) => void | Promise<void>;
-    paintImage: (target: HTMLCanvasElement, url: string) => void;
-    paintVideo: (target: HTMLCanvasElement, url: string) => void;
+    paintThumbnail: (target: HTMLElement, url: string) => void;
+    clearThumbnail: (target: HTMLElement) => void;
     notify: (message: string, type: Tone, detail?: string) => void;
   }) {
     this.getSelectedId = options.getSelectedId;
@@ -135,12 +135,6 @@ export class CanvasNodeViewFeature {
       notify: (message, type, detail) => options.notify(message, type, detail),
     });
     this.editorCache = new PixiEditorCache(
-      options.nodes,
-      options.camera,
-      this.spatialIndex,
-      options.world,
-      options.getSelectedId,
-      (node) => this.factory.create(node),
       (id) => this.states.delete(id),
     );
     this.synchronizer = new BoundNodeDomSynchronizer({
@@ -175,8 +169,8 @@ export class CanvasNodeViewFeature {
       scheduleSave: options.scheduleSave,
       commitHistory: options.commitHistory,
       draw: options.draw,
-      paintImage: options.paintImage,
-      paintVideo: options.paintVideo,
+      paintThumbnail: options.paintThumbnail,
+      clearThumbnail: options.clearThumbnail,
       normalizePrompt: options.normalizePrompt,
       displayModelName: options.displayModelName,
       decodePrompt: options.decodePrompt,
@@ -192,7 +186,6 @@ export class CanvasNodeViewFeature {
     if (selectedId) this.hiddenSelectedDomId = selectedId;
   }
   sync() { this.synchronizer.sync(); }
-  scheduleWarmup() { this.editorCache.scheduleWarmup(); }
   clearEditors() { this.editorCache.clear(); }
   clearStates() { this.states.clear(); }
   invalidateState(id: number) { this.states.delete(id); }

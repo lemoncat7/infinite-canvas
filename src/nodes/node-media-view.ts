@@ -6,8 +6,8 @@ interface NodeMediaViewOptions {
   onscreen: boolean;
   locked: boolean;
   workflowWaiting: boolean;
-  paintImage: (canvas: HTMLCanvasElement, url: string) => void;
-  paintVideo: (canvas: HTMLCanvasElement, url: string) => void;
+  paintThumbnail: (surface: HTMLElement, url: string) => void;
+  clearThumbnail: (surface: HTMLElement) => void;
 }
 
 export function syncNodeMediaView(options: NodeMediaViewOptions) {
@@ -17,65 +17,37 @@ export function syncNodeMediaView(options: NodeMediaViewOptions) {
     onscreen,
     locked,
     workflowWaiting,
-    paintImage,
-    paintVideo,
+    paintThumbnail,
+    clearThumbnail,
   } = options;
   const media = element.querySelector<HTMLElement>(".node-media")!,
-    mediaCanvas =
-      element.querySelector<HTMLCanvasElement>(".node-media-canvas")!;
+    mediaSurface =
+      element.querySelector<HTMLElement>(".node-media-surface")!;
   if (node.kind === "audio") {
     media.dataset.hasMedia = "true";
-    mediaCanvas.width = 2;
-    mediaCanvas.height = 2;
+    clearThumbnail(mediaSurface);
     const video =
       element.querySelector<HTMLVideoElement>(".node-media-video")!;
     video.hidden = true;
     video.removeAttribute("src");
   } else if (node.mediaUrl && onscreen) {
     media.dataset.hasMedia = "true";
-    const desiredWidth = Math.max(
-        180,
-        Math.min(480, Math.round(node.width * 1.35)),
-      ),
-      desiredHeight = Math.max(
-        140,
-        Math.min(420, Math.round(node.height * 1.35)),
-      ),
-      canvasResized =
-        mediaCanvas.width !== desiredWidth ||
-        mediaCanvas.height !== desiredHeight;
-    if (canvasResized) {
-      mediaCanvas.width = desiredWidth;
-      mediaCanvas.height = desiredHeight;
-    }
-    if (media.dataset.sourceKey !== node.mediaUrl || canvasResized) {
+    if (media.dataset.sourceKey !== node.mediaUrl) {
       media.dataset.sourceKey = node.mediaUrl;
       const video =
         element.querySelector<HTMLVideoElement>(".node-media-video")!;
-      if (node.kind === "video") {
-        media.style.removeProperty("background-image");
-        video.hidden = true;
-        video.removeAttribute("src");
-        paintVideo(mediaCanvas, node.mediaUrl);
-      } else {
-        media.style.removeProperty("background-image");
-        video.hidden = true;
-        video.removeAttribute("src");
-        paintImage(mediaCanvas, node.mediaUrl);
-      }
+      video.hidden = true;
+      video.removeAttribute("src");
+      paintThumbnail(mediaSurface, node.mediaUrl);
     }
   } else {
     delete media.dataset.hasMedia;
     delete media.dataset.sourceKey;
-    media.style.removeProperty("background-image");
+    clearThumbnail(mediaSurface);
     const video =
       element.querySelector<HTMLVideoElement>(".node-media-video")!;
     video.hidden = true;
     video.removeAttribute("src");
-    if (mediaCanvas.width !== 2 || mediaCanvas.height !== 2) {
-      mediaCanvas.width = 2;
-      mediaCanvas.height = 2;
-    }
   }
   const progress = element.querySelector<HTMLElement>(".node-progress i")!,
     progressTrack = element.querySelector<HTMLElement>(".node-progress")!,
