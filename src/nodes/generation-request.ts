@@ -1,5 +1,6 @@
 import type { FlowLink, FlowNode } from "./node-types";
 import { composeImageGenerationPrompt } from "./image-node";
+import { orderedImageReferences } from "./ordered-image-references";
 
 export type PreparedGenerationRequest = {
   prompt: string;
@@ -10,17 +11,13 @@ export type PreparedGenerationRequest = {
 };
 
 function orderedUpstream(source: FlowNode, output: FlowNode, nodes: FlowNode[], links: FlowLink[]) {
-  return links
-    .filter((link) => link.to === source.id && link.from !== output.id)
-    .map((link) => ({ link, node: nodes.find((item) => item.id === link.from) }))
-    .filter((item): item is { link: FlowLink; node: FlowNode } => Boolean(item.node))
-    .sort((left, right) => {
-      const leftOrder = left.link.inputOrder, rightOrder = right.link.inputOrder;
-      if (leftOrder !== undefined || rightOrder !== undefined)
-        return (leftOrder ?? Number.MAX_SAFE_INTEGER)-(rightOrder ?? Number.MAX_SAFE_INTEGER);
-      return left.node.y-right.node.y || left.node.x-right.node.x || left.node.id-right.node.id;
-    })
-    .map((item) => item.node);
+  const orderedImages = orderedImageReferences(source.id, nodes, links, output.id);
+  const imageIds = new Set(orderedImages.map((item) => item.source.id));
+  const other = links
+    .filter((link) => link.to === source.id && link.from !== output.id && !imageIds.has(link.from))
+    .map((link) => nodes.find((item) => item.id === link.from))
+    .filter((item): item is FlowNode => Boolean(item));
+  return orderedImages.map((item) => item.source).concat(other);
 }
 
 function cleanOriginalPrompt(value: string) {

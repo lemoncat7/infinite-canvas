@@ -33,6 +33,9 @@ export function imageSizeConstraint(size?: string) {
   return `输出要求：画面宽高比为 ${ratio ?? dimensions}，尺寸为 ${dimensions}，请直接按此比例构图，不要裁切。`;
 }
 
+export const TRANSPARENT_BACKGROUND_CONSTRAINT =
+  "透明背景要求：输出带 Alpha 通道的 PNG；主体之外全部透明，不生成纯色、渐变、环境、地面、墙面或投影背景；禁止边框、文字、标志和水印。";
+
 export function composeImageGenerationPrompt(
   node: FlowNode,
   userDescription: string,
@@ -86,6 +89,10 @@ export function composeImageGenerationPrompt(
           ? "除连接素材已有内容外，禁止新增人物、动物、车辆、文字、字幕、标识或水印。"
           : "",
     sizeGuide = normalizePromptText(imageSizeConstraint(node.imageSettings?.size)),
+    backgroundGuide =
+      node.imageSettings?.background === "transparent"
+        ? TRANSPARENT_BACKGROUND_CONSTRAINT
+        : "",
     optionalDynamic = [
       profileGuide,
       exclusionGuide,
@@ -98,7 +105,7 @@ export function composeImageGenerationPrompt(
       .map((value) => normalizePromptText(value))
       .filter(Boolean),
     mandatoryDynamic = [crowdGuide, sceneHardLock, sizeGuide].filter(Boolean),
-    dynamic = [...mandatoryDynamic, ...optionalDynamic].filter(Boolean),
+    dynamic = [...mandatoryDynamic, ...optionalDynamic, backgroundGuide].filter(Boolean),
     limit =
       profile === "character"
         ? 520
@@ -109,18 +116,17 @@ export function composeImageGenerationPrompt(
   if (full.length <= limit)
     return { prompt: full, corePrompt: dynamic.join("\n") };
   const mandatoryCore = mandatoryDynamic.join("\n"),
-    separators =
-      (description ? 1 : 0) +
-      (mandatoryCore ? 1 : 0) +
-      (mandatoryCore && optionalDynamic.length ? 1 : 0),
+    fixed = [description, mandatoryCore, backgroundGuide].filter(Boolean),
+    fixedLength = fixed.join("\n").length,
+    optionalSeparator = optionalDynamic.length && fixed.length ? 1 : 0,
     remaining = Math.max(
       0,
-      limit - description.length - mandatoryCore.length - separators,
+      limit - fixedLength - optionalSeparator,
     ),
     optionalCore = remaining
       ? compactPromptPart(optionalDynamic.join("\n"), remaining)
       : "",
-    corePrompt = [mandatoryCore, optionalCore].filter(Boolean).join("\n");
+    corePrompt = [mandatoryCore, optionalCore, backgroundGuide].filter(Boolean).join("\n");
   return {
     prompt: [description, corePrompt].filter(Boolean).join("\n"),
     corePrompt,

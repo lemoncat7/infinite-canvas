@@ -123,6 +123,7 @@ renderingRuntime = createCanvasRenderingComposition({
   content: () => contentRuntime,
   save: bindings.scheduleSave,
   notify: (message) => bindings.showToast(message, "warning"),
+  createFromConnectionDrop: (input) => controlsRuntime?.openConnectionMenu(input),
   log: clientLog,
 });
 bindings.rendering = renderingRuntime;

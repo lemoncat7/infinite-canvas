@@ -89,7 +89,7 @@ export class CanvasNodeRuntimeFeature {
   }
 
   add(kind: NodeKind = "image", position?: Point, deferRender = false) {
-    this.lifecycle.add(kind, position, deferRender);
+    return this.lifecycle.add(kind, position, deferRender);
   }
   addMedia(url: string, title: string, position: Point, kind: "image" | "video" = "image") {
     this.lifecycle.addMedia(url, title, position, kind);

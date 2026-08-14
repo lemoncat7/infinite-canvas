@@ -7,11 +7,14 @@ import type { CanvasGenerationRuntime } from "../services/canvas-generation-comp
 import type { CanvasWorkspaceContentRuntime } from "./canvas-workspace-content-runtime";
 import { CanvasControlsFeature } from "./canvas-controls-feature";
 import { themePreference } from "../services/theme-preference";
+import { connectionCreationKinds } from "../nodes/connection-rules";
+import type { FlowNode } from "../nodes/node-types";
 
 type Tone = "success" | "warning" | "error" | "info";
 
 export class CanvasControlsRuntime {
   readonly feature: CanvasControlsFeature;
+  private readonly nodes: FlowNode[];
 
   constructor(options: {
     foundation: RuntimeFoundation;
@@ -27,6 +30,7 @@ export class CanvasControlsRuntime {
     toast: (message: string, tone: Tone, detail?: string) => void;
   }) {
     const { foundation } = options;
+    this.nodes = foundation.nodes;
     const { canvas, zoomSlider, nodeLayer } = foundation.dom;
     const { links, connection, pointer, selection } = foundation;
     this.feature = new CanvasControlsFeature({
@@ -75,7 +79,21 @@ export class CanvasControlsRuntime {
         exitMultiSelect: () => options.input.marquee.exit(),
         enterMultiSelect: () => options.input.marquee.enter(),
         toWorld: options.rendering.world,
-        addNode: (kind, position) => options.nodeRuntime.add(kind, position),
+        addNode: (kind, position, deferRender) => options.nodeRuntime.add(kind, position, deferRender),
+        connectCreatedNode: (sourceId, node) => {
+          const next = options.rendering.connection.directedLink(sourceId, "right", node.id, "left");
+          if (!next) {
+            const index = foundation.nodes.indexOf(node);
+            if (index >= 0) foundation.nodes.splice(index, 1);
+            return false;
+          }
+          links.push(next);
+          selection.selectedId = 0;
+          options.updateEditor();
+          options.save();
+          options.draw();
+          return true;
+        },
         uploadAt: (position) => options.content().assets.openUploadAt(position),
       },
       appearance: {
@@ -97,5 +115,15 @@ export class CanvasControlsRuntime {
 
   get quickMenu() { return this.feature.quickMenu; }
   closeQuickMenu = () => this.feature.closeQuickMenu();
+  openConnectionMenu = (input: {
+    sourceId: number;
+    position: import("../nodes/node-types").Point;
+    clientX: number;
+    clientY: number;
+  }) => {
+    const source = this.nodes.find((node) => node.id === input.sourceId);
+    if (!source) return;
+    this.feature.openConnectionMenu({ ...input, kinds: connectionCreationKinds(source) });
+  };
   refreshAppearance = () => this.feature.refreshAppearance();
 }

@@ -204,6 +204,41 @@ database.run(
 );
 if (
   !getOne("SELECT id FROM notifications WHERE id = ?", [
+    "image-reference-order-2026-08-14",
+  ])
+)
+  database.run(
+    "INSERT INTO notifications (id,title,content,type,created_at,priority,auto_popup) VALUES (?,?,?,?,?,?,?)",
+    [
+      "image-reference-order-2026-08-14",
+      "图片参考素材现在清晰可控",
+      "图片生成卡片现已支持查看和交换参考素材顺序；在提示词中输入 @ 即可选择已连接素材，并自动插入对应的图号与素材名。交换素材后，提示词图号会同步更新，并与生成接口实际使用的图片顺序保持一致。",
+      "update",
+      "2026-08-14T12:00:00.000Z",
+      "important",
+      1,
+    ],
+  );
+if (
+  !getOne("SELECT id FROM app_migrations WHERE id = ?", [
+    "reissue-image-reference-order-popup-2026-08-14",
+  ])
+) {
+  database.run(
+    "DELETE FROM notification_popups WHERE notification_id = ?",
+    ["image-reference-order-2026-08-14"],
+  );
+  database.run(
+    "DELETE FROM notification_reads WHERE notification_id = ?",
+    ["image-reference-order-2026-08-14"],
+  );
+  database.run("INSERT INTO app_migrations (id,applied_at) VALUES (?,?)", [
+    "reissue-image-reference-order-popup-2026-08-14",
+    new Date().toISOString(),
+  ]);
+}
+if (
+  !getOne("SELECT id FROM notifications WHERE id = ?", [
     "comic-label-save-2026-08-03",
   ])
 )

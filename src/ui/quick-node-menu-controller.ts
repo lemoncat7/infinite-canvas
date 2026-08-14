@@ -1,7 +1,10 @@
 import type { FlowNode, NodeKind, Point } from "../nodes/node-types";
 
+type ConnectionCreation = { sourceId: number; kinds: Set<NodeKind> };
+
 export class QuickNodeMenuController {
   private position: Point | null = null;
+  private connectionCreation: ConnectionCreation | null = null;
 
   constructor(
     private readonly deps: {
@@ -16,7 +19,8 @@ export class QuickNodeMenuController {
       exitMultiSelect: () => void;
       enterMultiSelect: () => void;
       toWorld: (point: Point) => Point;
-      addNode: (kind: NodeKind, position: Point) => void;
+      addNode: (kind: NodeKind, position: Point, deferRender?: boolean) => FlowNode | undefined;
+      connectCreatedNode: (sourceId: number, node: FlowNode) => boolean;
       uploadAt: (position: Point | null) => void;
     },
   ) {
@@ -25,7 +29,36 @@ export class QuickNodeMenuController {
 
   close() {
     this.deps.menu.classList.remove("open");
+    this.deps.menu.classList.remove("connection-create");
     this.position = null;
+    this.connectionCreation = null;
+    this.restoreItems();
+  }
+
+  openForConnection(input: {
+    sourceId: number;
+    kinds: NodeKind[];
+    position: Point;
+    clientX: number;
+    clientY: number;
+  }) {
+    this.close();
+    this.position = input.position;
+    this.connectionCreation = { sourceId: input.sourceId, kinds: new Set(input.kinds) };
+    this.deps.menu.classList.add("connection-create");
+    this.deps.menu.querySelector("header span")!.textContent = "创建并连接";
+    this.deps.menu.querySelector("header small")!.textContent = "选择下游卡片";
+    this.deps.menu.querySelectorAll<HTMLElement>("[data-quick-upload],[data-quick-multi]")
+      .forEach((item) => { item.hidden = true; });
+    this.deps.menu.querySelectorAll<HTMLElement>("[data-quick-add]").forEach((item) => {
+      item.hidden = !this.connectionCreation!.kinds.has(item.dataset.quickAdd as NodeKind);
+    });
+    requestAnimationFrame(() => {
+      if (!this.connectionCreation) return;
+      this.deps.menu.classList.add("open");
+      this.place(input.clientX, input.clientY);
+      this.deps.menu.querySelector<HTMLButtonElement>("[data-quick-add]:not([hidden])")?.focus();
+    });
   }
 
   private bind() {
@@ -47,6 +80,7 @@ export class QuickNodeMenuController {
         return;
       }
       this.position = this.deps.toWorld({ x: event.clientX, y: event.clientY });
+      this.restoreItems();
       this.deps.menu.classList.remove("open");
       requestAnimationFrame(() => {
         this.deps.menu.classList.add("open");
@@ -58,11 +92,13 @@ export class QuickNodeMenuController {
       .forEach((button) =>
         button.addEventListener("click", (event) => {
           event.stopPropagation();
-          if (this.position)
-            this.deps.addNode(
-              button.dataset.quickAdd as NodeKind,
-              this.position,
-            );
+          if (this.position) {
+            const kind = button.dataset.quickAdd as NodeKind;
+            if (this.connectionCreation) {
+              const node = this.deps.addNode(kind, this.position, true);
+              if (node) this.deps.connectCreatedNode(this.connectionCreation.sourceId, node);
+            } else this.deps.addNode(kind, this.position);
+          }
           this.close();
         }),
       );
@@ -81,6 +117,13 @@ export class QuickNodeMenuController {
         this.close();
         this.deps.enterMultiSelect();
       });
+  }
+
+  private restoreItems() {
+    this.deps.menu.querySelector("header span")!.textContent = "创建节点";
+    this.deps.menu.querySelector("header small")!.textContent = "选择一种内容开始创作";
+    this.deps.menu.querySelectorAll<HTMLElement>("[data-quick-upload],[data-quick-multi],[data-quick-add]")
+      .forEach((item) => { item.hidden = false; });
   }
 
   private place(clientX: number, clientY: number) {

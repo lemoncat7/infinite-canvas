@@ -46,6 +46,7 @@ export type FlowNode = Point & {
   agentAuto?: boolean;
   comicData?: unknown;
   imageSettings?: { size?: string; quality?: string; background?: string };
+  imageReferenceMentions?: Array<{ sourceId: number; label: string }>;
   videoSettings?: {
     seconds?: string;
     resolution?: string;

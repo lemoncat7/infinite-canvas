@@ -94,6 +94,7 @@ export class CanvasNodeViewFeature {
     this.nodes = options.nodes;
     this.factory = new BoundNodeViewFactory({
       nodes: options.nodes,
+      links: options.links,
       batchIds: options.getBatchIds(),
       authUser: options.getAuthUser,
       customApiModels: options.getCustomModels,
@@ -130,6 +131,8 @@ export class CanvasNodeViewFeature {
       generateTts: options.generateTts,
       escapeHtml: options.escapeHtml,
       copyPrompt: options.copyPrompt,
+      commitHistory: options.commitHistory,
+      notify: (message, type, detail) => options.notify(message, type, detail),
     });
     this.editorCache = new PixiEditorCache(
       options.nodes,

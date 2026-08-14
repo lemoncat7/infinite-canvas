@@ -35,6 +35,12 @@ export class CanvasRenderingRuntimeFeature {
     updateTasks: () => void;
     updateHistory: () => void;
     notify: (message: string) => void;
+    createFromConnectionDrop: (input: {
+      sourceId: number;
+      position: Point;
+      clientX: number;
+      clientY: number;
+    }) => void;
     log: (event: string, details: unknown) => void;
   }) {
     this.camera = options.camera;
@@ -53,6 +59,7 @@ export class CanvasRenderingRuntimeFeature {
       save: options.save,
       draw: (syncDom) => this.render.draw(syncDom),
       notify: options.notify,
+      createFromDrop: options.createFromConnectionDrop,
     });
     options.store.subscribe((change) => {
       if (change.type === "node-position")

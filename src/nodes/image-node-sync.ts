@@ -1,24 +1,34 @@
-import type { FlowNode } from "./node-types";
+import type { FlowLink, FlowNode } from "./node-types";
+import {
+  orderedImageReferences,
+  synchronizeImageReferenceMentions,
+} from "./ordered-image-references";
 
 interface ImageNodeSyncOptions {
   element: HTMLElement;
   node: FlowNode;
+  nodes: FlowNode[];
+  links: FlowLink[];
   selected: boolean;
   locked: boolean;
   normalizePrompt: (value?: string) => string;
   displayModelName: (value?: string) => string;
   renderSubmit: (button: HTMLButtonElement, locked: boolean, disabled?: boolean) => void;
+  escapeHtml: (value: string) => string;
 }
 
 export function syncImageNodePanel(options: ImageNodeSyncOptions) {
   const {
     element,
     node,
+    nodes,
+    links,
     selected,
     locked,
     normalizePrompt,
     displayModelName,
     renderSubmit,
+    escapeHtml,
   } = options;
   element.querySelector<HTMLElement>(".node-info-popover")!.textContent =
     `${node.kind === "prompt" ? "标签" : node.kind === "image" ? "图片" : node.kind === "video" ? "视频" : node.kind === "voice" ? "语音配置" : node.kind === "tts" ? "TTS 文本" : node.kind === "audio" ? "音频" : "便签"}节点 · ${node.body.length} 字 · ${Math.round((node.fontScale ?? 1) * 100)}%`;
@@ -51,6 +61,34 @@ export function syncImageNodePanel(options: ImageNodeSyncOptions) {
   videoResultPrompt.querySelector<HTMLElement>("p")!.textContent =
     node.generationPrompt || "暂无生成提示词";
   if (node.kind === "image") {
+    const linkedReferences = orderedImageReferences(node.id, nodes, links),
+      referenceOffset = node.mediaUrl ? 1 : 0,
+      references = linkedReferences.map((item) => ({
+        ...item,
+        order: item.order + referenceOffset,
+      }));
+    if (node.imageReferenceMentions?.length && document.activeElement !== imagePanel.querySelector('[data-image-field="description"]')) {
+      const synchronized = synchronizeImageReferenceMentions(
+        node.body,
+        node.imageReferenceMentions,
+        references,
+      );
+      node.body = synchronized.prompt;
+      node.imageReferenceMentions = synchronized.mentions;
+    }
+    const manager = imagePanel.querySelector<HTMLElement>(
+      ".image-reference-manager",
+    )!;
+    manager.hidden = references.length === 0 && !node.mediaUrl;
+    manager.querySelector<HTMLElement>("[data-image-reference-list]")!.innerHTML =
+      (node.mediaUrl
+        ? `<span class="image-reference-base"><i><img src="${escapeHtml(node.mediaUrl)}" alt=""></i><b>图1</b><small>当前图片</small></span>`
+        : "") + references
+        .map(
+          ({ source, order }) =>
+            `<button type="button" data-image-reference-source="${source.id}" title="图${order} · ${escapeHtml(source.title)}"><span>${source.mediaUrl ? `<img src="${escapeHtml(source.mediaUrl)}" alt="">` : "等待"}</span><b>图${order}</b><small>${escapeHtml(source.title || "未命名素材")}</small></button>`,
+        )
+        .join("");
     if (node.model === "z-image-turbo" || node.model === "flux1-kontext-dev")
       node.model = "gpt-image-2";
     const model = imagePanel.querySelector<HTMLSelectElement>(

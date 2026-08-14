@@ -112,11 +112,14 @@ export class BoundNodeDomSynchronizer {
         syncImageNodePanel({
           element,
           node,
+          nodes: options.nodes,
+          links: options.links,
           selected: node.id === options.getSelectedId(),
           locked,
           normalizePrompt: options.normalizePrompt,
           displayModelName: options.displayModelName,
           renderSubmit: renderComposerSubmit,
+          escapeHtml: options.escapeHtml,
         });
         syncVideoNodePanel({
           element,

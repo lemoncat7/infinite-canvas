@@ -1,4 +1,11 @@
-import type { FlowLink, FlowNode, PortSide } from "./node-types";
+import type { FlowLink, FlowNode, NodeKind, PortSide } from "./node-types";
+
+export function connectionCreationKinds(source: FlowNode): NodeKind[] {
+  const kinds: NodeKind[] = ["prompt", "image", "video"];
+  if (source.kind === "image" && /\bBase\b/i.test(source.title)) kinds.push("voice");
+  if (source.kind === "voice") kinds.push("tts");
+  return kinds;
+}
 
 export class ConnectionRules {
   constructor(private readonly options: {

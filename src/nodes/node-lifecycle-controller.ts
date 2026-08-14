@@ -35,14 +35,16 @@ export class NodeLifecycleController {
 
   add(kind: NodeKind = "image", position?: Point, deferRender = false) {
     const id = this.options.allocateId();
-    if (id === null) return;
-    this.options.nodes.push(createNode(id, kind, position ?? this.options.center(), this.options.capabilities()));
+    if (id === null) return undefined;
+    const node = createNode(id, kind, position ?? this.options.center(), this.options.capabilities());
+    this.options.nodes.push(node);
     this.options.select(id);
     if (!deferRender) {
       this.options.updateEditor();
       this.options.save();
       this.options.draw();
     }
+    return node;
   }
 
   addMedia(url: string, title: string, position: Point, kind: "image" | "video" = "image") {

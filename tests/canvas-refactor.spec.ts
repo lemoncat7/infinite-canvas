@@ -6,6 +6,7 @@ import { NODE_SNAP_GAP, snapNodeGroup } from "../src/canvas/node-snap-controller
 import { positionDraggedNodes } from "../src/canvas/node-drag-positioner";
 import { VIDEO_CARD_LAYOUT, videoFrameLayout } from "../src/nodes/video-card-layout";
 import { NODE_CARD_STYLE } from "../src/nodes/node-card-style";
+import { composeImageGenerationPrompt, TRANSPARENT_BACKGROUND_CONSTRAINT } from "../src/nodes/image-node";
 
 test("shared toolbar styling only lays out actions allowed by the node type contract", () => {
   const chrome = readFileSync("src/styles/workspace-chrome.css", "utf8");
@@ -48,7 +49,7 @@ test("selected video generator supports pointer drag reference swapping", () => 
   expect(source).toContain("getBoundingClientRect()");
   expect(source).toContain("referenceAtPoint(event.clientX, event.clientY)");
   expect(source).toContain("exchangeReferences(");
-  expect(source).toContain("item.link.inputOrder = index + 1");
+  expect(source).toContain("exchangeImageReferenceOrder(");
   expect(source).toContain("frame.classList.add(\"is-dragging\")");
   expect(source).toContain("?.classList.add(\"drag-over\")");
 });
@@ -198,6 +199,24 @@ test("generation state never regresses from running to queued", () => {
       { status: "running", progress: 20 },
     ).progress,
   ).toBe(38);
+});
+
+test("transparent image setting adds a mandatory alpha-background constraint", () => {
+  const node = {
+    id: 1,
+    kind: "image" as const,
+    x: 0,
+    y: 0,
+    width: 280,
+    height: 220,
+    title: "透明素材",
+    body: "红色圆形图标",
+    accent: "#fff",
+    imageSettings: { background: "transparent" },
+  };
+  const result = composeImageGenerationPrompt(node, node.body, []);
+  expect(result.prompt).toContain(TRANSPARENT_BACKGROUND_CONSTRAINT);
+  expect(result.prompt.endsWith(TRANSPARENT_BACKGROUND_CONSTRAINT)).toBe(true);
 });
 
 test("mobile composer keeps its generate button inside its own footer", async ({ page }) => {
@@ -631,6 +650,35 @@ test("connection overlay and quick group movement stay in the Pixi path", async 
   await page.mouse.up();
   await expect(page.locator("[data-batch-count]")).toContainText("2");
   expect(errors).toEqual([]);
+});
+
+test("dropping an output connection on empty canvas creates and connects a compatible card", async ({ page }) => {
+  const { syncPayloads } = await mockApi(page, 3, true);
+  await page.goto("/?canvasPerf=1#/canvas");
+  await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
+  await expect.poll(async () => {
+    await page.mouse.click(460, 350);
+    return page.locator(".flow-node.selected").count();
+  }, { timeout: 10_000 }).toBe(1);
+  const output = page.locator(".flow-node.selected .node-port.output");
+  const box = await output.boundingBox();
+  expect(box).toBeTruthy();
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(760, 610, { steps: 10 });
+  await page.mouse.up();
+  const menu = page.locator("#quick-node-menu.connection-create");
+  await expect(menu).toBeVisible();
+  await expect(menu.locator("[data-quick-upload]")).toBeHidden();
+  await expect(menu.locator("[data-quick-multi]")).toBeHidden();
+  await menu.locator('[data-quick-add="image"]').click();
+  await expect(menu).toBeHidden();
+  await expect(page.locator(".flow-node")).toHaveCount(4);
+  await expect(page.locator(".flow-node.selected")).toHaveCount(0);
+  await expect.poll(() => syncPayloads.some((payload) => {
+    const serialized = JSON.stringify(payload);
+    return serialized.includes('"from":1') && /"to":([4-9]|[1-9]\d+)/.test(serialized);
+  })).toBe(true);
 });
 
 test("card creation, generation and repeated dragging never reveal foreign panels", async ({

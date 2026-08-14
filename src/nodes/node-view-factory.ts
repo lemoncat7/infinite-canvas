@@ -191,6 +191,18 @@ export function createNodeView(options: NodeViewFactoryOptions) {
   originalPrompt.innerHTML =
     '<header><span>原提示词 <small>不含动态约束 · 点击复制</small></span><button type="button" data-copy-current-prompt>复制当前描述</button></header><p role="button" tabindex="0" title="复制原提示词"></p>';
   element.querySelector(".image-config-panel textarea")!.before(originalPrompt);
+  const imageReferences = document.createElement("section");
+  imageReferences.className = "image-reference-manager";
+  imageReferences.hidden = true;
+  imageReferences.innerHTML =
+    '<header><span><b>参考素材</b><small>编号即实际发送顺序</small></span><em>点击两张素材可交换</em></header><div data-image-reference-list></div>';
+  originalPrompt.after(imageReferences);
+  const imageMentionMenu = document.createElement("div");
+  imageMentionMenu.className = "image-mention-menu";
+  imageMentionMenu.hidden = true;
+  imageMentionMenu.innerHTML =
+    '<header><b>引用连接素材</b><small>选择后插入当前图号</small></header><div data-image-mention-list></div>';
+  element.querySelector(".image-config-panel textarea")!.after(imageMentionMenu);
   const imagePromptText = originalPrompt.querySelector<HTMLElement>("p")!;
   imagePromptText.addEventListener(
     "click",

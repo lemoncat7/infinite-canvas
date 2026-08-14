@@ -11,6 +11,12 @@ export function createCanvasRenderingComposition(options: {
   content: () => CanvasWorkspaceContentRuntime;
   save: (recordHistory?: boolean) => void;
   notify: (message: string) => void;
+  createFromConnectionDrop: (input: {
+    sourceId: number;
+    position: import("../nodes/node-types").Point;
+    clientX: number;
+    clientY: number;
+  }) => void;
   log: (event: string, details?: unknown) => void;
 }) {
   const { foundation, interaction } = options;
@@ -42,6 +48,7 @@ export function createCanvasRenderingComposition(options: {
     updateTasks: () => interaction.tasks.update(),
     updateHistory: () => interaction.history.refreshControls(),
     notify: options.notify,
+    createFromConnectionDrop: options.createFromConnectionDrop,
     log: options.log,
   });
 }

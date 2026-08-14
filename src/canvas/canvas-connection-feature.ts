@@ -22,6 +22,12 @@ export class CanvasConnectionFeature {
     save: () => void;
     draw: (syncDom?: boolean) => void;
     notify: (message: string) => void;
+    createFromDrop: (input: {
+      sourceId: number;
+      position: Point;
+      clientX: number;
+      clientY: number;
+    }) => void;
   }) {
     this.rules = new ConnectionRules({
       nodes: options.nodes,
@@ -83,6 +89,7 @@ export class CanvasConnectionFeature {
           connection.snapRadius,
           connection.active.nodeId,
         );
+    let linked = false;
     if (target) {
       const next = this.directedLink(
         connection.active.nodeId,
@@ -93,10 +100,22 @@ export class CanvasConnectionFeature {
       if (next && !links.some((link) => link.from === next.from && link.to === next.to)) {
         links.push(next);
         this.options.save();
+        linked = true;
       }
     }
+    const pending = connection.active;
+    const shouldCreate = !linked && !target && pending.side === "right" &&
+      !this.hitNode(event.clientX, event.clientY) &&
+      Math.hypot(event.clientX - pending.origin.x, event.clientY - pending.origin.y) >= 28;
     connection.cancel();
     this.stopAutoPan();
     this.options.draw();
+    if (shouldCreate)
+      this.options.createFromDrop({
+        sourceId: pending.nodeId,
+        position: this.options.world({ x: event.clientX, y: event.clientY }),
+        clientX: event.clientX,
+        clientY: event.clientY,
+      });
   }
 }

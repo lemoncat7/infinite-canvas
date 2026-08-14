@@ -22,7 +22,6 @@ type NotificationCenterOptions = {
 export class NotificationCenterController {
   private notifications: AppNotification[] = [];
   private visibleCount = 3;
-  private popupCheckedUserId = "";
   private readonly loadObserver: IntersectionObserver;
 
   constructor(private readonly options: NotificationCenterOptions) {
@@ -48,7 +47,6 @@ export class NotificationCenterController {
     const userId = this.options.getUserId();
     if (!userId) {
       this.notifications = [];
-      this.popupCheckedUserId = "";
       this.render();
       return;
     }
@@ -179,8 +177,6 @@ export class NotificationCenterController {
   }
 
   private async claimDailyPopup(userId: string) {
-    if (this.popupCheckedUserId === userId) return;
-    this.popupCheckedUserId = userId;
     try {
       const response = await apiFetch("/api/notifications/claim-popup", {
         method: "POST",

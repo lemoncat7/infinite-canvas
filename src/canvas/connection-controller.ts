@@ -3,6 +3,7 @@ import type { Point, PortSide } from "../nodes/node-types";
 export type PendingConnection = {
   nodeId: number;
   side: PortSide;
+  origin: Point;
   pointer: Point;
 };
 
@@ -21,7 +22,7 @@ export class CanvasConnectionController {
   }
 
   begin(nodeId: number, side: PortSide, pointer: Point) {
-    this.active = { nodeId, side, pointer };
+    this.active = { nodeId, side, origin: { ...pointer }, pointer };
     this.snap = null;
   }
 

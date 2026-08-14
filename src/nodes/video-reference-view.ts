@@ -1,5 +1,9 @@
 import type { FlowLink, FlowNode } from "./node-types";
 import { VIDEO_CARD_LAYOUT } from "./video-card-layout";
+import {
+  exchangeImageReferenceOrder,
+  orderedImageReferences,
+} from "./ordered-image-references";
 
 export interface VideoReferenceSwap {
   videoId: number;
@@ -49,24 +53,7 @@ export function syncVideoReferenceView(options: VideoReferenceViewOptions) {
         emptyState.innerHTML = content;
       }
     } else {
-      const referenceLinks = links
-        .filter((link) => link.to === node.id)
-        .map((link) => ({
-          link,
-          source: nodes.find((item) => item.id === link.from),
-        }))
-        .filter(
-          (item): item is { link: FlowLink; source: FlowNode } =>
-            item.source?.kind === "image",
-        )
-        .sort(
-          (left, right) =>
-            (left.link.inputOrder ?? Number.MAX_SAFE_INTEGER) -
-              (right.link.inputOrder ?? Number.MAX_SAFE_INTEGER) ||
-            left.source.y - right.source.y ||
-            left.source.x - right.source.x ||
-            left.source.id - right.source.id,
-        );
+      const referenceLinks = orderedImageReferences(node.id, nodes, links);
       const totalReferences = referenceLinks.length,
         readyReferences = referenceLinks.filter((item) =>
           Boolean(item.source.mediaUrl),
@@ -106,13 +93,10 @@ export function syncVideoReferenceView(options: VideoReferenceViewOptions) {
             (link) => link.to === node.id && link.from === secondSourceId,
           );
         if (!first || !second) return false;
-        referenceLinks.forEach(
-          (item, index) => (item.link.inputOrder = index + 1),
-        );
-        const firstOrder = first.inputOrder!,
-          secondOrder = second.inputOrder!;
-        first.inputOrder = secondOrder;
-        second.inputOrder = firstOrder;
+        const firstOrder = referenceLinks.find((item) => item.link === first)!.order,
+          secondOrder = referenceLinks.find((item) => item.link === second)!.order;
+        if (!exchangeImageReferenceOrder(referenceLinks, firstSourceId, secondSourceId))
+          return false;
         setSwap(null);
         scheduleSave();
         commitHistory();

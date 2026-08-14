@@ -1,4 +1,4 @@
-import type { FlowNode, GenerationCapabilities, Point } from "./node-types";
+import type { FlowLink, FlowNode, GenerationCapabilities, Point } from "./node-types";
 import type { DomNodeDrag } from "./node-interaction-view";
 import { createNodeView } from "./node-view-factory";
 import {
@@ -15,6 +15,7 @@ type CustomNodeModel = { id: string; kind: "image" | "video"; name: string; mode
 
 type BoundNodeViewFactoryOptions = {
   nodes: FlowNode[];
+  links: FlowLink[];
   batchIds: Set<number>;
   authUser: () => { credits?: number; reservedCredits?: number } | null;
   customApiModels: () => CustomNodeModel[];
@@ -51,6 +52,8 @@ type BoundNodeViewFactoryOptions = {
   generateTts: (node: FlowNode) => void | Promise<void>;
   escapeHtml: (value: string) => string;
   copyPrompt: (value?: string) => void | Promise<void>;
+  commitHistory: () => void;
+  notify: (message: string, type: "info" | "success", detail?: string) => void;
 };
 
 export class BoundNodeViewFactory {
@@ -149,6 +152,8 @@ export class BoundNodeViewFactory {
       element,
       nodeId: node.id,
       liveNode,
+      nodes: this.options.nodes,
+      links: this.options.links,
       scheduleSave: this.options.scheduleSave,
       setEditingState: this.options.setEditingState,
       draw: this.options.draw,
@@ -156,6 +161,9 @@ export class BoundNodeViewFactory {
       selectNode: (id) => this.select(id),
       beginImageUpload: this.options.beginImageUpload,
       beginImageLibrary: this.options.beginImageLibrary,
+      commitHistory: this.options.commitHistory,
+      notify: this.options.notify,
+      escapeHtml: this.options.escapeHtml,
     });
     bindVideoNodePanel({
       videoPanel,

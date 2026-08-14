@@ -31,5 +31,7 @@ export class CanvasControlsFeature {
   }
 
   closeQuickMenu = () => this.quickMenuController.close();
+  openConnectionMenu = (input: Parameters<QuickNodeMenuController["openForConnection"]>[0]) =>
+    this.quickMenuController.openForConnection(input);
   refreshAppearance = () => this.appearance.refresh();
 }
