@@ -1,36 +1,15 @@
-/* Comic studio owns its complete visual language here. */
+/* Comic studio consumes the shared product theme and only owns its
+   conversation-specific presentation tokens. */
 :root {
-  --comic-panel:rgba(238,244,249,.72);
-  --comic-panel-raised:rgba(255,255,255,.54);
-  --comic-hairline: color-mix(in srgb, var(--ws-border) 82%, transparent);
-  --comic-hover: color-mix(in srgb, var(--ws-accent) 12%, transparent);
-  --comic-primary:linear-gradient(145deg,#6e91b5,#536f96);
-  --comic-glow: color-mix(in srgb,var(--ws-accent) 28%,transparent);
-  --comic-shadow:0 28px 80px rgba(3,12,22,.34),0 4px 16px rgba(3,12,22,.12);
-  --comic-user-surface:linear-gradient(145deg,rgba(109,143,180,.24),rgba(108,121,165,.14));
-  --comic-user-text:#24384b;
-  --comic-composer-surface:rgba(251,253,255,.72);
-  --comic-control:linear-gradient(145deg,rgba(255,255,255,.62),rgba(222,232,241,.46));
-  --comic-control-hover:linear-gradient(145deg,rgba(255,255,255,.88),rgba(214,227,239,.66));
-  --comic-shine:#537da6;
-  --comic-shine-soft:rgba(72,113,154,.34);
-}
-
-body[data-theme="dark"] {
-  --comic-panel:rgba(11,25,38,.95);
-  --comic-panel-raised:rgba(45,69,89,.66);
-  --comic-hairline:rgba(174,207,237,.21);
-  --comic-hover:rgba(143,182,220,.16);
-  --comic-primary:linear-gradient(145deg,#8fb6dc,#668fb8);
-  --comic-glow:rgba(126,176,224,.3);
-  --comic-shadow:0 30px 88px rgba(0,0,0,.48),0 5px 18px rgba(0,0,0,.2);
-  --comic-user-surface:linear-gradient(135deg,rgba(99,151,199,.43),rgba(69,93,148,.32));
-  --comic-user-text:#f1f6fb;
-  --comic-composer-surface:linear-gradient(145deg,rgba(47,70,90,.82),rgba(20,38,54,.88));
-  --comic-control:linear-gradient(145deg,rgba(57,80,99,.78),rgba(29,48,64,.76));
-  --comic-control-hover:linear-gradient(145deg,rgba(75,101,123,.84),rgba(40,63,82,.82));
-  --comic-shine:#c7ddf1;
-  --comic-shine-soft:rgba(135,177,217,.36);
+  --comic-panel-raised:color-mix(in srgb,var(--ui-surface-raised) 68%,transparent);
+  --comic-hairline:color-mix(in srgb,var(--ui-border) 82%,transparent);
+  --comic-hover:var(--ui-menu-item-hover);
+  --comic-primary:var(--ui-gradient-accent);
+  --comic-glow:var(--ui-accent-glow);
+  --comic-user-surface:linear-gradient(145deg,var(--ui-accent-soft),color-mix(in srgb,var(--ui-accent) 8%,var(--ui-surface) 92%));
+  --comic-user-text:var(--ui-text);
+  --comic-shine:var(--ui-accent-hover);
+  --comic-shine-soft:var(--ui-accent-glow);
 }
 
 .agent-comic-entry { min-width:86px; }
@@ -39,13 +18,11 @@ body[data-theme="dark"] {
 .comic-studio {
   position:fixed; z-index:70; right:20px; bottom:92px; display:flex;
   width:min(540px,calc(100vw - 32px)); height:min(680px,calc(100vh - 164px)); min-height:0;
+  --ws-text-secondary:var(--ui-floating-text-secondary); --ws-muted:var(--ui-floating-muted);
   isolation:isolate; flex-direction:column; overflow:hidden; color:var(--ws-text);
-  background:
-    radial-gradient(ellipse 72% 34% at 10% -4%,color-mix(in srgb,var(--ws-accent) 17%,transparent),transparent 70%),
-    radial-gradient(ellipse 54% 30% at 104% 18%,color-mix(in srgb,#7184c7 12%,transparent),transparent 72%),
-    var(--comic-panel);
-  border:1px solid var(--comic-hairline); border-radius:22px; box-shadow:var(--comic-shadow);
-  backdrop-filter:blur(28px) saturate(112%); opacity:0; translate:18px 0; scale:.985;
+  background-color:transparent; background-image:var(--ui-floating-material);
+  border:1px solid var(--ui-border-strong); border-radius:22px; box-shadow:var(--ui-shadow-floating),inset 0 1px rgba(255,255,255,.12);
+  backdrop-filter:blur(28px) saturate(138%); opacity:0; translate:18px 0; scale:.985;
   visibility:hidden; transition:opacity .2s ease,translate .28s cubic-bezier(.2,.8,.2,1),scale .28s ease,visibility .2s;
 }
 .comic-studio::before {
@@ -61,7 +38,7 @@ body[data-theme="dark"] {
 .comic-studio > header {
   position:relative; z-index:2; display:flex; min-height:68px; flex:none; align-items:center;
   justify-content:space-between; gap:14px; padding:0 16px 0 18px;
-  background:color-mix(in srgb,var(--comic-panel) 76%,transparent); border-bottom:1px solid var(--comic-hairline);
+  background:color-mix(in srgb,var(--ui-surface) 48%,transparent); border-bottom:1px solid var(--comic-hairline);
   box-shadow:0 1px rgba(255,255,255,.025); backdrop-filter:blur(22px);
 }
 .comic-studio > header > div:first-child { min-width:0; }
@@ -71,10 +48,11 @@ body[data-theme="dark"] {
 .comic-studio > header nav { display:flex; flex:none; align-items:center; gap:5px; }
 .comic-studio > header nav button {
   display:flex; min-width:34px; height:34px; padding:0 9px; align-items:center; justify-content:center; gap:6px;
-  color:var(--ws-text-secondary); background:var(--comic-control); border:1px solid var(--comic-hairline); border-radius:10px;
+  color:var(--ui-accent-hover); background:var(--ui-button-secondary); border:1px solid var(--ui-button-secondary-border); border-radius:10px;
   box-shadow:inset 0 1px rgba(255,255,255,.08),0 3px 10px rgba(3,12,22,.08); cursor:pointer;
 }
-.comic-studio > header nav button:hover,.comic-studio > header nav button.active { color:var(--ws-text); background:var(--comic-control-hover); border-color:color-mix(in srgb,var(--ws-accent) 28%,var(--comic-hairline)); }
+.comic-studio > header nav button:hover,.comic-studio > header nav button.active { color:var(--ws-text); background:var(--ui-button-secondary-hover); border-color:var(--ui-button-secondary-border); }
+.comic-studio > header nav button:disabled { color:var(--ws-muted); background:var(--ui-button-disabled); border-color:var(--comic-hairline); box-shadow:none; }
 .comic-studio > header nav button svg { width:17px; height:17px; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; }
 .comic-studio > header nav button span,.comic-studio > header nav button b { font-size:11px; font-weight:650; white-space:nowrap; }
 .comic-studio > header nav [data-comic-close] { width:34px; padding:0; }
@@ -90,8 +68,8 @@ body[data-theme="dark"] {
 .comic-message { position:relative; display:flex; max-width:92%; align-items:flex-start; gap:11px; animation:comic-message-in .24s ease both; }
 .comic-message > i {
   display:grid; width:29px; min-width:29px; height:29px; place-items:center; color:color-mix(in srgb,var(--ws-accent) 72%,var(--ws-text));
-  background:linear-gradient(145deg,color-mix(in srgb,var(--ws-accent) 14%,var(--comic-panel-raised)),var(--comic-panel-raised));
-  border:1px solid color-mix(in srgb,var(--ws-accent) 22%,var(--comic-hairline)); border-radius:10px; box-shadow:inset 0 1px rgba(255,255,255,.08),0 5px 16px rgba(3,12,22,.1); font-size:11px; font-style:normal;
+  background:var(--ui-icon-surface);
+  border:1px solid var(--ui-icon-border); border-radius:10px; box-shadow:inset 0 1px rgba(255,255,255,.08),var(--ui-shadow-sm); font-size:11px; font-style:normal;
 }
 .comic-message.assistant::before { position:absolute; top:35px; bottom:-13px; left:13px; width:2px; content:""; background:linear-gradient(var(--comic-shine),var(--comic-shine-soft) 38%,transparent); border-radius:999px; box-shadow:0 0 8px var(--comic-shine-soft); opacity:.72; }
 .comic-message.assistant:last-child::before { display:none; }
@@ -148,7 +126,7 @@ body[data-theme="dark"] {
   align-items:center; gap:8px; color:var(--ws-text-secondary); text-align:left; background:transparent; border:1px solid transparent; border-radius:10px;
 }
 .comic-label-menu > button:hover,.comic-label-menu > button.active { color:var(--ws-text); background:var(--ui-menu-item-hover); border-color:var(--comic-hairline); }
-.comic-label-menu > button > i { display:grid; width:28px; height:28px; place-items:center; background:var(--comic-panel-raised); border-radius:8px; font-style:normal; }
+.comic-label-menu > button > i { display:grid; width:28px; height:28px; place-items:center; color:var(--ui-accent-hover); background:var(--ui-icon-surface); border:1px solid var(--ui-icon-border); border-radius:8px; box-shadow:inset 0 1px rgba(255,255,255,.08),var(--ui-shadow-sm); font-style:normal; }
 .comic-label-menu > button > span { display:grid; min-width:0; gap:2px; }
 .comic-label-menu > button b,.comic-label-menu > button small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left; }
 .comic-label-menu > button b { font-size:11px; }.comic-label-menu > button small { color:var(--ws-muted); font-size:9px; }
@@ -158,9 +136,9 @@ body[data-theme="dark"] {
 .comic-composer {
   position:relative; display:grid; grid-template-columns:minmax(0,1fr) 40px; flex:none; align-items:end; gap:7px;
   margin:0 12px 12px; padding:7px 7px 7px 13px;
-  background:var(--comic-composer-surface);
-  border:1px solid var(--comic-hairline); border-radius:18px;
-  box-shadow:0 14px 38px rgba(3,12,22,.2),inset 0 1px rgba(255,255,255,.08); backdrop-filter:blur(24px);
+  background:var(--ui-floating-input-material);
+  border:1px solid var(--ui-border-strong); border-radius:18px;
+  box-shadow:0 14px 38px rgba(3,12,22,.24),inset 0 1px rgba(255,255,255,.1); backdrop-filter:blur(24px) saturate(128%);
 }
 .comic-composer::before {
   position:absolute; z-index:-1; inset:-2px; padding:1.5px; content:""; pointer-events:none;
@@ -170,7 +148,7 @@ body[data-theme="dark"] {
   -webkit-mask-composite:xor; mask-composite:exclude;
 }
 .comic-composer::after { display:none; }
-.comic-composer:focus-within { border-color:var(--comic-hairline); box-shadow:0 14px 38px rgba(3,12,22,.2),inset 0 1px rgba(255,255,255,.08); }
+.comic-composer:focus-within { border-color:var(--ui-accent); box-shadow:0 14px 38px rgba(3,12,22,.26),0 0 0 1px var(--ui-accent-soft),inset 0 1px rgba(255,255,255,.1); }
 .comic-composer:focus-within::before { opacity:1; filter:drop-shadow(0 0 4px var(--comic-shine-soft)); animation:comic-focus-orbit 2.6s linear infinite; }
 .comic-composer textarea { min-height:40px; max-height:120px; padding:9px 1px; color:var(--ws-text); background:transparent; border:0; box-shadow:none; outline:0; resize:none; font:500 13px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; }
 .comic-composer textarea:focus { border:0; box-shadow:none; }
@@ -195,9 +173,10 @@ body[data-theme="dark"] {
 .comic-plan-source { display:none; }
 .comic-brief-side,.comic-plan-side {
   position:fixed; z-index:71; isolation:isolate; min-height:0; overflow:hidden; color:var(--ws-text);
-  background:radial-gradient(ellipse 78% 28% at 6% 0,color-mix(in srgb,var(--ws-accent) 12%,transparent),transparent 72%),var(--comic-panel);
-  border:1px solid var(--comic-hairline); border-radius:18px; box-shadow:0 18px 52px rgba(3,12,22,.25);
-  backdrop-filter:blur(26px) saturate(110%); animation:comic-side-in .24s ease both;
+  --ws-text-secondary:var(--ui-floating-text-secondary); --ws-muted:var(--ui-floating-muted);
+  background-color:transparent; background-image:var(--ui-floating-material);
+  border:1px solid var(--ui-border-strong); border-radius:18px; box-shadow:var(--ui-shadow-floating),inset 0 1px rgba(255,255,255,.1);
+  backdrop-filter:blur(26px) saturate(138%); animation:comic-side-in .24s ease both;
 }
 .comic-brief-side { display:grid; align-content:start; gap:12px; padding:16px; overflow-y:auto; }
 .comic-brief-side[hidden],.comic-plan-side[hidden],.comic-plan-side:not(.studio-open),.comic-brief-side.desktop-collapsed,.comic-plan-side.desktop-collapsed { display:none; }
@@ -207,6 +186,8 @@ body[data-theme="dark"] {
 .comic-brief-side > header small::before,.comic-plan-head small::before { width:14px; height:1px; content:""; background:color-mix(in srgb,var(--ws-accent) 66%,transparent); }
 .comic-brief-side > header b { font-size:14px; line-height:1.45; }
 .comic-brief-side > header em { padding:4px 7px; color:var(--ws-muted); background:var(--comic-panel-raised); border:1px solid var(--comic-hairline); border-radius:999px; font-size:9px; font-style:normal; }
+.comic-brief-side > header em:is([data-state="generated"],[data-state="ready"]) { color:var(--ui-accent-hover); background:var(--ui-accent-soft); border-color:var(--ui-icon-border); box-shadow:0 0 12px var(--ui-accent-glow); }
+.comic-brief-side > header em[data-state="revision"] { color:var(--ui-warning); background:var(--ui-warning-soft); border-color:color-mix(in srgb,var(--ui-warning) 28%,var(--ui-border)); }
 .comic-brief-side [data-comic-brief-content] { display:grid; gap:8px; padding-top:10px; border-top:1px solid var(--comic-hairline); }
 .comic-brief-side [data-comic-brief-content] > p { display:grid; grid-template-columns:40px 1fr; gap:8px; margin:0; color:var(--ws-text-secondary); font-size:11px; line-height:1.58; }
 .comic-brief-side [data-comic-brief-content] b { color:var(--ws-text); font-size:10px; }
@@ -240,8 +221,9 @@ body[data-theme="dark"] {
   grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; box-sizing:border-box;
   background:linear-gradient(0deg,var(--ws-surface-solid) 74%,color-mix(in srgb,var(--ws-surface-solid) 82%,transparent)); border-top:1px solid var(--comic-hairline);
 }
-.comic-plan-actions > button { display:flex; min-width:0; height:38px; padding:0 8px; align-items:center; justify-content:center; gap:5px; color:var(--ws-text-secondary); background:var(--comic-control); border:1px solid var(--comic-hairline); border-radius:10px; box-shadow:inset 0 1px rgba(255,255,255,.07); font-size:10.5px; font-weight:650; white-space:nowrap; }
-.comic-plan-actions > button:hover { color:var(--ws-text); background:var(--comic-control-hover); }.comic-plan-actions > button[data-comic-canvas] { color:#f7fbff; background:var(--comic-primary); box-shadow:inset 0 1px rgba(255,255,255,.16),0 6px 16px color-mix(in srgb,var(--ws-accent) 18%,transparent); }
+.comic-plan-actions > button { display:flex; min-width:0; height:38px; padding:0 8px; align-items:center; justify-content:center; gap:5px; color:var(--ui-accent-hover); background:var(--ui-button-secondary); border:1px solid var(--ui-button-secondary-border); border-radius:10px; box-shadow:inset 0 1px rgba(255,255,255,.07); font-size:10.5px; font-weight:650; white-space:nowrap; }
+.comic-plan-actions > button:hover { color:var(--ws-text); background:var(--ui-button-secondary-hover); }.comic-plan-actions > button[data-comic-canvas] { color:#f7fbff; background:var(--comic-primary); box-shadow:inset 0 1px rgba(255,255,255,.16),0 6px 16px color-mix(in srgb,var(--ws-accent) 18%,transparent); }
+.comic-plan-actions > button:disabled { color:var(--ws-muted); background:var(--ui-button-disabled); border-color:var(--comic-hairline); box-shadow:none; }
 .comic-plan-actions svg { display:none; }
 
 .comic-mobile-tabs { display:none; }

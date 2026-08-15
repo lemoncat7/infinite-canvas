@@ -85,13 +85,20 @@ export class ComicStudioView {
     confirm.querySelector("small")!.textContent = plan
       ? "只调整已确认的内容"
       : "确认后开始正式构思";
-    state.textContent = plan
+    const briefState = plan
       ? pendingRevision
-        ? "待确认修改"
-        : "方案已生成"
+        ? "revision"
+        : "generated"
       : ready
-        ? "可以生成"
-        : "讨论中";
+        ? "ready"
+        : "discussing";
+    state.dataset.state = briefState;
+    state.textContent = {
+      revision: "待确认修改",
+      generated: "方案已生成",
+      ready: "可以生成",
+      discussing: "讨论中",
+    }[briefState];
     this.briefPanel.classList.toggle("ready", canConfirm);
     requestAnimationFrame(this.positionPanels);
   }
