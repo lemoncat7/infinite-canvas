@@ -35,9 +35,9 @@ body[data-theme] {
   --ui-menu-material:
     radial-gradient(ellipse at 10% -30%,rgba(255,255,255,.8),transparent 46%),
     linear-gradient(145deg,rgba(250,252,254,.92),rgba(225,233,241,.82));
-  --ui-dock-material:
-    radial-gradient(ellipse at 10% -30%,rgba(255,255,255,.8),transparent 46%),
-    linear-gradient(145deg,rgba(250,252,254,.92),rgba(225,233,241,.82));
+  --ui-chrome-material:
+    radial-gradient(ellipse at 10% -30%,rgba(255,255,255,.58),transparent 48%),
+    linear-gradient(145deg,rgba(250,252,254,.66),rgba(225,233,241,.5));
   --ui-inspiration-material:
     radial-gradient(ellipse at 10% -30%,rgba(255,255,255,.8),transparent 46%),
     linear-gradient(145deg,rgba(250,252,254,.92),rgba(225,233,241,.82));
@@ -103,9 +103,9 @@ body[data-theme="dark"],
   --ui-menu-material:
     radial-gradient(ellipse 72% 92% at 5% -26%,rgba(190,221,248,.24),transparent 55%),
     linear-gradient(145deg,rgba(54,76,96,.92),rgba(27,45,61,.94) 50%,rgba(13,27,40,.96));
-  --ui-dock-material:
-    radial-gradient(ellipse 78% 100% at 3% -30%,rgba(200,228,250,.3),transparent 54%),
-    linear-gradient(145deg,rgba(60,82,101,.93),rgba(30,48,64,.95) 49%,rgba(14,28,41,.97));
+  --ui-chrome-material:
+    radial-gradient(ellipse 78% 100% at 3% -30%,rgba(200,228,250,.2),transparent 56%),
+    linear-gradient(145deg,rgba(52,76,96,.62),rgba(25,45,62,.68) 49%,rgba(10,25,38,.72));
   --ui-inspiration-material:
     radial-gradient(ellipse 72% 92% at 5% -26%,rgba(190,221,248,.22),transparent 55%),
     linear-gradient(145deg,rgba(51,73,93,.92),rgba(25,43,59,.94) 50%,rgba(12,26,39,.96));

@@ -26,6 +26,7 @@ export class CanvasNodeViewFeature {
   private hiddenSelectedDomId = 0;
   private readonly getSelectedId: () => number;
   private readonly nodes: FlowNode[];
+  private readonly layer: HTMLElement;
   private readonly factory: BoundNodeViewFactory;
   private readonly synchronizer: BoundNodeDomSynchronizer;
 
@@ -92,6 +93,7 @@ export class CanvasNodeViewFeature {
   }) {
     this.getSelectedId = options.getSelectedId;
     this.nodes = options.nodes;
+    this.layer = options.layer;
     this.factory = new BoundNodeViewFactory({
       nodes: options.nodes,
       links: options.links,
@@ -196,6 +198,13 @@ export class CanvasNodeViewFeature {
       if (node && element)
         element.style.transform = `translate(${node.x}px, ${node.y}px)`;
     }
+  }
+  syncBatchSelection(ids: ReadonlySet<number>) {
+    this.layer
+      .querySelectorAll<HTMLElement>(".flow-node[data-id]")
+      .forEach((element) =>
+        element.classList.toggle("batch-selected", ids.has(Number(element.dataset.id))),
+      );
   }
 
 }

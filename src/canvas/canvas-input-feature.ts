@@ -31,6 +31,7 @@ export class CanvasInputFeature {
     hideSelectedDom: () => void;
     syncDraggedElements: (ids: Iterable<number>) => void;
     refreshBatchSelection: () => void;
+    syncBatchSelection: (ids: ReadonlySet<number>) => void;
     clearBatchSelection: () => void;
     toggleBatchNode: (id: number) => void;
     refreshCanvasModeHint: () => void;
@@ -132,6 +133,7 @@ export class CanvasInputFeature {
       world: options.world,
       updateEditor: options.updateEditor,
       refreshSelection: options.refreshBatchSelection,
+      syncSelectionOverlay: options.syncBatchSelection,
       clearSelection: options.clearBatchSelection,
       refreshHint: options.refreshCanvasModeHint,
       draw: options.draw,

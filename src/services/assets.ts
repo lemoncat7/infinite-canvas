@@ -79,12 +79,12 @@ export async function uploadProjectImages(projectId: string, files: File[]) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ files: payload }),
   });
-  if (!response.ok)
-    throw new Error(
-      response.status === 413
-        ? "图片过大，单张图片不能超过 100MB"
-        : `上传失败（${response.status}）`,
-    );
+  if (!response.ok) {
+    const result = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(result.error || (response.status === 413
+      ? "图片过大，单张图片不能超过 100MB"
+      : `上传失败（${response.status}）`));
+  }
   return (await response.json()) as UploadedAsset[];
 }
 

@@ -11,22 +11,22 @@ test("one theme source owns both cold neutral token systems", () => {
   expect(theme).toContain("body[data-theme]");
   expect(theme).toContain('body[data-theme="dark"]');
   expect(theme).toContain('--ui-bg:#05090f');
-  expect(theme).toContain('--ui-dock-material:');
+  expect(theme).toContain('--ui-chrome-material:');
   expect(theme).toContain('radial-gradient(ellipse 66% 52% at 86% -10%');
 });
 
-test("dock and dialogue materials can evolve independently", () => {
+test("workspace chrome and dialogue materials can evolve independently", () => {
   const theme = readFileSync("src/styles/theme.css", "utf8");
   const chrome = readFileSync("src/styles/workspace-chrome.css", "utf8");
   const inspiration = readFileSync("src/styles/inspiration.css", "utf8");
   const comic = readFileSync("src/styles/comic-studio.css", "utf8");
-  for (const token of ["--ui-dock-material", "--ui-inspiration-material", "--ui-comic-menu-material"])
+  for (const token of ["--ui-chrome-material", "--ui-inspiration-material", "--ui-comic-menu-material"])
     expect(theme).toContain(token);
-  expect(chrome).toContain("background-image:var(--ui-dock-material)");
+  expect(chrome.match(/background-image:var\(--ui-chrome-material\)/g)).toHaveLength(2);
   expect(inspiration).toContain("background-image:var(--ui-inspiration-material)");
   expect(comic).toContain("background-image:var(--ui-comic-menu-material)");
   expect(comic).not.toContain("--comic-menu:");
-  expect(chrome).not.toContain("--chrome-glass:var(--ui-dock-material)");
+  expect(chrome).not.toMatch(/--chrome-glass\s*:/);
 });
 
 test("comic studio owns one exact light and dark palette", () => {
@@ -122,8 +122,9 @@ test("legacy stylesheet cannot theme the image composer or model picker", () => 
 });
 
 test("image card thumbnails cover the card without theme-colored letterboxing", () => {
-  const renderer = readFileSync("src/canvas/node-media-renderer.ts", "utf8");
-  const draw = renderer.slice(renderer.indexOf("private drawImage"));
-  expect(draw).toContain("const scale = Math.max(");
-  expect(draw).not.toContain("const scale = Math.min(");
+  const renderer = readFileSync("src/canvas/thumbnail-surface-renderer.ts", "utf8");
+  const style = readFileSync("src/style.css", "utf8");
+  expect(renderer).toContain("target.style.backgroundImage");
+  expect(style).toContain(".node-media-surface");
+  expect(style).toContain("background-size:cover");
 });

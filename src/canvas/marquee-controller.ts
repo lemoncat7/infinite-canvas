@@ -7,6 +7,7 @@ type Options = {
   camera: { x: number; y: number; zoom: number }; interaction: CanvasInteractionController;
   selection: CanvasSelectionController; screen: (point: Point) => Point; world: (point: Point) => Point;
   updateEditor: () => void; refreshSelection: () => void; clearSelection: () => void;
+  syncSelectionOverlay: (ids: ReadonlySet<number>) => void;
   refreshHint: () => void; draw: () => void; notice: (title: string, detail: string) => void;
 };
 
@@ -54,6 +55,7 @@ export class MarqueeController {
     const worldRight = Math.max(marquee.worldStart.x, currentWorld.x), worldBottom = Math.max(marquee.worldStart.y, currentWorld.y);
     this.o.selection.batchIds.clear(); marquee.baseSelection.forEach((id) => this.o.selection.batchIds.add(id));
     for (const node of this.o.nodes) if (node.x < worldRight && node.x + node.width > worldLeft && node.y < worldBottom && node.y + node.height > worldTop) this.o.selection.batchIds.add(node.id);
+    this.o.syncSelectionOverlay(this.o.selection.batchIds);
     this.o.draw();
   };
   private startAutoPan() {

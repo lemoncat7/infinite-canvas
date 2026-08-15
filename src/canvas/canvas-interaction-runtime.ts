@@ -141,6 +141,7 @@ export class CanvasInteractionRuntime {
       syncDraggedElements: (ids) =>
         options.presentation().views.syncDraggedElements(ids, nodes),
       refreshBatchSelection: () => this.batch.refresh(),
+      syncBatchSelection: (ids) => options.presentation().views.syncBatchSelection(ids),
       clearBatchSelection: () => this.batch.clear(),
       toggleBatchNode: (id) => this.batch.toggle(id),
       refreshCanvasModeHint: () => this.batch.refreshModeHint(),

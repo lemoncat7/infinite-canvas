@@ -1,7 +1,6 @@
 /* Workspace chrome owns the shared top bar and node-card shell.
    Node-specific files own content layout only. */
 body:not(.home-mode)[data-theme] {
-  --chrome-glass:var(--ui-menu-material);
   --chrome-glass-border:color-mix(in srgb,var(--ui-border-strong) 48%,color-mix(in srgb,#fff 54%,transparent));
   --chrome-glass-shadow:0 18px 48px color-mix(in srgb,var(--ui-bg) 34%,transparent),inset 0 1px color-mix(in srgb,#fff 68%,transparent),inset 0 -1px color-mix(in srgb,var(--ui-accent) 18%,transparent);
   --chrome-surface-raised:color-mix(in srgb,var(--ui-surface-raised) 92%,transparent);
@@ -13,7 +12,7 @@ body:not(.home-mode)[data-theme] {
 body:not(.home-mode)[data-theme] :is(.topbar,.canvas-dock,.quick-node-menu) {
   color:var(--ui-text);
   background-color:transparent;
-  background-image:var(--chrome-glass);
+  background-image:var(--ui-chrome-material);
   border:1px solid var(--chrome-glass-border);
   box-shadow:var(--chrome-glass-shadow);
   backdrop-filter:blur(30px) saturate(148%) contrast(104%);
@@ -97,7 +96,7 @@ body:not(.home-mode)[data-theme] .canvas-dock {
   align-items:center;
   gap:3px;
   padding:7px;
-  background-image:var(--ui-dock-material);
+  background-image:var(--ui-chrome-material);
   border-radius:20px;
 }
 body:not(.home-mode)[data-theme] .canvas-dock::after {

@@ -715,9 +715,11 @@ test("connection overlay and quick group movement stay in the Pixi path", async 
   await page.mouse.down();
   await page.mouse.move(915, 455, { steps: 10 });
   await expect(page.locator(".canvas-marquee.open")).toBeVisible();
+  await expect(page.locator(".flow-node.batch-selected")).toHaveCount(2);
   await page.mouse.up();
   await page.keyboard.up("Control");
   await expect(page.locator("[data-batch-count]")).toContainText("2");
+  await expect(page.locator(".flow-node.batch-selected")).toHaveCount(2);
   await page.mouse.move(370, 350);
   await page.mouse.down();
   await page.mouse.move(470, 430, { steps: 10 });

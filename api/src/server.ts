@@ -45,6 +45,7 @@ import { createComicStageReader } from "./comic/stage-reader.js";
 import { applyComicAuditRepairs, comicAuditSubset } from "./comic/audit.js";
 import { comicAssetPrompt, comicAuditPrompt, comicScenePrompt, comicSceneViewPrompt, comicShotExpansionPrompt, comicShotPlanPrompt, comicStoryPrompt } from "./comic/prompts.js";
 import { SESSION_IDLE_MS, SessionStore, TRUSTED_DEVICE_MS } from "./auth/session-store.js";
+import { ImageUploadValidationError, validateImageUpload } from "./image-upload-validation.js";
 
 type CanvasPayload = {
   nodes: unknown[];
@@ -4493,10 +4494,16 @@ app.post("/projects/:projectId/assets", async (request, reply) => {
       files?: Array<{ name: string; mimeType: string; data: string }>;
     },
     uploaded = [];
-  for (const file of body.files ?? []) {
-    const bytes = Buffer.from(file.data, "base64");
-    if (bytes.length > 100 * 1024 * 1024)
-      return reply.code(413).send({ error: "Asset exceeds 100MB" });
+  let files: Awaited<ReturnType<typeof validateImageUpload>>[];
+  try {
+    files = await Promise.all((body.files ?? []).map(validateImageUpload));
+  } catch (error) {
+    if (error instanceof ImageUploadValidationError)
+      return reply.code(error.statusCode).send({ error: error.message });
+    throw error;
+  }
+  for (const file of files) {
+    const { bytes } = file;
     const id = randomUUID(),
       storageName = `${id}.bin`,
       now = new Date().toISOString();

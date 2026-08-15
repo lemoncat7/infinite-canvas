@@ -1,5 +1,10 @@
 import type { Point } from "../nodes/node-types";
 import { uploadProjectImages, type UploadedAsset } from "../services/assets";
+import {
+  IMAGE_FILE_ACCEPT,
+  isSupportedImageFile,
+  SUPPORTED_IMAGE_FORMAT_LABEL,
+} from "../services/image-file-format";
 
 type AssetUploadControllerOptions = {
   input: HTMLInputElement;
@@ -24,9 +29,9 @@ export class AssetUploadController {
   private busy = false;
 
   constructor(private readonly options: AssetUploadControllerOptions) {
-    options.input.accept = "image/*";
+    options.input.accept = IMAGE_FILE_ACCEPT;
     options.input.multiple = true;
-    options.nodeInput.accept = "image/*";
+    options.nodeInput.accept = IMAGE_FILE_ACCEPT;
     options.nodeInput.hidden = true;
     options.input.addEventListener("change", () => {
       const files = [...(options.input.files ?? [])];
@@ -75,9 +80,13 @@ export class AssetUploadController {
       this.options.onToast("图片正在上传，请稍候", "warning");
       return;
     }
-    const images = files.filter((file) => file.type.startsWith("image/"));
-    if (!images.length) {
-      this.options.onToast("仅支持上传图片", "warning");
+    const unsupported = files.filter((file) => !isSupportedImageFile(file));
+    if (unsupported.length) {
+      this.options.onToast(
+        "图片格式不支持",
+        "warning",
+        `支持 ${SUPPORTED_IMAGE_FORMAT_LABEL}；请检查：${unsupported.map((file) => file.name || "剪贴板图片").join("、")}`,
+      );
       return;
     }
     this.busy = true;
@@ -86,7 +95,7 @@ export class AssetUploadController {
     try {
       const uploaded = await uploadProjectImages(
         this.options.getProjectId(),
-        images,
+        files,
       );
       const first = uploaded[0];
       if (first && target.targetNodeId !== undefined)
