@@ -20,25 +20,23 @@ test("workspace chrome and dialogue materials can evolve independently", () => {
   const chrome = readFileSync("src/styles/workspace-chrome.css", "utf8");
   const inspiration = readFileSync("src/styles/inspiration.css", "utf8");
   const comic = readFileSync("src/styles/comic-studio.css", "utf8");
-  for (const token of ["--ui-chrome-material", "--ui-floating-material", "--ui-floating-input-material", "--ui-floating-text-secondary", "--ui-floating-muted", "--ui-inspiration-material", "--ui-comic-menu-material"])
+  for (const token of ["--ui-chrome-material", "--ui-floating-material", "--ui-floating-input-material", "--ui-floating-raised", "--ui-floating-hairline", "--ui-floating-footer-material", "--ui-message-user-material", "--ui-floating-text-secondary", "--ui-floating-muted", "--ui-inspiration-material"])
     expect(theme).toContain(token);
   expect(chrome.match(/background-image:var\(--ui-chrome-material\)/g)).toHaveLength(2);
   expect(inspiration).toContain("background-image:var(--ui-inspiration-material)");
-  expect(comic).toContain("background-image:var(--ui-comic-menu-material)");
-  expect(comic).not.toContain("--comic-menu:");
+  expect(comic).toContain("background-image:var(--ui-menu-material)");
   expect(chrome).not.toMatch(/--chrome-glass\s*:/);
 });
 
 test("comic studio consumes the shared semantic theme", () => {
   const comic = readFileSync("src/styles/comic-studio.css", "utf8");
   expect(comic.match(/background-image:var\(--ui-floating-material\)/g)).toHaveLength(2);
-  expect(comic).toContain('--comic-primary:var(--ui-gradient-accent)');
   expect(comic).toContain('background:var(--ui-floating-input-material)');
   expect(comic).not.toContain('--comic-composer-surface');
   expect(comic).toContain('background:var(--ui-button-secondary)');
   expect(comic.match(/background:var\(--ui-icon-surface\)/g)).toHaveLength(2);
   expect(comic).toContain('[data-state="generated"]');
-  expect(comic).not.toContain('--comic-control');
+  expect(comic).not.toMatch(/--comic-(?!focus-angle)/);
   expect(comic).not.toContain('body[data-theme="dark"]');
   expect(comic).not.toContain('--comic-panel:');
 });

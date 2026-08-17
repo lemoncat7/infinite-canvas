@@ -48,9 +48,6 @@ body[data-theme] {
   --ui-inspiration-material:
     radial-gradient(ellipse at 10% -30%,rgba(255,255,255,.8),transparent 46%),
     linear-gradient(145deg,rgba(250,252,254,.92),rgba(225,233,241,.82));
-  --ui-comic-menu-material:
-    radial-gradient(ellipse at 10% -30%,rgba(255,255,255,.8),transparent 46%),
-    linear-gradient(145deg,rgba(250,252,254,.92),rgba(225,233,241,.82));
   --ui-menu-item-hover:rgba(101,127,157,.1);
   --ui-danger:#b64050;
   --ui-danger-soft:rgba(182,64,80,.09);
@@ -61,6 +58,8 @@ body[data-theme] {
   --ui-overlay:rgba(31,42,54,.3);
   --ui-shadow-sm:0 8px 24px rgba(40,53,68,.09);
   --ui-shadow-lg:0 24px 72px rgba(40,53,68,.18);
+  --ui-shadow-control:0 3px 10px rgba(40,53,68,.08);
+  --ui-shadow-input:0 14px 38px rgba(40,53,68,.16);
   --ui-shadow-floating:0 32px 88px rgba(31,42,54,.24),0 8px 26px rgba(31,42,54,.12);
   --ui-scrollbar:rgba(91,108,126,.34);
   color-scheme:light;
@@ -122,10 +121,9 @@ body[data-theme="dark"],
   --ui-inspiration-material:
     radial-gradient(ellipse 72% 92% at 5% -26%,rgba(255,255,255,.13),transparent 55%),
     linear-gradient(145deg,rgba(57,60,66,.9),rgba(35,37,42,.93) 50%,rgba(22,24,28,.96));
-  --ui-comic-menu-material:
-    radial-gradient(ellipse 72% 92% at 5% -26%,rgba(255,255,255,.12),transparent 56%),
-    linear-gradient(145deg,rgba(55,58,64,.91),rgba(34,36,41,.94) 50%,rgba(21,23,27,.97));
   --ui-menu-item-hover:rgba(137,180,224,.14);
+  --ui-shadow-control:0 3px 10px rgba(0,0,0,.2);
+  --ui-shadow-input:0 14px 38px rgba(0,0,0,.36);
   --ui-shadow-floating:0 34px 96px rgba(0,0,0,.58),0 10px 30px rgba(0,0,0,.32);
   color-scheme:dark;
 }
@@ -140,6 +138,16 @@ body:not(.home-mode)[data-theme="dark"] {
 body[data-theme] { color:var(--ui-text); background:var(--ui-gradient-page); }
 
 body[data-theme] {
+  --ui-floating-raised:color-mix(in srgb,var(--ui-surface-raised) 68%,transparent);
+  --ui-floating-hairline:color-mix(in srgb,var(--ui-border) 82%,transparent);
+  --ui-floating-footer-material:
+    linear-gradient(0deg,
+      color-mix(in srgb,var(--ui-surface-solid) 92%,transparent) 74%,
+      color-mix(in srgb,var(--ui-surface-solid) 70%,transparent));
+  --ui-message-user-material:
+    linear-gradient(145deg,
+      var(--ui-accent-soft),
+      color-mix(in srgb,var(--ui-accent) 8%,var(--ui-surface) 92%));
   --ui-button-secondary:
     linear-gradient(145deg,
       color-mix(in srgb,var(--ui-accent) 16%,var(--ui-surface-raised)),

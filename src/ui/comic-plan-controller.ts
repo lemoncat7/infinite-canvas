@@ -60,7 +60,6 @@ export class ComicPlanController {
     confirm.querySelector("small")!.textContent = "任务运行期间请稍候";
     send.classList.add("thinking");
     status.textContent = revision ? "正在理解你的修改…" : "正在理解故事想法…";
-    status.style.setProperty("--comic-progress", "2%");
     status.classList.add("visible", "generating");
     const { context, visuals } = this.options.getInputs();
     try {
@@ -84,7 +83,6 @@ export class ComicPlanController {
             lastPhase = event.phase || lastPhase;
             const progress = Math.max(0, Math.min(100, event.progress || 0));
             const amount = event.receivedBytes ? ` · 已接收 ${(event.receivedBytes / 1024).toFixed(1)} KB` : "";
-            status.style.setProperty("--comic-progress", `${progress}%`);
             status.textContent = `${lastPhase} · ${progress}%${amount}`;
           } else if (event.type === "heartbeat") {
             const amount = event.receivedBytes ? ` · 已接收 ${(event.receivedBytes / 1024).toFixed(1)} KB` : "";
@@ -92,8 +90,6 @@ export class ComicPlanController {
               ? ` · 已等待 ${event.idleSeconds} 秒`
               : " · 持续接收中";
             status.textContent = `${lastPhase} · ${event.progress || 0}%${amount}${waiting}`;
-          } else if (event.type === "result") {
-            status.style.setProperty("--comic-progress", "100%");
           }
         },
       );

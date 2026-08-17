@@ -44,7 +44,6 @@ export class ComicSessionRecoveryView {
         : "";
       const progress = Number(snapshot.generationProgress) || 0;
       status.textContent = `${snapshot.generationStage || "正在生成完整剧本"} · ${progress}%${amount}`;
-      status.style.setProperty("--comic-progress", `${progress}%`);
       return;
     }
     if (snapshot.generationStatus === "interrupted" || snapshot.generationStatus === "failed") {
