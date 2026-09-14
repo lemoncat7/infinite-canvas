@@ -4754,15 +4754,7 @@ app.post("/jobs", async (request, reply) => {
       });
   }
   const finalPrompt = input.prompt.trim(),
-    promptLimit =
-      input.kind === "video"
-        ? 4000
-        : input.promptProfile === "character"
-          ? 600
-          : input.promptProfile === "storyboard" ||
-              input.promptProfile === "composite"
-            ? 400
-          : 320;
+    promptLimit = input.kind === "video" ? 4000 : 1024;
   if (finalPrompt.length > promptLimit)
     return reply
       .code(400)
