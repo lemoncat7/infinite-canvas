@@ -23,15 +23,19 @@ export class PixiCanvasRenderer implements CanvasRenderer {
   private readonly world = new Container();
   private readonly links = new Graphics();
   private readonly activeLinks = new Graphics();
+  private readonly flowFrames = Array.from({ length: 8 }, () => new Graphics());
+  private flowTimer = 0;
+  private flowFrame = 0;
+  private flowing = false;
   private readonly interaction = new Graphics();
   private grid?: TilingSprite;
   private lineGrid?: TilingSprite;
   private lastSnapshot?: CanvasRenderSnapshot;
   private backgroundKey = "";
   private linksKey = "";
-  private activeLinkTimer = 0;
-  private hasActiveLinks = false;
-  private activeDashOffset = 0;
+  private viewportVisible = true;
+  private focused = true;
+  private observer?: IntersectionObserver;
   private lost = false;
   private suspended = false;
 
@@ -42,7 +46,7 @@ export class PixiCanvasRenderer implements CanvasRenderer {
       autoDensity: true,
       backgroundAlpha: 0,
       preference: "webgl",
-      resolution: Math.min(devicePixelRatio || 1, innerWidth <= 780 ? 1.5 : 2),
+      resolution: Math.min(devicePixelRatio || 1, 1.5),
       resizeTo: window,
     });
     this.app.canvas.id = "canvas-pixi";
@@ -54,55 +58,67 @@ export class PixiCanvasRenderer implements CanvasRenderer {
     this.app.stage.addChild(this.background, this.grid, this.lineGrid, this.world, this.interaction);
     this.app.canvas.addEventListener("webglcontextlost", this.onContextLost);
     this.app.canvas.addEventListener("webglcontextrestored", this.onContextRestored);
+    this.focused = document.hasFocus();
+    document.addEventListener('visibilitychange', this.onVisibilityChange);
+    window.addEventListener('blur', this.onBlur);
+    window.addEventListener('focus', this.onFocus);
+    this.observer = new IntersectionObserver(entries => {
+      const visible = entries[0]?.isIntersecting ?? false;
+      if (visible === this.viewportVisible) return;
+      this.viewportVisible = visible;
+      if (!visible) this.stopFlow();
+      this.redrawLatest();
+    });
+    this.observer.observe(this.app.canvas);
   }
 
   render(snapshot: CanvasRenderSnapshot) {
     this.lastSnapshot = snapshot;
-    if (this.lost || this.suspended) return;
+    if (!this.canRender()) return;
     this.applyCamera(snapshot.camera);
     this.renderBackground(snapshot);
-    const byId = new Map(snapshot.nodes.map((node) => [node.id, node]));
     const linksKey = this.linkGeometryKey(snapshot);
     if (linksKey !== this.linksKey) {
       this.linksKey = linksKey;
-      this.renderLinkGeometry(snapshot, byId);
+      this.renderLinkGeometry(snapshot, new Map(snapshot.nodes.map((node) => [node.id, node])));
     }
     this.renderPendingConnection(snapshot);
     this.app.renderer.render(this.app.stage);
+    this.startFlow();
   }
 
   /** Gesture hot path updates transforms and link geometry only. */
   updateInteraction(snapshot: CanvasRenderSnapshot) {
-    if (this.lost || this.suspended) return;
-    this.applyCamera(snapshot.camera);
-    this.renderLinkGeometry(snapshot, new Map(snapshot.nodes.map((node) => [node.id, node])));
-    this.renderPendingConnection(snapshot);
-    this.app.renderer.render(this.app.stage);
+    this.render(snapshot);
   }
 
   pan(camera: CanvasRenderSnapshot["camera"]) {
-    if (this.lost || this.suspended) return;
+    if (this.lastSnapshot) this.lastSnapshot = { ...this.lastSnapshot, camera: { ...camera } };
+    if (!this.canRender()) return;
     this.applyCamera(camera);
     this.app.renderer.render(this.app.stage);
   }
 
   suspend() {
     this.suspended = true;
-    window.clearTimeout(this.activeLinkTimer);
-    this.activeLinkTimer = 0;
+    this.stopFlow();
   }
 
   resume() {
     this.suspended = false;
-    this.setActiveLinkAnimation(this.hasActiveLinks);
     if (this.lastSnapshot) this.render(this.lastSnapshot);
   }
 
   destroy() {
-    window.clearTimeout(this.activeLinkTimer);
+    this.stopFlow();
+    this.observer?.disconnect();
+    document.removeEventListener('visibilitychange', this.onVisibilityChange);
+    window.removeEventListener('blur', this.onBlur);
+    window.removeEventListener('focus', this.onFocus);
     this.app.canvas.removeEventListener("webglcontextlost", this.onContextLost);
     this.app.canvas.removeEventListener("webglcontextrestored", this.onContextRestored);
     this.app.destroy(true, { children: true });
+    for (const frame of this.flowFrames) frame.destroy({ context: true });
   }
 
   private createGrid(mode: "dots" | "lines") {
@@ -159,9 +175,12 @@ export class PixiCanvasRenderer implements CanvasRenderer {
     for (const node of snapshot.nodes) {
       mix(node.id); mix(Math.round(node.x * 10)); mix(Math.round(node.y * 10));
       mix(Math.round(node.width * 10)); mix(Math.round(node.height * 10));
-      mix(node.status === "queued" || node.status === "running" ? 1 : 0);
+      mix(node.status === "running" ? 1 : 0);
     }
-    for (const link of snapshot.links) { mix(link.from); mix(link.to); }
+    for (const link of snapshot.links) {
+      mix(link.from); mix(link.to);
+      for (const char of link.fromSide + link.toSide) mix(char.charCodeAt(0));
+    }
     mix(snapshot.selectedId); mix(snapshot.hoveredLinkIndex + 2); mix(snapshot.touchSelectedLinkIndex + 2); mix(snapshot.dark ? 1 : 0);
     return `${hash}:${snapshot.links.length}`;
   }
@@ -169,8 +188,8 @@ export class PixiCanvasRenderer implements CanvasRenderer {
   private renderLinkGeometry(snapshot: CanvasRenderSnapshot, byId: ReadonlyMap<number, RenderNode>) {
     const palette = canvasTheme(snapshot.dark);
     this.links.clear();
-    this.activeLinks.clear();
-    let activeCount = 0;
+    for (const frame of this.flowFrames) frame.clear();
+    this.flowing = false;
     snapshot.links.forEach((link, index) => {
       const from = byId.get(link.from), to = byId.get(link.to);
       if (!from || !to) return;
@@ -178,17 +197,20 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         curve = Math.max(55, Math.hypot(b.x - a.x, b.y - a.y) * 0.35),
         ca = control(a, link.fromSide, curve), cb = control(b, link.toSide, curve),
         highlighted = link.from === snapshot.selectedId || link.to === snapshot.selectedId || index === snapshot.hoveredLinkIndex || index === snapshot.touchSelectedLinkIndex,
-        active = [from.status, to.status].some((status) => status === "queued" || status === "running");
-      if (active) activeCount++;
+        active = [from.status, to.status].some((status) => status === "running");
       const style = {
         color: highlighted ? palette.linkHighlight : palette.link,
         alpha: highlighted ? 0.94 : 0.64,
         width: highlighted ? 3 : 2.25,
       };
-      if (active) this.drawDashedBezier(this.activeLinks, a, ca, cb, b, style, this.activeDashOffset);
+      if (active) {
+        this.flowing = true;
+        this.flowFrames.forEach((frame, index) => this.drawDashedBezier(frame, a, ca, cb, b, style, (20 - index * 2.5) % 20));
+      }
       else this.links.moveTo(a.x, a.y).bezierCurveTo(ca.x, ca.y, cb.x, cb.y, b.x, b.y).stroke(style);
     });
-    this.setActiveLinkAnimation(activeCount > 0);
+    this.activeLinks.context = this.flowFrames[this.flowFrame].context;
+    if (!this.flowing) this.stopFlow();
   }
 
   private drawDashedBezier(
@@ -222,11 +244,12 @@ export class PixiCanvasRenderer implements CanvasRenderer {
         const toRatio = step / steps;
         const from = { x: previous.x + (current.x - previous.x) * fromRatio, y: previous.y + (current.y - previous.y) * fromRatio };
         const to = { x: previous.x + (current.x - previous.x) * toRatio, y: previous.y + (current.y - previous.y) * toRatio };
-        if (distance % cycle < dash) graphics.moveTo(from.x, from.y).lineTo(to.x, to.y).stroke(style);
+        if (distance % cycle < dash) graphics.moveTo(from.x, from.y).lineTo(to.x, to.y);
         distance += length / steps;
       }
       previous = current;
     }
+    graphics.stroke(style);
   }
 
   private renderPendingConnection(snapshot: CanvasRenderSnapshot) {
@@ -239,28 +262,27 @@ export class PixiCanvasRenderer implements CanvasRenderer {
     if (pending.snapped) this.interaction.circle(pending.to.x, pending.to.y, 11).fill({ color, alpha: 0.18 }).circle(pending.to.x, pending.to.y, 5).fill({ color, alpha: 1 });
   }
 
-  private setActiveLinkAnimation(active: boolean) {
-    this.hasActiveLinks = active;
-    if (!active) {
-      window.clearTimeout(this.activeLinkTimer); this.activeLinkTimer = 0; this.activeLinks.alpha = 1; return;
-    }
-    if (this.activeLinkTimer || this.suspended || this.lost) return;
-    const animate = () => {
-      this.activeLinkTimer = -1;
-      if (this.suspended || this.lost || !this.hasActiveLinks) return;
-      this.activeDashOffset = (this.activeDashOffset - 2.8 + 20) % 20;
-      if (this.lastSnapshot) this.renderLinkGeometry(
-        this.lastSnapshot,
-        new Map(this.lastSnapshot.nodes.map((node) => [node.id, node])),
-      );
+  private canRender() { return !this.lost && !this.suspended && !document.hidden && this.focused && this.viewportVisible; }
+  private stopFlow() { window.clearTimeout(this.flowTimer); this.flowTimer = 0; }
+  private startFlow() {
+    if (this.flowTimer || !this.flowing || !this.canRender() || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    this.flowTimer = window.setTimeout(() => {
+      this.flowTimer = 0;
+      if (!this.canRender() || !this.flowing) return;
+      this.flowFrame = (this.flowFrame + 1) % this.flowFrames.length;
+      // Reuse prebuilt geometry. No node scan, Map creation or path rebuilding here.
+      this.activeLinks.context = this.flowFrames[this.flowFrame].context;
       this.app.renderer.render(this.app.stage);
-      this.activeLinkTimer = window.setTimeout(animate, 80);
-    };
-    this.activeLinkTimer = window.setTimeout(animate, 80);
+      this.startFlow();
+    }, 100);
   }
+  private redrawLatest() { if (this.canRender() && this.lastSnapshot) this.render(this.lastSnapshot); }
+  private readonly onVisibilityChange = () => { if (document.hidden) this.stopFlow(); else this.redrawLatest(); };
+  private readonly onBlur = () => { this.focused = false; this.stopFlow(); };
+  private readonly onFocus = () => { this.focused = true; this.redrawLatest(); };
 
   private readonly onContextLost = (event: Event) => {
-    event.preventDefault(); this.lost = true; document.body.classList.add("canvas-context-lost");
+    event.preventDefault(); this.lost = true; this.stopFlow(); document.body.classList.add("canvas-context-lost");
   };
   private readonly onContextRestored = () => {
     this.lost = false; this.linksKey = ""; this.backgroundKey = "";
