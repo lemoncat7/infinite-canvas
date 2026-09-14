@@ -5,11 +5,15 @@ async function fixture(page: Page, admin = true, withNode = false) {
   const providers = [{ id: 'p', name: '测试服务商', baseUrl: 'https://example.com', proxyUrl: '', enabled: true, hasKey: true, readOnly: false }]
   const models = [{ id: 'global:m', name: '全局图片模型', model: 'image-test', providerId: 'p', adapter: 'openai-image', kind: 'image', enabled: true, order: 0, creditCost: 0, capabilities: { referenceImages: 1, transparent: true, sizes: ['512x512', '1024x1024'], resolutions: [], aspectRatios: [], minSeconds: 1, maxSeconds: 18 } }]
   const defaults: Record<string, string> = { image: 'global:m' }
+  let devices = Array.from({ length: 9 }, (_, i) => ({ id: `device-${i}`, name: i === 0 ? '当前浏览器' : `设备 ${i}`, current: i === 0, lastUsedAt: new Date(Date.now() - i * 60000).toISOString() }))
   const state = () => ({ revision, imported: true, providers, models, defaults })
   await page.route('**/api/**', async route => {
     const req = route.request(), path = new URL(req.url()).pathname
     let body: unknown = {}; let status = 200
     if (path === '/api/users/me') body = { id: 'u', name: '测试管理员', username: 'test', email: 'test@example.invalid', credits: 10, isAdmin: admin }
+    else if (path === '/api/auth/devices') body = devices
+    else if (path === '/api/auth/devices/revoke-others') { devices = devices.filter(d => d.current); body = { ok: true } }
+    else if (path.startsWith('/api/auth/devices/') && req.method() === 'DELETE') { devices = devices.filter(d => d.id !== path.split('/').at(-1)); body = { ok: true } }
     else if (path === '/api/projects') body = [{ id: 'p1', name: '测试画布' }]
     else if (path === '/api/projects/p1/canvas') body = { nodes: withNode ? [{ id: 1, publicId: 'image-test-1', accent: '#8ee7ff', kind: 'image', x: -100, y: -90, width: 240, height: 180, title: '测试图片', body: '生成图片', model: 'global:m', imageSettings: { size: '512x512' }, status: 'idle', progress: 0 }] : [], links: [], camera: { x: 0, y: 0, zoom: 1 }, version: 1 }
     else if (path.includes('id-block')) body = { projectId: 'p1', start: 2, end: 10000 }
@@ -36,6 +40,7 @@ for (const width of [375, 1024, 1440]) for (const theme of ['light', 'dark']) te
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
   await fixture(page)
   await page.locator('#workspace-user').click()
+  await page.locator('#admin-actions summary').click()
   await page.locator('#open-global-models').click()
   const workspace = page.getByRole('dialog', { name: '全局模型管理', exact: true })
   await expect(workspace.getByText('全局图片模型', { exact: true })).toBeVisible()
@@ -71,6 +76,35 @@ test('ordinary users do not see admin entry', async ({ page }) => {
   await fixture(page, false)
   await page.locator('#workspace-user').click()
   await expect(page.locator('#open-global-models')).toBeHidden()
+  await expect(page.locator('#admin-actions')).toBeHidden()
+})
+
+for (const width of [375, 1440]) test(`account device list and admin submenu ${width}`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 844 })
+  await fixture(page)
+  await page.locator('#workspace-user').click()
+  const menu = page.locator('#workspace-user-menu'), rows = menu.locator('[data-trusted-devices] > div')
+  await expect(rows).toHaveCount(3)
+  await expect(rows.first()).toContainText('当前设备')
+  await menu.getByRole('button', { name: '显示更多（还有 6 台）' }).click()
+  await expect(rows).toHaveCount(8)
+  await menu.getByRole('button', { name: '收起', exact: true }).click()
+  await expect(rows).toHaveCount(3)
+  await expect(menu.locator('#open-global-models')).toBeHidden()
+  await menu.locator('#admin-actions summary').click()
+  await expect(menu.locator('#open-global-models')).toBeVisible()
+  await expect(menu.locator('#open-credit-admin')).toBeVisible()
+  expect(await menu.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true)
+  await page.screenshot({ path: `/tmp/canvas-account-menu-${width}.png` })
+  await menu.locator('#open-credit-admin').click()
+  await expect(page.locator('#credit-admin-form')).toBeVisible()
+  await expect(page.locator('#credit-redeem-form')).toBeHidden()
+  await page.locator('#lab-modal [data-lab-close]').first().click()
+  await page.locator('#workspace-user').click()
+  await expect(menu.locator('#admin-actions')).not.toHaveAttribute('open', '')
+  await menu.getByRole('button', { name: '退出 设备 1', exact: true }).click()
+  await expect(menu.locator('.device-list-status')).toHaveText('设备已退出')
+  await expect(menu.locator('.trusted-device-section > div:first-child small')).toContainText('8')
 })
 
 test('image composer uses catalog model and preserves configured custom size on reload', async ({ page }) => {

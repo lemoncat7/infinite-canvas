@@ -1,4 +1,5 @@
 import { apiFetch } from "../services/api";
+import { TrustedDevicesController } from "./trusted-devices-controller";
 
 export type AuthUser = {
   id: string;
@@ -28,6 +29,7 @@ type UserMenuControllerOptions = {
 
 export class UserMenuController {
   private visibleToken = "";
+  private readonly devices: TrustedDevicesController;
   private readonly renameButton = document.createElement("button");
 
   constructor(private readonly options: UserMenuControllerOptions) {
@@ -37,6 +39,7 @@ export class UserMenuController {
     this.renameButton.setAttribute("aria-label", "修改昵称");
     this.renameButton.textContent = "✎";
     options.menu.querySelector("header")!.append(this.renameButton);
+    this.devices = new TrustedDevicesController(options.menu.querySelector(".trusted-device-section")!, () => options.getUser()?.id);
     this.bindEvents();
   }
 
@@ -73,13 +76,18 @@ export class UserMenuController {
 
   clearToken() {
     this.visibleToken = "";
+    this.devices.reset();
   }
 
   close() {
     this.options.menu.classList.remove("open");
+    const adminMenu = this.options.menu.querySelector<HTMLDetailsElement>('#admin-actions');
+    if (adminMenu) adminMenu.open = false;
   }
 
   private bindEvents() {
+    // The canvas closes topbar menus on document clicks; internal disclosures stay open.
+    this.options.menu.addEventListener('click', event => event.stopPropagation());
     this.renameButton.addEventListener("click", (event) => {
       event.stopPropagation();
       void this.editNickname();
@@ -90,7 +98,7 @@ export class UserMenuController {
       this.options.closeTopbarMenus(opening);
       if (opening) {
         this.options.menu.classList.add("open");
-        void Promise.all([this.loadTokenState(), this.loadDevices()]);
+        void Promise.all([this.loadTokenState(), this.devices.load()]);
       }
     });
     this.options.logoutButton.addEventListener("click", () => {
@@ -99,8 +107,6 @@ export class UserMenuController {
     this.options.inviteCopyButton.addEventListener("click", () => {
       void this.copyInviteCode();
     });
-    this.options.menu.querySelector<HTMLButtonElement>("[data-revoke-other-devices]")!
-      .addEventListener("click", () => void this.revokeOtherDevices());
     this.options.menu
       .querySelector<HTMLButtonElement>("[data-token-refresh]")!
       .addEventListener("click", (event) => {
@@ -142,54 +148,6 @@ export class UserMenuController {
     } catch {
       code.textContent = "读取失败";
     }
-  }
-
-  private async loadDevices() {
-    const container = this.options.menu.querySelector<HTMLElement>("[data-trusted-devices]")!;
-    try {
-      const response = await apiFetch("/api/auth/devices");
-      const devices = await response.json() as Array<{ id: string; name: string; current: boolean; lastUsedAt: string }>;
-      if (!response.ok) throw new Error();
-      container.replaceChildren(...devices.map((device) => {
-        const row = document.createElement("div");
-        row.innerHTML = `<span><b>${this.escape(device.name)}</b><small>${device.current ? "当前设备" : this.relativeTime(device.lastUsedAt)}</small></span>`;
-        if (!device.current) {
-          const button = document.createElement("button");
-          button.type = "button";
-          button.textContent = "退出";
-          button.addEventListener("click", () => void this.revokeDevice(device.id, button));
-          row.append(button);
-        }
-        return row;
-      }));
-    } catch { container.innerHTML = "<small>设备读取失败</small>"; }
-  }
-
-  private async revokeDevice(id: string, button: HTMLButtonElement) {
-    button.disabled = true;
-    const response = await apiFetch(`/api/auth/devices/${encodeURIComponent(id)}`, { method: "DELETE" });
-    if (!response.ok) this.options.toast("设备退出失败", "error");
-    await this.loadDevices();
-  }
-
-  private async revokeOtherDevices() {
-    const response = await apiFetch("/api/auth/devices/revoke-others", { method: "POST" });
-    this.options.toast(response.ok ? "其他设备已退出" : "操作失败", response.ok ? "success" : "error");
-    await this.loadDevices();
-  }
-
-  private relativeTime(value: string) {
-    const minutes = Math.max(0, Math.floor((Date.now() - Date.parse(value)) / 60_000));
-    if (minutes < 1) return "刚刚活跃";
-    if (minutes < 60) return `${minutes} 分钟前`;
-    const hours = Math.floor(minutes / 60);
-    return hours < 24 ? `${hours} 小时前` : `${Math.floor(hours / 24)} 天前`;
-  }
-
-  private escape(value: string) {
-    const element = document.createElement("span");
-    element.textContent = value;
-    return element.innerHTML;
   }
 
   private async editNickname() {

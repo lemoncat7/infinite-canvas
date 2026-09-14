@@ -3423,10 +3423,11 @@ app.post("/auth/register", async (request, reply) => {
     );
     createDefaultProject(userId, now);
   }
-  const trustedToken = sessionStore.createTrustedDevice(userId, String(request.headers["user-agent"] ?? ""));
+  const deviceIdentity = browserDeviceIdentity(request);
+  const trustedToken = sessionStore.createTrustedDevice(userId, String(request.headers["user-agent"] ?? ""), deviceIdentity, trustedDeviceToken(request));
   const token = sessionStore.createSession(userId, now, sessionStore.trustedFamilyId(trustedToken));
   persist();
-  setAuthCookies(request, reply, token, trustedToken);
+  setAuthCookies(request, reply, token, trustedToken, deviceIdentity);
   if (!legacy)
     database.run("UPDATE users SET credits = 5 WHERE id = ?", [userId]);
   const createdUser = getOne(
@@ -3463,10 +3464,11 @@ app.post("/auth/login", async (request, reply) => {
     );
   if (!user || !verifyPassword(password, String(user.password_hash ?? "")))
     return reply.code(401).send({ error: "用户名、邮箱或密码错误" });
-  const trustedToken = sessionStore.createTrustedDevice(String(user.id), String(request.headers["user-agent"] ?? ""));
+  const deviceIdentity = browserDeviceIdentity(request);
+  const trustedToken = sessionStore.createTrustedDevice(String(user.id), String(request.headers["user-agent"] ?? ""), deviceIdentity, trustedDeviceToken(request));
   const token = sessionStore.createSession(String(user.id), new Date().toISOString(), sessionStore.trustedFamilyId(trustedToken));
   persist();
-  setAuthCookies(request, reply, token, trustedToken);
+  setAuthCookies(request, reply, token, trustedToken, deviceIdentity);
   return {
     id: user.id,
     name: user.name,
@@ -5263,6 +5265,10 @@ function sessionToken(request: FastifyRequest) {
 function trustedDeviceToken(request: FastifyRequest) {
   return cookieToken(request, "flow_trusted_device");
 }
+function browserDeviceIdentity(request: FastifyRequest) {
+  const value = cookieToken(request, 'flow_browser_device');
+  return /^[A-Za-z0-9_-]{43}$/.test(value) ? value : randomBytes(32).toString('base64url');
+}
 function cookieToken(request: FastifyRequest, name: string) {
   const cookie = String(request.headers.cookie ?? "")
     .split(";")
@@ -5324,11 +5330,12 @@ function setSessionCookie(
     `flow_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.ceil(SESSION_IDLE_MS / 1000)}${secureRequest(request) ? "; Secure" : ""}`,
   );
 }
-function setAuthCookies(request: FastifyRequest, reply: FastifyReply, session: string, trusted: string) {
+function setAuthCookies(request: FastifyRequest, reply: FastifyReply, session: string, trusted: string, deviceIdentity = browserDeviceIdentity(request)) {
   const secure = secureRequest(request) ? "; Secure" : "";
   reply.header("set-cookie", [
     `flow_session=${encodeURIComponent(session)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.ceil(SESSION_IDLE_MS / 1000)}${secure}`,
     `flow_trusted_device=${encodeURIComponent(trusted)}; Path=/api/auth; HttpOnly; SameSite=Lax; Max-Age=${Math.ceil(TRUSTED_DEVICE_MS / 1000)}${secure}`,
+    `flow_browser_device=${encodeURIComponent(deviceIdentity)}; Path=/api/auth; HttpOnly; SameSite=Lax; Max-Age=31536000${secure}`,
   ]);
 }
 function clearSessionCookie(request: FastifyRequest, reply: FastifyReply) {

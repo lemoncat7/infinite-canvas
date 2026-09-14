@@ -6,6 +6,7 @@ import "./styles/inspiration.css";
 import "./styles/canvas-guide.css";
 import "./styles/comic-studio.css";
 import "./models/admin.css";
+import './styles/account-menu.css';
 import "./services/theme-preference";
 import { bootstrap } from "./app/bootstrap";
 

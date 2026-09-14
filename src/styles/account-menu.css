@@ -1,0 +1,25 @@
+.topbar:has(#workspace-user-menu.open) { z-index: 80; }
+#workspace-user-menu { max-height: calc(100dvh - 88px); overflow-y: auto; overscroll-behavior: contain; box-sizing: border-box; }
+#workspace-user-menu #admin-actions[hidden], #lab-modal form[hidden] { display: none !important; }
+#workspace-user-menu #admin-actions > summary { display: flex; align-items: center; gap: 9px; min-height: 40px; padding: 6px 8px; list-style: none; border-radius: 8px; cursor: pointer; color: var(--ui-text); font: inherit; }
+#workspace-user-menu #admin-actions > summary::-webkit-details-marker { display: none; }
+#workspace-user-menu #admin-actions > summary > span { display: grid; place-items: center; width: 26px; height: 26px; color: var(--ui-accent); }
+#workspace-user-menu #admin-actions svg { width: 18px; height: 18px; }
+#workspace-user-menu #admin-actions b { font-size: 12px; font-weight: 600; }
+#workspace-user-menu #admin-actions .admin-chevron { margin-left: auto; width: 14px; height: 14px; }
+#workspace-user-menu #admin-actions[open] .admin-chevron { transform: rotate(90deg); }
+#workspace-user-menu #admin-actions > summary:hover, #workspace-user-menu #admin-actions[open] > summary { background: var(--ui-menu-item-hover); }
+#workspace-user-menu #admin-actions > summary:focus-visible, #workspace-user-menu .device-list-controls button:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
+#workspace-user-menu .admin-submenu { margin: 4px 0 6px 18px; padding-left: 8px; border-left: 1px solid var(--ui-border); }
+#workspace-user-menu .admin-submenu button { display: flex; align-items: center; width: 100%; min-height: 36px; padding: 8px 10px; text-align: left; }
+#workspace-user-menu .admin-submenu button b { white-space: nowrap; }
+#workspace-user-menu .admin-submenu button > span, #workspace-user-menu .admin-submenu button > small { display: none; }
+#workspace-user-menu [data-trusted-devices] { max-height: 210px; overflow-y: auto; overscroll-behavior: contain; }
+#workspace-user-menu .device-list-controls { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+#workspace-user-menu .device-list-controls button { border: 1px solid var(--ui-border); border-radius: 7px; background: var(--ui-surface-raised); color: var(--ui-text-secondary); padding: 5px 8px; min-height: 30px; font: inherit; font-size: 11px; cursor: pointer; }
+#workspace-user-menu .device-list-status { display: block; font-size: 11px; color: var(--ui-text-secondary); line-height: 1.5; }
+#workspace-user-menu .device-list-status:empty { display: none; }
+#lab-modal.credit-admin-mode .lab-orbit, #lab-modal.credit-admin-mode .credit-balance, #lab-modal.credit-admin-mode .credit-rule, #lab-modal.credit-admin-mode h2 + p { display: none; }
+@media (max-width: 640px) {
+  #workspace-user-menu #admin-actions > summary, #workspace-user-menu .admin-submenu button, #workspace-user-menu .device-list-controls button, #workspace-user-menu [data-trusted-devices] button { min-height: 44px; }
+}

@@ -4,6 +4,7 @@ import type { AuthUser } from "./user-menu-controller";
 type CreditLabControllerOptions = {
   modal: HTMLElement;
   openButton: HTMLElement;
+  adminButton?: HTMLElement;
   getUser: () => AuthUser | null;
   setUser: (user: AuthUser) => void;
   closeUserMenu: () => void;
@@ -27,6 +28,7 @@ export class CreditLabController {
       "textarea",
     )!;
     options.openButton.addEventListener("click", () => this.open());
+    options.adminButton?.addEventListener('click', () => { if (options.getUser()?.isAdmin) this.open(true); });
     options.modal
       .querySelectorAll<HTMLElement>("[data-lab-close]")
       .forEach((button) =>
@@ -48,7 +50,7 @@ export class CreditLabController {
       .addEventListener("click", () => void this.copyCodes());
   }
 
-  private open() {
+  private open(admin = false) {
     this.options.closeUserMenu();
     const user = this.options.getUser();
     const available = Math.max(
@@ -64,7 +66,11 @@ export class CreditLabController {
       Number(user?.reservedCredits ?? 0) > 0
         ? `${user!.reservedCredits} 点正在生成任务中冻结`
         : "";
-    this.adminForm.hidden = !user?.isAdmin;
+    const adminMode = admin && !!user?.isAdmin;
+    this.adminForm.hidden = !adminMode;
+    this.redeemForm.hidden = adminMode;
+    this.options.modal.classList.toggle('credit-admin-mode', adminMode);
+    this.options.modal.querySelector('h2')!.textContent = adminMode ? '充值码管理' : '创作点数';
     this.options.modal.classList.add("open");
   }
 

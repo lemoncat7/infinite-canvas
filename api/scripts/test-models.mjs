@@ -156,7 +156,7 @@ test('real API queue retains submitted configuration and cost after admin edits'
   let cookie = ''
   async function request(path, body, admin = false, method = body ? 'POST' : 'GET') {
     const response = await fetch(base + path, { method, headers: { 'content-type': 'application/json', ...(admin ? { 'x-admin-key': 'test-admin-only' } : { cookie }) }, body: body ? JSON.stringify(body) : undefined })
-    if (path === '/auth/register') cookie = response.headers.getSetCookie().map(value => value.split(';')[0]).join('; ')
+    if (path === '/auth/register' || path === '/auth/login') cookie = response.headers.getSetCookie().map(value => value.split(';')[0]).join('; ')
     const result = await response.json()
     assert.ok(response.ok, `${path}: ${response.status} ${JSON.stringify(result)}`)
     return result
@@ -195,4 +195,13 @@ test('real API queue retains submitted configuration and cost after admin edits'
   const answer = await request('/agents/prompt', { idea: '设计一只蓝色小鸟', kind: 'image' })
   assert.equal(answer.finalPrompt, '一只蓝色小鸟')
   assert.deepEqual(textCalls, ['custom-text-model'])
+  const identity = cookie.split('; ').find(value => value.startsWith('flow_browser_device='))
+  assert.ok(identity)
+  for (let i = 0; i < 3; i++) {
+    await request('/auth/login', { email: 'ordinary-model-test@example.com', password: 'test-password-only' })
+    assert.equal(cookie.split('; ').find(value => value.startsWith('flow_browser_device=')), identity)
+    const devices = await request('/auth/devices')
+    assert.equal(devices.length, 1)
+    assert.equal(devices[0].current, true)
+  }
 })

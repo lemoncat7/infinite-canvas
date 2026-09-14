@@ -4,6 +4,7 @@ import { FeedbackController } from "./feedback-controller";
 import type { AuthUser } from "./user-menu-controller";
 import { clearCatalog, loadModelCatalog } from '../models/catalog';
 import type { AdminModelController } from '../models/admin-controller';
+import { createAdminActionsMenu } from './admin-actions-menu';
 
 type Tone = "success" | "warning" | "error" | "info";
 
@@ -12,6 +13,7 @@ export class AccountToolsFeature {
   private readonly customApi: CustomApiController;
   private admin?: AdminModelController;
   private readonly adminButton = document.createElement('button');
+  private readonly adminMenu: HTMLDetailsElement;
 
   constructor(private readonly options: {
     getUser: () => AuthUser | null;
@@ -24,7 +26,11 @@ export class AccountToolsFeature {
   }) {
     this.adminButton.type = 'button'; this.adminButton.id = 'open-global-models'; this.adminButton.hidden = true;
     this.adminButton.innerHTML = '<span aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 15h8M10 7v4M14 13v4"/></svg></span><b>全局模型</b><small>管理员</small>';
-    document.querySelector('#workspace-logout')!.before(this.adminButton);
+    const creditAdminButton = document.createElement('button');
+    creditAdminButton.type = 'button'; creditAdminButton.id = 'open-credit-admin';
+    creditAdminButton.innerHTML = '<b>充值码管理</b>';
+    this.adminMenu = createAdminActionsMenu([this.adminButton, creditAdminButton]);
+    document.querySelector('#workspace-logout')!.before(this.adminMenu);
     this.adminButton.addEventListener('click', async () => {
       if (!options.getUser()?.isAdmin) return;
       this.admin ||= new (await import('../models/admin-controller')).AdminModelController({ isAdmin: () => !!options.getUser()?.isAdmin, closeUserMenu: options.closeUserMenu });
@@ -53,6 +59,7 @@ export class AccountToolsFeature {
     new CreditLabController({
       modal: document.querySelector<HTMLElement>("#lab-modal")!,
       openButton: document.querySelector<HTMLElement>("#open-lab")!,
+      adminButton: creditAdminButton,
       getUser: options.getUser,
       setUser: options.setUser,
       closeUserMenu: options.closeUserMenu,
@@ -74,6 +81,8 @@ export class AccountToolsFeature {
   get models() { return this.apiModels; }
   syncUser() {
     this.adminButton.hidden = !this.options.getUser()?.isAdmin;
+    this.adminMenu.hidden = !this.options.getUser()?.isAdmin;
+    if (this.adminMenu.hidden) this.adminMenu.open = false;
     if (!this.options.getUser()) { this.admin?.close(); clearCatalog(); }
   }
   async loadModels() {

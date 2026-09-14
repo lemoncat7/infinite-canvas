@@ -41,6 +41,9 @@ export class SessionStore {
       CREATE INDEX IF NOT EXISTS idx_trusted_devices_user ON trusted_devices(user_id);
       CREATE INDEX IF NOT EXISTS idx_trusted_devices_family ON trusted_devices(family_id);
     `);
+    if (!this.all('PRAGMA table_info(trusted_devices)', []).some(column => column.name === 'device_key'))
+      this.database.run('ALTER TABLE trusted_devices ADD COLUMN device_key TEXT');
+    this.database.run('CREATE INDEX IF NOT EXISTS idx_trusted_device_identity ON trusted_devices(user_id,device_key)');
     this.cleanup();
   }
 
@@ -53,12 +56,18 @@ export class SessionStore {
     return token;
   }
 
-  createTrustedDevice(userId: string, userAgent = "") {
+  createTrustedDevice(userId: string, userAgent = "", deviceIdentity = "", previousToken = "") {
     const token = randomBytes(48).toString("base64url");
     const now = new Date().toISOString();
+    const deviceKey = deviceIdentity ? this.hash(deviceIdentity) : null;
+    // Called only after password verification. Identity is never an authentication credential.
+    const previous = previousToken ? this.one('SELECT family_id FROM trusted_devices WHERE token_hash=? AND user_id=?', [this.hash(previousToken), userId]) : undefined;
+    const families = deviceKey ? this.all('SELECT DISTINCT family_id FROM trusted_devices WHERE user_id=? AND device_key=? AND revoked_at IS NULL', [userId, deviceKey]) : [];
+    if (previous) families.push(previous);
+    for (const family of new Set(families.map(row => String(row.family_id)))) this.revokeFamily(family, now);
     this.database.run(
-      "INSERT INTO trusted_devices (id,user_id,token_hash,family_id,device_name,user_agent,created_at,last_used_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?)",
-      [randomUUID(), userId, this.hash(token), randomUUID(), this.deviceName(userAgent), userAgent.slice(0, 500), now, now, new Date(Date.now() + TRUSTED_DEVICE_MS).toISOString()],
+      "INSERT INTO trusted_devices (id,user_id,token_hash,family_id,device_name,user_agent,created_at,last_used_at,expires_at,device_key) VALUES (?,?,?,?,?,?,?,?,?,?)",
+      [randomUUID(), userId, this.hash(token), randomUUID(), this.deviceName(userAgent), userAgent.slice(0, 500), now, now, new Date(Date.now() + TRUSTED_DEVICE_MS).toISOString(), deviceKey],
     );
     return token;
   }
@@ -86,8 +95,8 @@ export class SessionStore {
     const nextToken = randomBytes(48).toString("base64url");
     const nextId = randomUUID();
     this.database.run(
-      "INSERT INTO trusted_devices (id,user_id,token_hash,family_id,device_name,user_agent,created_at,last_used_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?)",
-      [nextId, row.user_id, this.hash(nextToken), row.family_id, this.deviceName(userAgent), userAgent.slice(0, 500), now, now, new Date(Date.now() + TRUSTED_DEVICE_MS).toISOString()],
+      "INSERT INTO trusted_devices (id,user_id,token_hash,family_id,device_name,user_agent,created_at,last_used_at,expires_at,device_key) VALUES (?,?,?,?,?,?,?,?,?,?)",
+      [nextId, row.user_id, this.hash(nextToken), row.family_id, this.deviceName(userAgent), userAgent.slice(0, 500), row.created_at, now, new Date(Date.now() + TRUSTED_DEVICE_MS).toISOString(), row.device_key ?? null],
     );
     this.database.run("UPDATE trusted_devices SET replaced_by=?,last_used_at=? WHERE id=?", [nextId, now, row.id]);
     return { status: "ok", userId: String(row.user_id), sessionToken: this.createSession(String(row.user_id), now, String(row.family_id)), trustedToken: nextToken };
@@ -109,8 +118,8 @@ export class SessionStore {
       `SELECT id,device_name,user_agent,created_at,last_used_at,expires_at,token_hash
        FROM trusted_devices
        WHERE user_id=? AND revoked_at IS NULL AND replaced_by IS NULL AND expires_at>?
-       ORDER BY last_used_at DESC`,
-      [userId, new Date().toISOString()],
+       ORDER BY (token_hash=?) DESC,last_used_at DESC,id ASC`,
+      [userId, new Date().toISOString(), currentHash],
     ).map((row) => ({
       id: String(row.id),
       name: String(row.device_name || this.deviceName(String(row.user_agent || ""))),
