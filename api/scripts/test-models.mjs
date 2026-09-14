@@ -101,10 +101,24 @@ test('routes enforce admin, same-origin mutations, revision, and redact discover
   assert.equal((await app.inject({ url: '/models/catalog' })).statusCode, 401)
   assert.equal((await app.inject({ url: '/admin/models', headers: { authorization: 'user' } })).statusCode, 403)
   assert.equal((await app.inject({ url: '/admin/model-providers', method: 'POST', headers: { authorization: 'admin', origin: 'https://evil.example' }, payload: {} })).statusCode, 403)
+  for (const origin of ['http://127.0.0.1:4173', 'https://canvas.example:2439']) {
+    const host = new URL(origin).host
+    const request = { url: '/admin/model-defaults', method: 'PUT', headers: { authorization: 'admin', origin, host }, payload: { revision: -1, defaults: {} } }
+    // Full authority passes origin validation and reaches the revision guard.
+    assert.equal((await app.inject(request)).statusCode, 409)
+    assert.equal((await app.inject({ ...request, headers: { ...request.headers, host: new URL(origin).hostname } })).statusCode, 403)
+  }
   const result = await app.inject({ url: '/admin/model-providers', method: 'POST', headers: { authorization: 'admin' }, payload: { revision: 0, name: 'No auth local', baseUrl: 'http://127.0.0.1:1', apiKey: 'PRIVATE_TEST_CREDENTIAL' } })
   assert.equal(result.statusCode, 200)
   assert.doesNotMatch(result.body, /PRIVATE_TEST_CREDENTIAL/)
   const id = result.json().providers[0].id
+  const beforeDiscovery = store.admin().revision
+  const changedEndpoint = await app.inject({ url: '/admin/model-providers/discover', method: 'POST', headers: { authorization: 'admin' }, payload: { providerId: id, baseUrl: 'https://different.example', apiKey: '' } })
+  assert.equal(changedEndpoint.statusCode, 400)
+  assert.doesNotMatch(changedEndpoint.body, /PRIVATE_TEST_CREDENTIAL/)
+  const draftDiscovery = await app.inject({ url: '/admin/model-providers/discover', method: 'POST', headers: { authorization: 'admin' }, payload: { name: 'Draft only', baseUrl: 'http://127.0.0.1:1' } })
+  assert.equal(draftDiscovery.statusCode, 502)
+  assert.equal(store.admin().revision, beforeDiscovery)
   const failed = await app.inject({ url: `/admin/model-providers/${id}/discover`, method: 'POST', headers: { authorization: 'admin' }, payload: {} })
   assert.equal(failed.statusCode, 502)
   assert.doesNotMatch(failed.body, /PRIVATE_TEST_CREDENTIAL/)

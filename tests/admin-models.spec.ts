@@ -53,6 +53,9 @@ for (const width of [375, 1024, 1440]) for (const theme of ['light', 'dark']) te
   await editor.getByLabel('API 密钥', { exact: false }).fill('test-secret')
   await editor.getByRole('button', { name: '显示密钥' }).click()
   await expect(editor.locator('[name=apiKey]')).toHaveAttribute('type', 'text')
+  await editor.getByRole('button', { name: '获取上游模型', exact: true }).click()
+  await expect(editor.locator('output')).toContainText('已获取 2 个模型')
+  await expect(editor.getByLabel('接口地址', { exact: true })).toHaveValue('https://api.example.com/v1')
   expect(await editor.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true)
   await editor.getByRole('button', { name: '保存配置' }).click()
   await expect(editor).not.toBeVisible()
@@ -60,7 +63,10 @@ for (const width of [375, 1024, 1440]) for (const theme of ['light', 'dark']) te
   await workspace.getByRole('button', { name: '模型目录', exact: true }).click()
   await workspace.getByRole('button', { name: '新增模型', exact: true }).click()
   await editor.getByLabel('显示名称', { exact: true }).fill('新的图片模型')
-  await editor.getByLabel('上游模型 ID', { exact: true }).fill('new-image-id')
+  await editor.getByRole('button', { name: '获取上游模型', exact: true }).click()
+  await editor.getByRole('combobox', { name: '选择上游模型', exact: true }).selectOption('new-image-id')
+  await expect(editor.getByLabel('上游模型 ID', { exact: true })).toHaveValue('new-image-id')
+  await expect(editor.getByLabel('显示名称', { exact: true })).toHaveValue('新的图片模型')
   await editor.getByRole('button', { name: '保存配置' }).click()
   await expect(workspace.getByText('新的图片模型', { exact: true })).toBeVisible()
   await workspace.getByRole('button', { name: '默认分配', exact: true }).click()
@@ -121,4 +127,19 @@ test('image composer uses catalog model and preserves configured custom size on 
   await expect(size).toHaveValue('512x512')
   await size.selectOption('1024x1024')
   await expect(panel.locator('[data-image-settings-label]')).toContainText('1:1')
+})
+
+test('legacy upstream ID stays selected without duplicating the catalog model', async ({ page }) => {
+  await fixture(page, false, true)
+  await page.route('**/api/projects/p1/canvas', route => route.fulfill({ json: {
+    nodes: [{ id: 1, publicId: 'legacy-image', accent: '#8ee7ff', kind: 'image', x: -100, y: -90, width: 240, height: 180, title: '旧图片', body: '生成图片', model: 'image-test', status: 'idle', progress: 0 }],
+    links: [], camera: { x: 0, y: 0, zoom: 1 }, version: 1,
+  } }))
+  await page.reload()
+  await page.locator('.flow-node .image-empty-state b').click()
+  const panel = page.locator('.flow-node.selected > .image-config-panel')
+  await expect(panel.locator('[data-image-model-label]')).toHaveText('全局图片模型')
+  await expect(panel.locator('[data-image-field="model"] option')).toHaveCount(1)
+  await expect(panel.locator('[data-image-field="model"]')).toHaveValue('image-test')
+  await expect(panel.locator('[data-image-model="image-test"]')).toHaveCount(1)
 })

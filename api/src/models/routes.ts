@@ -3,6 +3,7 @@ import { ModelStore } from './store.js'
 import { ModelConfigError } from './types.js'
 import { discoverModels } from './network.js'
 import { configuredProvider } from './runtime.js'
+import { providerInput, endpoint } from './validation.js'
 
 export function registerModelRoutes(app: FastifyInstance, store: ModelStore, guards: {
   user(request: FastifyRequest, reply: FastifyReply): unknown;
@@ -39,6 +40,13 @@ export function registerModelRoutes(app: FastifyInstance, store: ModelStore, gua
     busy.add(key); try { return await run() } finally { busy.delete(key) }
   }
   route('POST', '/admin/model-providers/:id/discover', (_body, id) => exclusive(id, async () => ({ models: await discoverModels(store.connection(id)), checkedAt: new Date().toISOString() })))
+  route('POST', '/admin/model-providers/discover', body => exclusive('draft-discovery', async () => {
+    const previous = typeof body.providerId === 'string' && body.providerId ? store.connection(body.providerId) : undefined
+    if (previous?.apiKey && !body.apiKey && endpoint(body.baseUrl) !== endpoint(previous.baseUrl))
+      throw new ModelConfigError('接口地址已改变，请重新填写密钥后获取模型，避免将原密钥发送到新地址')
+    const connection = providerInput({ ...body, name: body.name || '连接测试' }, 'draft', previous)
+    return { models: await discoverModels(connection), checkedAt: new Date().toISOString() }
+  }))
   route('POST', '/admin/models/:id/test', (body, id) => exclusive(id, async () => {
     if (body.confirmCost !== true) throw new ModelConfigError('实际生成测试可能产生上游费用，请先确认')
     const model = store.catalog().models.find(m => m.id === id)

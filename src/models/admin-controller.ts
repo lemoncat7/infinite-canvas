@@ -1,6 +1,7 @@
 import { loadModelCatalog, type CatalogModel } from './catalog'
 import { modelRequest, type AdminModels } from './admin-api'
 import { defaultsForm, escape, kinds, modelForm, modelRows, providerForm, providerRows } from './admin-views'
+import { bindEditorDiscovery } from './editor-discovery'
 
 export class AdminModelController {
   private readonly page = document.createElement('dialog')
@@ -119,6 +120,7 @@ export class AdminModelController {
       input.type = input.type === 'password' ? 'text' : 'password'; (event.target as HTMLElement).textContent = input.type === 'password' ? '显示密钥' : '隐藏密钥'
     })
     const form = this.editor.querySelector('form')!
+    if (!readonly) bindEditorDiscovery(form, kind, provider?.id)
     form.addEventListener('input', () => { this.dirty = true })
     const updateCapabilities = () => {
       const value = this.editor.querySelector<HTMLSelectElement>('[name=adapter]')?.value || ''
