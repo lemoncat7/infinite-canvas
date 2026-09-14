@@ -1,4 +1,5 @@
 import type { FlowNode } from "./node-types";
+import { modelMenu } from "../models/node-model-menu";
 
 interface CustomNodeModel {
   id: string;
@@ -86,20 +87,9 @@ export function createNodeView(options: NodeViewFactoryOptions) {
       copyVideoPrompt();
     }
   });
-  const videoModelPopover = videoPanel.querySelector<HTMLElement>(
-      ".video-model-popover",
-    )!,
-    grokEnabled =
-      Number(authUser?.credits ?? 0) - Number(authUser?.reservedCredits ?? 0) >=
-      2;
-  videoModelPopover.innerHTML = `<small>选择视频模型</small><button type="button" data-video-model-option="agnes-video-v2.0"><span><b>Agnes Video 2.0</b><small>Agnes 专用视频接口</small></span><em class="model-price free">免费</em><i>✓</i></button><button type="button" class="${grokEnabled ? "" : "model-unavailable"}" data-video-model-option="grok-imagine-video-1.5-preview" ${grokEnabled ? "" : "disabled"}><span><b>Grok Imagine Video 1.5 Preview</b><small>${grokEnabled ? "付费视频模型" : "创作点数不足"}</small></span><em class="model-price ${grokEnabled ? "paid" : "locked"}">×2</em><i>${grokEnabled ? "✓" : "⌁"}</i></button><input type="hidden" data-video-model value="agnes-video-v2.0">`;
-  for (const item of customApiModels.filter((item) => item.kind === "video"))
-    videoModelPopover
-      .querySelector("input")!
-      .insertAdjacentHTML(
-        "beforebegin",
-        `<button type="button" data-video-model-option="custom:${item.id}"><span><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.model)} · 自定义 API</small></span><em class="model-price paid">自定义</em><i>✓</i></button>`,
-      );
+  const videoModelPopover = videoPanel.querySelector<HTMLElement>(".video-model-popover")!;
+  const videoMenu = modelMenu('video', node.model, customApiModels, Number(authUser?.credits ?? 0) - Number(authUser?.reservedCredits ?? 0), escapeHtml);
+  videoModelPopover.innerHTML = (videoMenu?.buttons || '<p>模型目录加载中…</p>') + '<input type="hidden" data-video-model>';
   const videoCount = document.createElement("span");
   videoCount.className = "video-generation-count";
   element.append(videoCount);
@@ -145,43 +135,9 @@ export function createNodeView(options: NodeViewFactoryOptions) {
     imageModelSelect = element.querySelector<HTMLSelectElement>(
       '[data-image-field="model"]',
     )!;
-  const grokImageEnabled =
-    Number(authUser?.credits ?? 0) - Number(authUser?.reservedCredits ?? 0) >=
-    1;
-  imageModelMenu.insertAdjacentHTML(
-    "beforeend",
-    '<button type="button" data-image-model="agnes-image-2.1-flash"><svg viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6 5.6 18.4"></path></svg><span><b>Agnes Image 2.1 Flash</b><small>文生图 · 图生图 · 多图合成</small></span><em class="model-price free">免费</em><i>✓</i></button>',
-  );
-  imageModelSelect.insertAdjacentHTML(
-    "beforeend",
-    '<option value="agnes-image-2.1-flash">Agnes Image 2.1 Flash</option>',
-  );
-  imageModelMenu.insertAdjacentHTML(
-    "beforeend",
-    `<button type="button" class="${grokImageEnabled ? "" : "model-unavailable"}" data-image-model="grok-imagine-image" ${grokImageEnabled ? "" : "disabled"}><svg viewBox="0 0 24 24"><path d="M5 5l14 14M19 5 5 19"></path></svg><span><b>Grok Imagine Image</b><small>${grokImageEnabled ? "Grok 图像生成" : "创作点数不足"}</small></span><em class="model-price ${grokImageEnabled ? "paid" : "locked"}">×1</em><i>${grokImageEnabled ? "✓" : "⌁"}</i></button>`,
-  );
-  imageModelSelect.insertAdjacentHTML(
-    "beforeend",
-    '<option value="grok-imagine-image">Grok Imagine Image</option>',
-  );
-  imageModelMenu.insertAdjacentHTML(
-    "beforeend",
-    '<button type="button" class="model-unavailable" data-image-model="gemini-3.1-flash-image" disabled><svg viewBox="0 0 24 24"><path d="M12 2c1.4 5.2 4.8 8.6 10 10-5.2 1.4-8.6 4.8-10 10-1.4-5.2-4.8-8.6-10-10 5.2-1.4 8.6-4.8 10-10Z"></path></svg><span><b>Gemini 3.1 Flash Image</b><small>CPA 图片接口适配中</small></span><em class="model-price locked">实验性</em><i>⌁</i></button>',
-  );
-  imageModelSelect.insertAdjacentHTML(
-    "beforeend",
-    '<option value="gemini-3.1-flash-image" disabled>Gemini 3.1 Flash Image · 实验性</option>',
-  );
-  for (const item of customApiModels.filter((item) => item.kind === "image")) {
-    imageModelMenu.insertAdjacentHTML(
-      "beforeend",
-      `<button type="button" data-image-model="custom:${item.id}"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"></rect><path d="M8 12h8"></path></svg><span><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.model)} · 自定义 API</small></span><i>✓</i></button>`,
-    );
-    imageModelSelect.insertAdjacentHTML(
-      "beforeend",
-      `<option value="custom:${item.id}">${escapeHtml(item.name)}</option>`,
-    );
-  }
+  const imageMenu = modelMenu('image', node.model, customApiModels, Number(authUser?.credits ?? 0) - Number(authUser?.reservedCredits ?? 0), escapeHtml);
+  imageModelMenu.innerHTML = imageMenu?.buttons || '<p>模型目录加载中…</p>';
+  imageModelSelect.innerHTML = imageMenu?.options || '';
   const originalPrompt = document.createElement("div");
   originalPrompt.className = "image-original-prompt";
   originalPrompt.innerHTML =

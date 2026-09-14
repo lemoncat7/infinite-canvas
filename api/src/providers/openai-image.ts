@@ -1,5 +1,6 @@
 import type { GenerationInput, GenerationProvider, GenerationUpdate } from './types.js'
 import sharp from 'sharp'
+import { modelFetch } from '../models/network.js'
 
 type ImageResponse = { data?: Array<{ url?: string; b64_json?: string; revised_prompt?: string }>; error?: { message?: string } }
 
@@ -8,9 +9,11 @@ export class OpenAiImageProvider implements GenerationProvider {
   private readonly baseUrl: string
   private readonly apiKey: string
 
-  constructor(config?: { baseUrl: string; apiKey: string }) {
+  private readonly proxyUrl: string
+  constructor(config?: { baseUrl: string; apiKey: string; proxyUrl?: string }) {
     this.baseUrl = (config?.baseUrl || required('OPENAI_IMAGE_BASE_URL')).replace(/\/$/, '')
-    this.apiKey = config?.apiKey || required('OPENAI_IMAGE_API_KEY')
+    this.apiKey = config ? config.apiKey : required('OPENAI_IMAGE_API_KEY')
+    this.proxyUrl = config?.proxyUrl || ''
   }
 
   async run(input: GenerationInput, onUpdate: (update: GenerationUpdate) => void) {
@@ -61,10 +64,10 @@ export class OpenAiImageProvider implements GenerationProvider {
   private create(input: GenerationInput) {
     const parameters = input.parameters ?? {}
     console.info('[image-generation]', { mode: 'create', model: input.model || 'gpt-image-2', size: parameters.size ?? 'auto', quality: parameters.quality ?? 'auto' })
-    return fetch(`${this.baseUrl}/v1/images/generations`, {
+    return modelFetch(`${this.baseUrl}/v1/images/generations`, {
       method: 'POST', headers: { authorization: `Bearer ${this.apiKey}`, 'content-type': 'application/json' },
       body: JSON.stringify({ model: input.model || 'gpt-image-2', prompt: input.prompt, n: 1, response_format: 'b64_json', output_format: 'png', ...parameters }), signal: this.timeoutSignal(),
-    })
+    }, this.proxyUrl)
   }
 
   private async edit(input: GenerationInput) {
@@ -80,7 +83,7 @@ export class OpenAiImageProvider implements GenerationProvider {
       const type = image.headers.get('content-type')?.split(';')[0] || 'image/png'
       form.append('image', new Blob([await image.arrayBuffer()], { type }), `input-${index}.${type.split('/')[1] || 'png'}`)
     }
-    return fetch(`${this.baseUrl}/v1/images/edits`, { method: 'POST', headers: { authorization: `Bearer ${this.apiKey}` }, body: form, signal: this.timeoutSignal() })
+    return modelFetch(`${this.baseUrl}/v1/images/edits`, { method: 'POST', headers: { authorization: `Bearer ${this.apiKey}` }, body: form, signal: this.timeoutSignal() }, this.proxyUrl)
   }
 
   private timeoutSignal() { return AbortSignal.timeout(Number(process.env.OPENAI_IMAGE_TIMEOUT_MS ?? 180000)) }

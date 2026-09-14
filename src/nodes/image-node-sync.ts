@@ -89,8 +89,6 @@ export function syncImageNodePanel(options: ImageNodeSyncOptions) {
             `<button type="button" data-image-reference-source="${source.id}" title="图${order} · ${escapeHtml(source.title)}"><span>${source.mediaUrl ? `<img src="${escapeHtml(source.mediaUrl)}" alt="">` : "等待"}</span><b>图${order}</b><small>${escapeHtml(source.title || "未命名素材")}</small></button>`,
         )
         .join("");
-    if (node.model === "z-image-turbo" || node.model === "flux1-kontext-dev")
-      node.model = "gpt-image-2";
     const model = imagePanel.querySelector<HTMLSelectElement>(
         '[data-image-field="model"]',
       )!,

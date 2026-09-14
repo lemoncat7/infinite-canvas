@@ -1,4 +1,5 @@
 import type { GenerationInput, GenerationProvider, GenerationStatus, GenerationUpdate } from './types.js'
+import { modelFetch } from '../models/network.js'
 
 type Payload = Record<string, unknown>
 
@@ -9,9 +10,11 @@ export class OpenAiVideoProvider implements GenerationProvider {
   private readonly pollInterval = Number(process.env.OPENAI_VIDEO_POLL_INTERVAL_MS || 5000)
   private readonly timeout = Number(process.env.OPENAI_VIDEO_TIMEOUT_MS || 900000)
 
-  constructor(config?: { baseUrl: string; apiKey: string }) {
+  private readonly proxyUrl: string
+  constructor(config?: { baseUrl: string; apiKey: string; proxyUrl?: string }) {
     this.baseUrl = (config?.baseUrl || required('OPENAI_VIDEO_BASE_URL', process.env.OPENAI_IMAGE_BASE_URL)).replace(/\/$/, '')
-    this.apiKey = config?.apiKey || required('OPENAI_VIDEO_API_KEY', process.env.OPENAI_IMAGE_API_KEY)
+    this.apiKey = config ? config.apiKey : required('OPENAI_VIDEO_API_KEY', process.env.OPENAI_IMAGE_API_KEY)
+    this.proxyUrl = config?.proxyUrl || ''
   }
   private readonly publicBaseUrl = (process.env.GENERATION_PUBLIC_BASE_URL || '').replace(/\/$/, '')
 
@@ -60,7 +63,7 @@ export class OpenAiVideoProvider implements GenerationProvider {
   }
 
   private async request(path: string, init: RequestInit = {}) {
-    const response = await fetch(`${this.baseUrl}${path}`, { ...init, headers: { authorization: `Bearer ${this.apiKey}`, 'content-type': 'application/json', ...(init.headers as Record<string, string> | undefined) }, signal: AbortSignal.timeout(120000) })
+    const response = await modelFetch(`${this.baseUrl}${path}`, { ...init, headers: { authorization: `Bearer ${this.apiKey}`, 'content-type': 'application/json', ...(init.headers as Record<string, string> | undefined) }, signal: AbortSignal.timeout(120000) }, this.proxyUrl)
     const body = await response.text(); let payload: Payload = {}
     try { payload = body ? JSON.parse(body) as Payload : {} } catch { throw new Error(`CPA video API 返回了非 JSON 内容（${response.status}）`) }
     if (!response.ok) throw new Error(text(nested(payload, 'error', 'message')) || text(payload.message) || `CPA video API returned ${response.status}`)

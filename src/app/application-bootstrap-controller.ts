@@ -7,6 +7,7 @@ export class ApplicationBootstrapController<User> {
     renderUser: () => void;
     touchSession: () => void;
     loadCapabilities: () => Promise<unknown>;
+    loadModels: () => Promise<unknown>;
     synchronizeCanvas: () => Promise<boolean>;
     loadAssets: () => Promise<unknown>;
     status: (message: string, visible?: boolean) => number;
@@ -35,6 +36,7 @@ export class ApplicationBootstrapController<User> {
         await Promise.all([
           this.options.loadAssets(),
           this.options.loadCapabilities(),
+          this.options.loadModels(),
         ]);
         this.options.status("工作区已准备完成");
       } else {

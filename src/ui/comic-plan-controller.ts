@@ -74,7 +74,7 @@ export class ComicPlanController {
           visuals,
           previousPlan: state.plan,
           revision,
-          model: "gpt-5.5",
+          model: '',
         },
         (event) => {
           if (event.type === "start") {

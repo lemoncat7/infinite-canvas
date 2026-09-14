@@ -1,6 +1,7 @@
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 import { parseFirstJsonObject } from "./json.js";
 import { ComicStreamState } from "./stream-state.js";
+import { safeModelError } from '../models/errors.js';
 
 type Emit = (event: Record<string, unknown>) => void;
 type Log = { info(value: unknown, message?: string): void; warn(value: unknown, message?: string): void };
@@ -9,8 +10,9 @@ export function createComicStageReader(options: {
   baseUrl: string; apiKey: string; model: string; proxyUrl?: string;
   headerTimeout: number; idleTimeout: number; state: ComicStreamState;
   emit: Emit; log: Log;
+  managedModel?: boolean;
 }) {
-  const candidates = [options.model, options.model, options.model, ...(options.model === "gpt-5.4-mini" ? [] : ["gpt-5.4-mini", "gpt-5.4-mini"])]
+  const candidates = [options.model, options.model, options.model, ...(options.managedModel || options.model === "gpt-5.4-mini" ? [] : ["gpt-5.4-mini", "gpt-5.4-mini"])]
   const readStage = async (
     stage: string, system: string, content: unknown, maxTokens: number,
     progressStart: number, progressEnd: number, holdProgress = false, formatRetry = false,
@@ -26,6 +28,7 @@ export function createComicStageReader(options: {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(new DOMException("漫剧上游连接超时", "TimeoutError")), options.headerTimeout);
       const requestOptions = {
+        redirect: 'error' as const,
         method:"POST", headers:{ authorization:`Bearer ${options.apiKey}`, "content-type":"application/json" },
         body:JSON.stringify({ model:options.state.usedModel, stream:true, stream_options:{include_usage:true}, reasoning_effort:"low", temperature:0.38,
           max_tokens:maxTokens, response_format:{type:"json_object"}, messages:[{role:"system",content:system},{role:"user",content}] }), signal:controller.signal,
@@ -36,10 +39,11 @@ export function createComicStageReader(options: {
           : await fetch(`${options.baseUrl}/v1/chat/completions`, requestOptions);
         clearTimeout(timer);
         if (response.ok && response.body) { body = response.body as ReadableStream<Uint8Array>; activeController = controller; stageContentAt = Date.now(); options.state.touch(); break; }
-        lastError = `${response.status} ${(await response.text()).slice(0,300)}`;
+        await response.body?.cancel();
+        lastError = `模型接口 HTTP ${response.status}`;
         options.log.warn({stage,attempt:attempt+1,model:options.state.usedModel,status:response.status}, "comic stage upstream unavailable");
       } catch (error) {
-        clearTimeout(timer); lastError = error instanceof Error ? error.message : String(error);
+        clearTimeout(timer); lastError = safeModelError(error).message;
         options.log.warn({stage,attempt:attempt+1,model:options.state.usedModel,message:lastError}, "comic stage upstream retry");
       }
     }

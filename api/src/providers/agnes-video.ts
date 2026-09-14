@@ -1,5 +1,6 @@
 import type { GenerationInput, GenerationProvider, GenerationUpdate } from './types.js'
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 
 type AgnesTask = {
   id?: string
@@ -23,7 +24,17 @@ const agnesCredentialPool = [process.env.AGNES_VIDEO_API_KEY, process.env.AGNES_
   .map(value => String(value || '').trim()).filter((value, index, values) => value && values.indexOf(value) === index)
   .map((key, index) => ({ key, channel:index + 1, nextAvailableAt:0 }))
 
-async function acquireAgnesCredential() {
+const managedCooldowns = new Map<string, number>()
+async function acquireAgnesCredential(managedKeys?: string[]) {
+  if (managedKeys !== undefined) {
+    const managedKey = managedKeys.reduce((best, key) => (managedCooldowns.get(createHash('sha256').update(key).digest('hex')) || 0) < (managedCooldowns.get(createHash('sha256').update(best).digest('hex')) || 0) ? key : best)
+    const now = Date.now(), id = createHash('sha256').update(managedKey).digest('hex')
+    for (const [key, at] of managedCooldowns) if (at < now) managedCooldowns.delete(key)
+    const reservedAt = Math.max(now, managedCooldowns.get(id) || 0)
+    managedCooldowns.set(id, reservedAt + agnesCooldownMs)
+    if (reservedAt > now) await wait(reservedAt - now)
+    return { key: managedKey, channel: 1, nextAvailableAt: reservedAt }
+  }
   if (!agnesCredentialPool.length) throw new Error('AGNES_VIDEO_API_KEY is required when using agnes-video')
   const credential = agnesCredentialPool.reduce((earliest, item) => item.nextAvailableAt < earliest.nextAvailableAt ? item : earliest)
   const reservedAt = Math.max(Date.now(), credential.nextAvailableAt)
@@ -38,7 +49,14 @@ async function acquireAgnesCredential() {
 
 export class AgnesVideoProvider implements GenerationProvider {
   readonly name = 'agnes-video'
-  private readonly baseUrl = required('AGNES_VIDEO_BASE_URL').replace(/\/$/, '')
+  private readonly baseUrl: string
+  private readonly managedKeys?: string[]
+  private readonly proxyUrl?: string
+  constructor(config?: { baseUrl: string; apiKey: string; apiKeys?: string[]; proxyUrl?: string }) {
+    this.baseUrl = (config?.baseUrl || required('AGNES_VIDEO_BASE_URL')).replace(/\/$/, '')
+    this.managedKeys = config ? config.apiKeys?.length ? config.apiKeys : [config.apiKey] : undefined
+    this.proxyUrl = config ? config.proxyUrl || '' : process.env.AGNES_VIDEO_HTTPS_PROXY
+  }
   private readonly defaultModel = process.env.AGNES_VIDEO_DEFAULT_MODEL || 'agnes-video-v2.0'
   private readonly pollInterval = Number(process.env.AGNES_VIDEO_POLL_INTERVAL_MS || 8000)
   private readonly timeout = Number(process.env.AGNES_VIDEO_TIMEOUT_MS || 900000)
@@ -46,14 +64,13 @@ export class AgnesVideoProvider implements GenerationProvider {
   private readonly embeddedCreateTimeout = Number(process.env.AGNES_VIDEO_EMBEDDED_CREATE_TIMEOUT_MS || 180000)
   private readonly queryTimeout = Number(process.env.AGNES_VIDEO_QUERY_TIMEOUT_MS || 30000)
   private readonly publicBaseUrl = (process.env.GENERATION_PUBLIC_BASE_URL || '').replace(/\/$/, '')
-  private readonly proxyUrl = process.env.AGNES_VIDEO_HTTPS_PROXY
   private readonly assetMode = process.env.AGNES_VIDEO_ASSET_MODE || 'auto'
   private readonly cdnUploadUrl = process.env.ASSET_CDN_UPLOAD_URL || ''
   private readonly cdnApiKey = process.env.ASSET_CDN_API_KEY || ''
 
   async run(input: GenerationInput, onUpdate: (update: GenerationUpdate) => void) {
     if (input.kind !== 'video') throw new Error('Agnes Video Adapter 仅支持视频任务')
-    const credential = await acquireAgnesCredential()
+    const credential = await acquireAgnesCredential(this.managedKeys)
     const settings = normalizeAgnesSettings(input.parameters)
     const referenceMode = input.parameters?.reference_mode === 'keyframes' ? 'keyframes' : 'references'
     const imageSources = input.inputUrls ?? []
@@ -133,7 +150,7 @@ export class AgnesVideoProvider implements GenerationProvider {
     // compatible with the configured LAN proxy; Undici stalls on this proxy/API pair.
     const marker = '\n__AGNES_HTTP_STATUS__:'
     const args = [
-      '--silent', '--show-error', '--location',
+      '--silent', '--show-error',
       '--connect-timeout', '10', '--max-time', String(Math.ceil(timeout / 1000)),
       '--write-out', `${marker}%{http_code}`,
       '--header', `Authorization: Bearer ${apiKey}`,

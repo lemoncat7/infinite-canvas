@@ -34,6 +34,7 @@ export function createWorkspaceShell(options: {
       renderUser: () => options.account.auth.renderUser(),
       touchSession: () => options.account.auth.touch(),
       loadCapabilities: () => Promise.resolve(),
+      loadModels: () => options.account.account.loadModels(),
       synchronizeCanvas: () => options.account.auth.synchronize(true),
       loadAssets: () => options.content.assets.load(false),
       status: (message, visible) => options.account.auth.status(message, visible),

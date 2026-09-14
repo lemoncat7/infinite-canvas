@@ -1,4 +1,5 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
+import { safeModelError } from './models/errors.js';
 import initSqlJs, { type Database } from "sql.js";
 import {
   copyFileSync,
@@ -18,7 +19,6 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import {
-  createGenerationProvider,
   type GenerationUpdate,
 } from "./providers/index.js";
 import { OpenAiImageProvider } from "./providers/openai-image.js";
@@ -46,6 +46,12 @@ import { applyComicAuditRepairs, comicAuditSubset } from "./comic/audit.js";
 import { comicAssetPrompt, comicAuditPrompt, comicScenePrompt, comicSceneViewPrompt, comicShotExpansionPrompt, comicShotPlanPrompt, comicStoryPrompt } from "./comic/prompts.js";
 import { SESSION_IDLE_MS, SessionStore, TRUSTED_DEVICE_MS } from "./auth/session-store.js";
 import { ImageUploadValidationError, validateImageUpload } from "./image-upload-validation.js";
+import { ModelStore } from './models/store.js';
+import { registerModelRoutes } from './models/routes.js';
+import { configuredProvider, compatibleLegacyProvider } from './models/runtime.js';
+import { validateGeneration } from './models/validation.js';
+import { apiRoot } from './models/network.js';
+import type { ResolvedModel } from './models/types.js';
 
 type CanvasPayload = {
   nodes: unknown[];
@@ -113,6 +119,7 @@ ensureColumn("jobs", "input_urls", "TEXT NOT NULL DEFAULT '[]'");
 ensureColumn("jobs", "parameters", "TEXT NOT NULL DEFAULT '{}'");
 ensureColumn("jobs", "result_metadata", "TEXT");
 ensureColumn("jobs", "custom_model_id", "TEXT");
+ensureColumn("jobs", "model_snapshot", "TEXT");
 ensureColumn("assets", "is_public", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("users", "email", "TEXT");
 ensureColumn("users", "password_hash", "TEXT");
@@ -343,7 +350,8 @@ for (const user of getAll(
   ]);
 const developmentUserId = "dev-user";
 const defaultProjectId = "default";
-const generationProvider = createGenerationProvider();
+const generationProvider = compatibleLegacyProvider();
+const modelStore = new ModelStore(dataDirectory);
 const generationInputSigningSecret =
   process.env.GENERATION_INPUT_SIGNING_SECRET ||
   randomBytes(32).toString("hex");
@@ -434,6 +442,7 @@ function sendPresence(stream: FastifyReply["raw"]) {
 function broadcastPresence() {
   for (const stream of notificationStreams.keys()) sendPresence(stream);
 }
+registerModelRoutes(app, modelStore, { user: requireUser, admin: requireAdmin });
 app.get("/health", async () => ({
   ok: true,
   service: "flow-studio-api",
@@ -455,8 +464,10 @@ app.get("/generation/capabilities", async () => {
   };
   return {
     ...capabilities,
+    video: { ...capabilities.video, defaultModel: modelStore.catalog().defaults.video ?? '' },
     image: {
       ...capabilities.image,
+      defaultModel: modelStore.catalog().defaults.image ?? '',
       localFallback: {
         model: "flux1-kontext-dev",
         available: localImageFallbackAvailable,
@@ -684,22 +695,11 @@ app.post("/agents/prompt", async (request, reply) => {
       .slice(0, 8);
   if (!idea || idea.length > 4000)
     return reply.code(400).send({ error: "请输入 1–4000 字的创作想法" });
-  const baseUrl = String(
-      process.env.PROMPT_AGENT_BASE_URL ||
-        process.env.OPENAI_IMAGE_BASE_URL ||
-        "",
-    ).replace(/\/$/, ""),
-    apiKey = String(
-      process.env.PROMPT_AGENT_API_KEY ||
-        process.env.OPENAI_IMAGE_API_KEY ||
-        "",
-    ),
-    allowedModels = ["gpt-5.5", "kimi-k2.5", "gpt-5.4-mini"],
-    requestedModel = String(
-      input.model || process.env.PROMPT_AGENT_MODEL || "gpt-5.5",
-    ),
-    model = allowedModels.includes(requestedModel) ? requestedModel : "gpt-5.5";
-  if (!baseUrl || !apiKey)
+  const textConfiguration = modelStore.resolve(input.model, 'text', 'prompt');
+  const baseUrl = apiRoot(textConfiguration?.connection.baseUrl || process.env.PROMPT_AGENT_BASE_URL || process.env.OPENAI_IMAGE_BASE_URL || ''),
+    apiKey = textConfiguration?.connection.apiKey ?? process.env.PROMPT_AGENT_API_KEY ?? process.env.OPENAI_IMAGE_API_KEY ?? '',
+    model = textConfiguration?.model.model || input.model || process.env.PROMPT_AGENT_MODEL || 'gpt-5.5';
+  if (!baseUrl || (!textConfiguration && !apiKey))
     return reply.code(503).send({ error: "提示词 Agent 接口尚未配置" });
   const detailRule =
     complexity === "simple"
@@ -751,7 +751,7 @@ app.post("/agents/prompt", async (request, reply) => {
   });
   try {
     const url = `${baseUrl}/v1/chat/completions`;
-    const proxyUrl = String(
+    const proxyUrl = textConfiguration ? textConfiguration.connection.proxyUrl : String(
       process.env.PROMPT_AGENT_HTTPS_PROXY ||
         process.env.OPENAI_IMAGE_HTTPS_PROXY ||
         "",
@@ -761,6 +761,7 @@ app.post("/agents/prompt", async (request, reply) => {
       finishReason = "";
     for (let attempt = 1; attempt <= 2; attempt++) {
       const options = {
+        redirect: 'error' as const,
         method: "POST",
         headers: {
           authorization: `Bearer ${apiKey}`,
@@ -812,7 +813,7 @@ app.post("/agents/prompt", async (request, reply) => {
           .code(response.status)
           .send({
             error:
-              payload.error?.message || `Agent 接口返回 ${response.status}`,
+              `Agent 接口返回 HTTP ${response.status}，请检查模型配置或稍后重试`,
           });
       }
       raw = String(payload.choices?.[0]?.message?.content || "")
@@ -1011,6 +1012,7 @@ app.post("/agents/prompt", async (request, reply) => {
     };
   } catch (error) {
     if (clientAbort.signal.aborted) return;
+    if (textConfiguration && !(error instanceof SyntaxError)) error = safeModelError(error);
     request.log.error(
       { message: error instanceof Error ? error.message : String(error) },
       "prompt agent failed",
@@ -1092,18 +1094,11 @@ app.post("/agents/comic/chat", async (request, reply) => {
       plan: initialPlan,
     };
   }
-  const baseUrl = String(
-      process.env.PROMPT_AGENT_BASE_URL ||
-        process.env.OPENAI_IMAGE_BASE_URL ||
-        "",
-    ).replace(/\/$/, ""),
-    apiKey = String(
-      process.env.PROMPT_AGENT_API_KEY ||
-        process.env.OPENAI_IMAGE_API_KEY ||
-        "",
-    ),
-    model = String(input.model || process.env.PROMPT_AGENT_MODEL || "gpt-5.5");
-  if (!baseUrl || !apiKey)
+  const textConfiguration = modelStore.resolve(input.model, 'text', 'comic');
+  const baseUrl = apiRoot(textConfiguration?.connection.baseUrl || process.env.PROMPT_AGENT_BASE_URL || process.env.OPENAI_IMAGE_BASE_URL || ''),
+    apiKey = textConfiguration?.connection.apiKey ?? process.env.PROMPT_AGENT_API_KEY ?? process.env.OPENAI_IMAGE_API_KEY ?? '',
+    model = textConfiguration?.model.model || input.model || process.env.PROMPT_AGENT_MODEL || 'gpt-5.5';
+  if (!baseUrl || (!textConfiguration && !apiKey))
     return reply.code(503).send({ error: "灵感 Agent 接口尚未配置" });
   activeComicChats.add(chatLockKey);
   let history: Array<{ role: "user" | "assistant"; content: string }> = [];
@@ -1212,14 +1207,14 @@ app.post("/agents/comic/chat", async (request, reply) => {
     8000,
   );
   try {
-    const proxyUrl = String(
+    const proxyUrl = textConfiguration ? textConfiguration.connection.proxyUrl : String(
         process.env.PROMPT_AGENT_HTTPS_PROXY ||
           process.env.OPENAI_IMAGE_HTTPS_PROXY ||
           "",
       ),
       candidateModels = [
         model,
-        ...(model === "gpt-5.4-mini" ? [] : ["gpt-5.4-mini"]),
+        ...(textConfiguration || model === "gpt-5.4-mini" ? [] : ["gpt-5.4-mini"]),
       ];
     let parsed:
         | {
@@ -1268,13 +1263,14 @@ app.post("/agents/comic/chat", async (request, reply) => {
         const response = proxyUrl
           ? await undiciFetch(`${baseUrl}/v1/chat/completions`, {
               ...options,
+              redirect: 'error',
               dispatcher: new ProxyAgent(proxyUrl),
             })
-          : await fetch(`${baseUrl}/v1/chat/completions`, options);
-        if (!response.ok)
-          throw new Error(
-            `upstream ${response.status}: ${(await response.text()).slice(0, 180)}`,
-          );
+          : await fetch(`${baseUrl}/v1/chat/completions`, { ...options, redirect: 'error' });
+        if (!response.ok) {
+          await response.body?.cancel();
+          throw new Error(`upstream HTTP ${response.status}`);
+        }
         if (!response.body) throw new Error("漫剧对话没有响应流");
         const reader = (
             response.body as ReadableStream<Uint8Array>
@@ -1314,7 +1310,7 @@ app.post("/agents/comic/chat", async (request, reply) => {
         parsed = extracted.value as typeof parsed;
         break;
       } catch (error) {
-        lastError = error instanceof Error ? error.message : String(error);
+        lastError = textConfiguration ? safeModelError(error).message : error instanceof Error ? error.message : String(error);
         request.log.warn(
           {
             userId,
@@ -1441,18 +1437,11 @@ app.post("/agents/comic", async (request, reply) => {
     return reply.code(400).send({ error: "请先描述你想创作的漫剧" });
   if (idea.length > 12000 || revision.length > 6000)
     return reply.code(400).send({ error: "本次提交内容异常过长，请重新打开漫剧窗口后重试" });
-  const baseUrl = String(
-      process.env.PROMPT_AGENT_BASE_URL ||
-        process.env.OPENAI_IMAGE_BASE_URL ||
-        "",
-    ).replace(/\/$/, ""),
-    apiKey = String(
-      process.env.PROMPT_AGENT_API_KEY ||
-        process.env.OPENAI_IMAGE_API_KEY ||
-        "",
-    ),
-    model = String(input.model || process.env.PROMPT_AGENT_MODEL || "gpt-5.5");
-  if (!baseUrl || !apiKey)
+  const textConfiguration = modelStore.resolve(input.model, 'text', 'comic');
+  const baseUrl = apiRoot(textConfiguration?.connection.baseUrl || process.env.PROMPT_AGENT_BASE_URL || process.env.OPENAI_IMAGE_BASE_URL || ''),
+    apiKey = textConfiguration?.connection.apiKey ?? process.env.PROMPT_AGENT_API_KEY ?? process.env.OPENAI_IMAGE_API_KEY ?? '',
+    model = textConfiguration?.model.model || input.model || process.env.PROMPT_AGENT_MODEL || 'gpt-5.5';
+  if (!baseUrl || (!textConfiguration && !apiKey))
     return reply.code(503).send({ error: "灵感 Agent 接口尚未配置" });
   const visualSources = (input.visuals ?? [])
     .map(String)
@@ -1561,7 +1550,7 @@ app.post("/agents/comic", async (request, reply) => {
     lastPersistedStage = "",
     lastPersistedProgress = -1;
   try {
-    const proxyUrl = String(
+    const proxyUrl = textConfiguration ? textConfiguration.connection.proxyUrl : String(
       process.env.PROMPT_AGENT_HTTPS_PROXY ||
         process.env.OPENAI_IMAGE_HTTPS_PROXY ||
         "",
@@ -1625,7 +1614,7 @@ app.post("/agents/comic", async (request, reply) => {
         model,
         model,
         model,
-        ...(model === "gpt-5.4-mini"
+        ...(textConfiguration || model === "gpt-5.4-mini"
           ? []
           : ["gpt-5.4-mini", "gpt-5.4-mini"]),
       ],
@@ -1644,7 +1633,7 @@ app.post("/agents/comic", async (request, reply) => {
         ),
       );
     const readStage = createComicStageReader({
-      baseUrl, apiKey, model, proxyUrl, headerTimeout, idleTimeout,
+      baseUrl, apiKey, model, proxyUrl, headerTimeout, idleTimeout, managedModel: !!textConfiguration,
       state: streamState, emit, log: request.log,
     });
     const rewriteUntilValid = async (
@@ -4696,6 +4685,8 @@ app.post("/jobs", async (request, reply) => {
   if (!user) return;
   const userId = String(user.id);
   const input = request.body as JobInput;
+  if (!input || (input.kind !== 'image' && input.kind !== 'video'))
+    return reply.code(400).send({ error: '生成类型必须是 image 或 video' });
   if (!input.prompt?.trim())
     return reply.code(400).send({ error: "Prompt is required" });
   const projectId = input.projectId ?? defaultProjectId;
@@ -4706,11 +4697,20 @@ app.post("/jobs", async (request, reply) => {
     (input.kind === "video"
       ? process.env.AGNES_VIDEO_DEFAULT_MODEL || "agnes-video-v2.0"
       : process.env.OPENAI_IMAGE_DEFAULT_MODEL || "gpt-image-2");
-  if (model === "gemini-3.1-flash-image")
+  const selectedModel = model.startsWith('custom:') ? undefined : modelStore.resolve(input.model, input.kind, input.kind);
+  if (selectedModel) {
+    model = selectedModel.model.model;
+    validateGeneration(selectedModel.model, input.inputUrls?.length || 0, input.parameters || {});
+    // Unknown provider parameters must not override the resolved model or bypass capability checks.
+    const allowedParameters = new Set(['size', 'quality', 'background', 'seconds', 'resolution', 'aspect_ratio', 'reference_mode', 'seed', 'negative_prompt']);
+    if (Object.keys(input.parameters || {}).some(key => !allowedParameters.has(key)))
+      return reply.code(400).send({ error: '模型参数包含不支持的字段' });
+  }
+  if (!selectedModel && model === "gemini-3.1-flash-image")
     return reply
       .code(503)
       .send({ error: "Gemini 图片模型仍处于实验性适配阶段，暂未开放生成" });
-  const creditCost =
+  const creditCost = selectedModel ? selectedModel.model.creditCost :
     model === "grok-imagine-video-1.5-preview"
       ? 2
       : model === "grok-imagine-image"
@@ -4723,7 +4723,7 @@ app.post("/jobs", async (request, reply) => {
     return reply
       .code(402)
       .send({ error: `创作点数不足，当前模型每次生成需要 ${creditCost} 点` });
-  const customId = model.startsWith("custom:") ? model.slice(7) : "",
+  const customId = !selectedModel && model.startsWith("custom:") ? model.slice(7) : "",
     custom = customId
       ? getOne("SELECT * FROM user_api_models WHERE id = ? AND user_id = ?", [
           customId,
@@ -4734,7 +4734,7 @@ app.post("/jobs", async (request, reply) => {
     return reply.code(400).send({ error: "自定义模型不存在或类型不匹配" });
   if (custom) model = String(custom.model);
   const inputUrls = input.inputUrls ?? [];
-  if (input.kind === "video" && model.startsWith("agnes-")) {
+  if (input.kind === "video" && (selectedModel ? selectedModel.model.adapter === 'agnes-video' : model.startsWith("agnes-"))) {
     const referenceMode = input.parameters?.reference_mode === "keyframes" ? "keyframes" : "references";
     if (referenceMode === "keyframes" && inputUrls.length < 2)
       return reply.code(400).send({ error: "Agnes 关键帧动画至少需要 2 张按顺序连接的图片" });
@@ -4788,6 +4788,7 @@ app.post("/jobs", async (request, reply) => {
       now,
     ],
   );
+  if (selectedModel) database.run('UPDATE jobs SET model_snapshot=? WHERE id=?', [modelStore.secrets.seal(selectedModel), id]);
   persist();
   queueMicrotask(pumpGenerationQueue);
   return reply
@@ -4814,7 +4815,9 @@ app.get("/jobs/:id", async (request, reply) => {
     id,
     String(user.id),
   ]);
-  return row ?? reply.code(404).send({ error: "Job not found" });
+  if (!row) return reply.code(404).send({ error: 'Job not found' });
+  const { model_snapshot: _snapshot, ...publicJob } = row;
+  return publicJob;
 });
 
 app.post("/projects/:projectId/jobs/cancel-active", async (request, reply) => {
@@ -5520,7 +5523,8 @@ async function executeQueuedJob(job: Record<string, unknown>) {
         : undefined;
     if (customId && (!custom || String(custom.kind) !== kind))
       throw new Error("自定义模型已被删除或类型不匹配");
-    const provider = custom
+    const snapshot = job.model_snapshot ? modelStore.secrets.open<ResolvedModel>(String(job.model_snapshot)) : undefined;
+    const provider = snapshot ? configuredProvider(snapshot) : custom
       ? kind === "image"
         ? new OpenAiImageProvider({
             baseUrl: String(custom.base_url),
@@ -5532,7 +5536,7 @@ async function executeQueuedJob(job: Record<string, unknown>) {
           })
       : generationProvider;
     const rawInputUrls = parseJsonArray(job.input_urls),
-      inputUrls = resolveOwnedInputUrls(rawInputUrls, userId, kind, model);
+      inputUrls = resolveOwnedInputUrls(rawInputUrls, userId, kind, snapshot ? snapshot.model.adapter === 'agnes-video' ? 'agnes-managed' : 'managed' : model);
     const parameters = parseJsonObject(job.parameters);
     let updates = Promise.resolve(),
       lastError: unknown;
@@ -5588,7 +5592,7 @@ async function executeQueuedJob(job: Record<string, unknown>) {
       }
     }
     if (
-      !custom &&
+      !custom && !snapshot &&
       kind === "image" &&
       process.env.SDCPP_IMAGE_FALLBACK_ENABLED === "true" &&
       !["flux1-kontext-dev", "z-image-turbo"].includes(model) &&

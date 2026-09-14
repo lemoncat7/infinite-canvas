@@ -1,4 +1,5 @@
-import { fetch as undiciFetch, ProxyAgent } from 'undici'
+import { fetch as undiciFetch } from 'undici'
+import { modelFetch } from '../models/network.js'
 import type { GenerationInput, GenerationProvider, GenerationUpdate } from './types.js'
 
 type AgnesImageResponse = {
@@ -8,9 +9,14 @@ type AgnesImageResponse = {
 
 export class AgnesImageProvider implements GenerationProvider {
   readonly name = 'agnes-image'
-  private readonly baseUrl = required('AGNES_IMAGE_BASE_URL', process.env.AGNES_VIDEO_BASE_URL || 'https://apihub.agnes-ai.com').replace(/\/$/, '')
-  private readonly apiKey = required('AGNES_IMAGE_API_KEY', process.env.AGNES_VIDEO_API_KEY)
-  private readonly proxyUrl = process.env.AGNES_IMAGE_HTTPS_PROXY || process.env.AGNES_VIDEO_HTTPS_PROXY
+  private readonly baseUrl: string
+  private readonly apiKey: string
+  private readonly proxyUrl: string
+  constructor(config?: { baseUrl: string; apiKey: string; proxyUrl?: string }) {
+    this.baseUrl = (config?.baseUrl || required('AGNES_IMAGE_BASE_URL', process.env.AGNES_VIDEO_BASE_URL || 'https://apihub.agnes-ai.com')).replace(/\/$/, '')
+    this.apiKey = config ? config.apiKey : required('AGNES_IMAGE_API_KEY', process.env.AGNES_VIDEO_API_KEY)
+    this.proxyUrl = config ? config.proxyUrl || '' : process.env.AGNES_IMAGE_HTTPS_PROXY || process.env.AGNES_VIDEO_HTTPS_PROXY || ''
+  }
   private readonly timeout = Number(process.env.AGNES_IMAGE_TIMEOUT_MS || 180000)
 
   async run(input: GenerationInput, onUpdate: (update: GenerationUpdate) => void) {
@@ -23,13 +29,12 @@ export class AgnesImageProvider implements GenerationProvider {
       ...(aspectRatio ? { aspect_ratio:aspectRatio } : {}),
       ...(images.length ? { extra_body:{ image:images, response_format:'url' } } : {}),
     }
-    const response = await undiciFetch(`${this.baseUrl}/v1/images/generations`, {
+    const response = await modelFetch(`${this.baseUrl}/v1/images/generations`, {
       method:'POST',
       headers:{ authorization:`Bearer ${this.apiKey}`, 'content-type':'application/json' },
       body:JSON.stringify(body),
       signal:AbortSignal.timeout(this.timeout),
-      ...(this.proxyUrl ? { dispatcher:new ProxyAgent(this.proxyUrl) } : {}),
-    })
+    }, this.proxyUrl)
     const payload = await response.json() as AgnesImageResponse
     if (!response.ok) throw new Error(errorMessage(payload.error) || `Agnes image API returned ${response.status}`)
     const image = payload.data?.[0]

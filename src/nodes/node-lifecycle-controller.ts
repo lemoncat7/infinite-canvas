@@ -1,3 +1,4 @@
+import { defaultModel } from '../models/catalog';
 import type { GenerationCapabilities } from "./node-types";
 import type { FlowLink, FlowNode, NodeKind, Point } from "./node-types";
 import { createNode, makeNodePublicId } from "./node-service";
@@ -65,8 +66,8 @@ export class NodeLifecycleController {
       accent: kind === "video" ? "#ffb774" : "#8ee7ff",
       mediaUrl: url,
       model: kind === "video"
-        ? (capabilities.video?.defaultModel ?? "agnes-video-v2.0")
-        : (capabilities.image?.defaultModel ?? "gpt-image-2"),
+        ? defaultModel("video", capabilities.video?.defaultModel ?? "agnes-video-v2.0")
+        : defaultModel("image", capabilities.image?.defaultModel ?? "gpt-image-2"),
       videoSettings: kind === "video"
         ? { seconds: "5", resolution: "720p", aspectRatio: "16:9" }
         : undefined,

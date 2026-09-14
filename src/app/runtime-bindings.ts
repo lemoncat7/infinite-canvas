@@ -6,6 +6,7 @@ import type { CanvasGuideMessage } from "../ui/canvas-guide-controller";
 import type { ToastType } from "../ui/toast-controller";
 import type { WorkspaceShell } from "./workspace-shell-composition";
 import type { AccountRuntimeComposition } from "./account-runtime-composition";
+import { modelLabel } from '../models/catalog';
 
 export class RuntimeBindings {
   account!: AccountRuntimeComposition;
@@ -33,7 +34,7 @@ export class RuntimeBindings {
   loadCapabilities = (redraw = false): Promise<void> =>
     this.workspace.loadCapabilities(redraw);
   modelName = (value?: string) => {
-    if (!value?.startsWith("custom:")) return value || "";
+    if (!value?.startsWith("custom:")) return modelLabel(value);
     return this.account.account.models.find(
       (item) => `custom:${item.id}` === value,
     )?.name || "自定义模型";

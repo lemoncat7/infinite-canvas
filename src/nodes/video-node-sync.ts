@@ -1,4 +1,5 @@
 import type { FlowLink, FlowNode } from "./node-types";
+import { isAgnesVideo } from '../models/catalog';
 
 interface VideoNodeSyncOptions {
   element: HTMLElement;
@@ -30,7 +31,7 @@ export function syncVideoNodePanel(options: VideoNodeSyncOptions) {
     ".video-config-panel",
   )!;
   if (node.kind === "video") {
-    const supportsNativeKeyframes = node.model?.startsWith("agnes-") === true,
+    const supportsNativeKeyframes = isAgnesVideo(node.model),
       imageInputCount = links.filter(
         (link) =>
           link.to === node.id &&
@@ -77,7 +78,7 @@ export function syncVideoNodePanel(options: VideoNodeSyncOptions) {
           : node.status === "running"
             ? Number(node.progress ?? 0) > 0
               ? `生成中 ${Math.round(node.progress ?? 0)}%`
-              : node.model?.startsWith("agnes-")
+              : isAgnesVideo(node.model)
                 ? "云端处理中"
                 : "生成中 · 等待进度"
             : node.status === "failed"
@@ -159,4 +160,3 @@ export function syncVideoNodePanel(options: VideoNodeSyncOptions) {
   }
   
 }
-

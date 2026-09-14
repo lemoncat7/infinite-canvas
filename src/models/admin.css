@@ -1,0 +1,42 @@
+#open-global-models[hidden]{display:none!important}
+.model-workspace,.model-editor,.model-confirm{box-sizing:border-box;color:var(--ui-text);background:var(--ui-surface-solid);font:inherit;border:1px solid var(--ui-border);padding:0;box-shadow:var(--ui-shadow-lg)}
+.model-workspace *,.model-editor *,.model-confirm *{box-sizing:border-box}
+.model-workspace{width:100%;height:100dvh;max-width:none;max-height:none;margin:0;border:0}
+.model-workspace[open]{display:flex;flex-direction:column}
+.model-workspace>header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:24px max(24px,calc((100vw - 1180px)/2));border-bottom:1px solid var(--ui-border);background:var(--ui-chrome-material)}
+.model-workspace h1{font-size:24px;margin:4px 0 6px}.model-workspace p{margin:0;color:var(--ui-text-secondary)}
+.model-workspace small,.model-editor .model-help{color:var(--ui-text-secondary);font-size:13px;line-height:1.6}
+.model-workspace nav{display:flex;gap:8px;padding:12px max(24px,calc((100vw - 1180px)/2));border-bottom:1px solid var(--ui-border)}
+.model-workspace button,.model-editor button,.model-confirm button{font:inherit;font-size:14px;min-height:40px;padding:8px 14px;border:1px solid var(--ui-border);border-radius:9px;color:var(--ui-text);background:var(--ui-surface-raised);cursor:pointer;white-space:nowrap}
+.model-workspace button:hover,.model-editor button:hover,.model-confirm button:hover{background:var(--ui-menu-item-hover);border-color:var(--ui-border-strong)}
+.model-workspace button[aria-pressed=true]{background:var(--ui-accent-soft);border-color:var(--ui-accent);font-weight:600}
+.model-workspace .model-primary,.model-editor .model-primary,.model-confirm .model-primary{background:var(--ui-accent);color:var(--ui-accent-contrast);border-color:transparent}
+.model-workspace :focus-visible,.model-editor :focus-visible,.model-confirm :focus-visible{outline:2px solid var(--ui-accent);outline-offset:3px}
+.model-workspace button:disabled,.model-editor button:disabled{opacity:.55;cursor:wait}
+.model-page-body{width:min(100%,1228px);margin:0 auto;padding:16px 24px 40px;overflow:auto;min-height:0}
+.model-toolbar{display:flex;gap:10px;align-items:center;margin:16px 0}.model-toolbar input{flex:1;min-width:100px}
+.model-workspace input,.model-workspace select,.model-editor input,.model-editor select{font:inherit;font-size:14px;min-height:42px;border-radius:8px;padding:8px 12px;border:1px solid var(--ui-border-strong);background:var(--ui-surface-raised);color:var(--ui-text);max-width:100%}
+.model-workspace input[type=checkbox],.model-editor input[type=checkbox]{min-height:0;accent-color:var(--ui-accent)}
+.model-feedback{display:block;font-size:14px;min-height:24px;line-height:1.5;color:var(--ui-success);overflow-wrap:anywhere}.model-feedback.is-error{color:var(--ui-danger)}
+.model-notice{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 16px;border:1px solid var(--ui-border);border-radius:10px;background:var(--ui-accent-soft);font-size:14px;line-height:1.6;margin:12px 0}
+.model-row,.model-provider-row{display:grid;grid-template-columns:minmax(0,2fr) 55px minmax(0,1.4fr) minmax(90px,1fr) auto;gap:16px;align-items:center;padding:16px;border-bottom:1px solid var(--ui-border);font-size:14px}
+.model-row:hover,.model-provider-row:hover{background:var(--ui-menu-item-hover)}
+.model-row strong,.model-provider-row strong{display:block;font-weight:600}.model-row small,.model-provider-row small{display:block;overflow-wrap:anywhere}.model-row>*,.model-provider-row>*{min-width:0;overflow-wrap:anywhere}
+.model-provider-row{grid-template-columns:minmax(0,1fr) auto}.model-provider-row>div:last-child{display:flex;gap:8px}
+.model-status{font-size:13px}.model-status small{font-size:12px}.model-empty{padding:40px 16px;text-align:center}
+.model-editor{width:min(520px,100%);height:100dvh;max-height:none;margin:0 0 0 auto;max-width:100%;border-radius:16px 0 0 16px}
+.model-editor[open]{display:flex;flex-direction:column}
+.model-editor>header{display:flex;align-items:center;justify-content:space-between;padding:20px 24px;border-bottom:1px solid var(--ui-border)}
+.model-editor h2,.model-confirm h2{font-size:18px;margin:0}.model-editor form{overflow:auto;padding:20px 24px;min-height:0}.model-editor fieldset{border:0;margin:0;padding:0}
+.model-editor label,.model-workspace [data-defaults] label{display:flex;flex-direction:column;gap:8px;margin:0 0 16px;font-size:14px;font-weight:500}.model-editor label.model-check{flex-direction:row;align-items:center;margin-top:16px}
+.model-editor .model-help{margin:-6px 0 16px}.model-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.model-editor details{border-top:1px solid var(--ui-border);padding-top:16px;margin:16px 0}.model-editor summary{cursor:pointer;margin-bottom:16px;font-size:14px;font-weight:600}
+.model-editor footer,.model-confirm footer{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-top:24px}
+.model-workspace [data-defaults]{max-width:600px;padding:16px 0}.model-workspace [data-defaults]>p{margin-bottom:24px}
+.model-confirm{width:min(440px,calc(100% - 32px));border-radius:16px;padding:24px}.model-confirm p{line-height:1.7;color:var(--ui-text-secondary);font-size:14px}
+.model-editor::backdrop,.model-confirm::backdrop{background:var(--ui-overlay)}
+.model-workspace [hidden],.model-editor [hidden]{display:none!important}
+@media(max-width:640px){.model-workspace>header{padding:16px}.model-workspace>header p{display:none}.model-workspace nav{padding:10px 16px}.model-page-body{padding:12px 16px 24px}.model-toolbar{flex-wrap:wrap}.model-toolbar input{flex-basis:100%}.model-row{grid-template-columns:1fr auto;gap:8px}.model-row>span:nth-child(3){grid-column:1}.model-row>span:nth-child(2){text-align:right}.model-row button{grid-column:2;grid-row:3}.model-notice,.model-provider-row{display:flex;align-items:stretch;flex-direction:column}.model-editor{border-radius:0}.model-editor form,.model-editor>header{padding:16px}.model-workspace input,.model-workspace select,.model-editor input,.model-editor select{font-size:16px}.model-workspace button,.model-editor button{min-height:44px}}
+[data-catalog-hidden][hidden] { display: none !important; }
+.catalog-setting { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; font: inherit; color: var(--ui-text); }
+.catalog-setting select { max-width: 70%; min-width: 0; padding: 6px 8px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-surface-solid); color: var(--ui-text); font: inherit; }

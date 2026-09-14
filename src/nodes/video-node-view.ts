@@ -1,3 +1,5 @@
+import { isAgnesVideo, catalogModel } from '../models/catalog';
+import { bindCatalogSettings, normalizeModelSettings } from '../models/node-settings';
 import type { FlowNode, GenerationCapabilities } from "./node-types";
 import { bindNodeConfigPanel } from "../ui/node-editor";
 
@@ -24,6 +26,8 @@ export function bindVideoNodePanel(options: VideoNodePanelOptions) {
     selectNode,
   } = options;
   bindNodeConfigPanel(videoPanel);
+  const refreshSettings = () => { const current = liveNode(); if (current) bindCatalogSettings(videoPanel, current, () => { scheduleSave(); draw() }) };
+  refreshSettings();
   videoPanel
     .querySelector<HTMLTextAreaElement>("[data-video-description]")!
     .addEventListener("input", (event) => {
@@ -62,8 +66,10 @@ export function bindVideoNodePanel(options: VideoNodePanelOptions) {
       const current = liveNode();
       if (!current) return;
       current.model = (event.target as HTMLInputElement).value;
+      normalizeModelSettings(current);
+      refreshSettings();
       if (
-        !current.model.startsWith("agnes-") &&
+        !isAgnesVideo(current.model) &&
         current.videoSettings?.referenceMode === "keyframes"
       )
         current.videoSettings.referenceMode = "references";
@@ -94,7 +100,8 @@ export function bindVideoNodePanel(options: VideoNodePanelOptions) {
         const currentNode = liveNode();
         if (!currentNode) return;
         const current = Number(currentNode.videoSettings?.seconds ?? 5),
-          limits = generationCapabilities.video?.seconds ?? { min: 1, max: 18 };
+          capabilities = catalogModel(currentNode.model)?.capabilities,
+          limits = capabilities ? { min: capabilities.minSeconds, max: capabilities.maxSeconds } : generationCapabilities.video?.seconds ?? { min: 1, max: 18 };
         const seconds = Math.min(
           limits.max,
           Math.max(limits.min, current + Number(button.dataset.secondsStep)),
@@ -139,7 +146,7 @@ export function bindVideoNodePanel(options: VideoNodePanelOptions) {
         if (
           key === "referenceMode" &&
           button.dataset.value === "keyframes" &&
-          !current.model?.startsWith("agnes-")
+          !isAgnesVideo(current.model)
         )
           return;
         current.videoSettings = {
@@ -171,4 +178,3 @@ export function bindVideoNodePanel(options: VideoNodePanelOptions) {
     });
   
 }
-

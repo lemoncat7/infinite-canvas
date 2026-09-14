@@ -1,6 +1,9 @@
 import type { FlowNode } from "./node-types";
+import { catalogModel, currentCatalog } from '../models/catalog';
 
 function modelCost(node: FlowNode) {
+  const managed = catalogModel(node.model);
+  if (managed) return managed.creditCost;
   if (node.model === "grok-imagine-video-1.5-preview") return 2;
   if (node.model === "grok-imagine-image") return 1;
   return 0;
@@ -13,6 +16,7 @@ export function canGenerateNode(
   if (node.kind === "tts")
     return Boolean(node.body.trim() && options.hasConnectedVoice);
   return (
+    (!currentCatalog() || !!catalogModel(node.model)?.enabled || !!node.model?.startsWith('custom:')) &&
     node.model !== "gemini-3.1-flash-image" &&
     (node.kind === "image" || node.kind === "video") &&
     node.role !== "result" &&
@@ -37,6 +41,7 @@ export function generationBlockedReason(
     return node.kind === "video"
       ? "已生成的视频节点仅用于播放"
       : "生成结果节点不能再次生成";
+  if (currentCatalog() && !node.model?.startsWith('custom:') && !catalogModel(node.model)?.enabled) return '模型已停用或不可用，请重新选择';
   if ((node.status === "queued" || node.status === "running") && node.jobId)
     return "当前任务正在生成，请稍候";
   if (node.model === "gemini-3.1-flash-image")

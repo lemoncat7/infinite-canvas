@@ -1,3 +1,5 @@
+import { defaultModel } from '../models/catalog';
+import { normalizeModelSettings } from '../models/node-settings';
 import type { FlowLink, FlowNode, Point } from "./node-types";
 import type { PromptAgentStep } from "./comic-types";
 
@@ -137,7 +139,7 @@ export function configurePromptAgentNode(options: {
 }) {
   const { node, step, index, comicWorkflow, shouldGenerate } = options;
   const stage = step.stage || "storyboard";
-  if (comicWorkflow && step.kind === "image") node.model = "gpt-image-2";
+  if (comicWorkflow && step.kind === "image") node.model = defaultModel("image", "gpt-image-2");
   node.body = step.prompt.trim();
   node.generationPrompt =
     comicWorkflow && step.kind === "image" ? undefined : step.prompt.trim();
@@ -204,6 +206,7 @@ export function configurePromptAgentNode(options: {
       quality: "auto",
     };
   }
+  normalizeModelSettings(node);
 }
 
 export function resolvePromptAgentInputs(options: {

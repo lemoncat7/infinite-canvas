@@ -23,6 +23,7 @@ export class AccountSessionFeature {
       ...options.auth,
       loadModels: () => this.account.loadModels(),
       onUserRendered: (user) => {
+        this.account?.syncUser();
         if (user) {
           void this.notifications.load();
           this.notifications.connect();

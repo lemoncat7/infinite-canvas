@@ -41,7 +41,7 @@ export function normalizeCanvasDocument(
       Object.assign(node, { status: "waiting", progress: 0, agentAuto: true });
     if (node.kind === "video") node.videoSettings = { seconds: "5", resolution: "720p", aspectRatio: "16:9", ...(node.videoSettings ?? {}) };
     if (node.kind === "video" && node.role !== "result") { node.status = "idle"; node.progress = 0; delete node.jobId; }
-    if (node.imageSettings?.size && !["auto","1024x1024","1344x1008","1008x1344","1536x1024","1024x1536","1536x864","864x1536"].includes(node.imageSettings.size)) node.imageSettings.size = "auto";
+    // Preserve upstream-specific sizes; current model capabilities are validated at submission.
   }
   const links = normalizeCanvasLinks(input.links);
   const baseline: CanvasSyncSnapshot = {

@@ -1,4 +1,5 @@
 import type { FlowLink, FlowNode } from "./node-types";
+import { bindCatalogSettings, normalizeModelSettings } from '../models/node-settings';
 import { bindNodeConfigPanel } from "../ui/node-editor";
 import {
   exchangeImageReferenceOrder,
@@ -45,12 +46,16 @@ export function bindImageNodePanel(options: ImageNodePanelOptions) {
   } = options;
   const imagePanel = element.querySelector<HTMLElement>(".image-config-panel")!;
   bindNodeConfigPanel(imagePanel);
+  const refreshSettings = () => { const current = liveNode(); if (current) bindCatalogSettings(imagePanel, current, () => { scheduleSave(); draw() }) };
+  refreshSettings();
   imagePanel
     .querySelector<HTMLSelectElement>('[data-image-field="model"]')!
     .addEventListener("change", (event) => {
       const current = liveNode();
       if (!current) return;
       current.model = (event.target as HTMLSelectElement).value;
+      normalizeModelSettings(current);
+      refreshSettings();
       scheduleSave();
     });
   imagePanel

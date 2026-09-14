@@ -5,6 +5,7 @@ import "./styles/workspace-chrome.css";
 import "./styles/inspiration.css";
 import "./styles/canvas-guide.css";
 import "./styles/comic-studio.css";
+import "./models/admin.css";
 import "./services/theme-preference";
 import { bootstrap } from "./app/bootstrap";
 

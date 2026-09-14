@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test:canvas": "playwright test tests/canvas-refactor.spec.ts",
+    "test:models": "playwright test tests/admin-models.spec.ts",
     "test:theme": "playwright test tests/light-theme-tokens.spec.ts tests/theme-preference.spec.ts"
   },
   "devDependencies": {

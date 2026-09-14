@@ -64,7 +64,7 @@ export class ComicDialogueController {
           message: message.trim(),
           context: this.options.getContext(),
           plan: state.sessionId ? undefined : state.plan,
-          model: "gpt-5.5",
+          model: '',
         },
         (event) => {
           if (event.type === "start") {

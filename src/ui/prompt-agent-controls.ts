@@ -27,7 +27,7 @@ export class PromptAgentControls {
       : "create";
     this.modelSelect.hidden = true;
     this.modelSelect.innerHTML =
-      '<option value="gpt-5.5" selected>gpt-5.5</option>';
+      '<option value="" selected>全局默认模型</option>';
     options.panel.append(this.modelSelect);
     this.goalInput = options.panel.querySelector<HTMLTextAreaElement>(
       ".agent-goal textarea",

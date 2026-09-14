@@ -1,3 +1,5 @@
+import { defaultModel } from '../models/catalog';
+import { normalizeModelSettings } from '../models/node-settings';
 import type {
   FlowNode,
   GenerationCapabilities,
@@ -46,7 +48,7 @@ export function createNode(
                 ? 135
                 : 175;
 
-  return {
+  const node: FlowNode = {
     id,
     publicId: makeNodePublicId(kind),
     kind,
@@ -81,12 +83,12 @@ export function createNode(
                   : "#8ee7ff",
     model:
       kind === "video"
-        ? (capabilities.video?.defaultModel ?? "agnes-video-v2.0")
+        ? defaultModel("video", capabilities.video?.defaultModel ?? "agnes-video-v2.0")
         : kind === "voice" || kind === "tts"
           ? "easyvoice-local"
           : kind === "audio"
             ? undefined
-            : (capabilities.image?.defaultModel ?? "gpt-image-2"),
+            : defaultModel("image", capabilities.image?.defaultModel ?? "gpt-image-2"),
     videoSettings:
       kind === "video"
         ? {
@@ -113,4 +115,6 @@ export function createNode(
         ? { emotion: "中性", speed: 1, volume: 1, format: "mp3" }
         : undefined,
   };
+  normalizeModelSettings(node);
+  return node;
 }

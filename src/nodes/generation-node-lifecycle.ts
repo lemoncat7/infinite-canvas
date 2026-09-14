@@ -1,3 +1,4 @@
+import { defaultModel } from '../models/catalog';
 import type { FlowLink, FlowNode } from "./node-types";
 import { makeNodePublicId } from "./node-service";
 
@@ -30,7 +31,7 @@ export function appendRevisionNode(id: number, source: FlowNode, nodes: FlowNode
     formConstraint: kind === "image" ? source.formConstraint : undefined,
     continuityConstraint: kind === "image" ? source.continuityConstraint : undefined,
     accent: kind === "video" ? "#ffb774" : "#8ee7ff",
-    model: source.model ?? (kind === "video" ? "agnes-video-v2.0" : "gpt-image-2"),
+    model: source.model ?? defaultModel(kind, kind === "video" ? "agnes-video-v2.0" : "gpt-image-2"),
     imageSettings: kind === "image" ? { ...(source.imageSettings ?? {}) } : undefined,
     videoSettings: kind === "video" ? { ...(source.videoSettings ?? {}) } : undefined,
     status: "queued", progress: 0,
