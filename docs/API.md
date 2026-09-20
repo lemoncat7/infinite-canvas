@@ -2,6 +2,12 @@
 
 Viora 的浏览器入口默认是 `http://127.0.0.1:4173`，所有业务接口统一使用 `/api` 前缀。下文示例中的地址可替换为实际部署域名。
 
+MCP 客户端可使用同一个人 API Token 连接 `/api/mcp`（Streamable HTTP）。工具、画布并发规则、生成幂等键和配置示例见 [MCP 接入文档](./MCP.md)。后端模块职责见 [架构说明](./BACKEND_ARCHITECTURE.md)。
+
+`GET /api/assets/:assetId` 返回当前用户拥有的单个资产元数据（文件名、类型、大小、项目、创建时间及受认证保护的下载路径）；不返回磁盘存储名。不属于当前用户或不存在的资产统一返回 404。
+
+`POST /api/assets/:assetId/download-ticket` 要求个人 Bearer Token 和资产所有权，返回 15 分钟有效的单文件下载路径及 `expiresAt`。对应的 `GET /api/asset-downloads/:assetId?ticket=...` 无需 Authorization，支持 Range；凭证被篡改、到期、对应资产被删除或个人 Token 被轮换时拒绝下载。不要在访问日志中记录 ticket。
+
 ## 认证与权限
 
 接口支持两种认证方式：

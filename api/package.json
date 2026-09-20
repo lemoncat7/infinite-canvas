@@ -6,17 +6,21 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
-    "test:comic": "npm run build && node scripts/test-comic-validation.mjs",
+    "test:comic": "npm run build && node scripts/test-comic-validation.mjs && node scripts/test-comic-stages.mjs",
     "test:agnes": "npm run build && node scripts/test-agnes-video.mjs",
     "test:models": "npm run build && node scripts/test-models.mjs",
     "test:sessions": "npm run build && node scripts/test-sessions.mjs",
+    "test:mcp": "npm run build && node scripts/test-mcp.mjs",
+    "test:architecture": "node scripts/test-architecture.mjs",
     "start": "node dist/server.js"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "fastify": "^5.2.1",
     "sharp": "^0.34.3",
     "sql.js": "^1.12.0",
-    "undici": "^6.21.1"
+    "undici": "^6.21.1",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

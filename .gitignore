@@ -7,5 +7,6 @@ test-output/**/*.wav
 test-results/
 playwright-report/
 model-config.key
+asset-download.key
 model-config.json
 model-config.json.*.tmp

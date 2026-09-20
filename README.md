@@ -181,6 +181,10 @@ npm run build
 
 ## 当前状态
 
+### MCP 与后端架构
+
+内置 `/api/mcp` Streamable HTTP 服务，使用个人 API Token，可操作项目/画布、查询模型、提交异步生成并获取资产。详见 [MCP 接入](docs/MCP.md) 与 [后端职责划分](docs/BACKEND_ARCHITECTURE.md)。
+
 项目处于持续开发阶段，核心的图像生成、视频生成、Agent 规划、用户项目资产体系和点数机制已经可用。后续重点包括支付接入、管理员后台、任务与点数流水、更多 Provider 适配以及移动端性能优化。
 
 ## 安全说明
