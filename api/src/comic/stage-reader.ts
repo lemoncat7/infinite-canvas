@@ -2,6 +2,8 @@ import { ProxyAgent, fetch as undiciFetch } from "undici";
 import { parseFirstJsonObject } from "./json.js";
 import { ComicStreamState } from "./stream-state.js";
 import { safeModelError } from '../models/errors.js';
+import { requestWithProviderKeys } from '../models/key-pool.js';
+import { ModelConfigError, type ProviderConnection } from '../models/types.js';
 
 type Emit = (event: Record<string, unknown>) => void;
 type Log = { info(value: unknown, message?: string): void; warn(value: unknown, message?: string): void };
@@ -11,6 +13,7 @@ export function createComicStageReader(options: {
   headerTimeout: number; idleTimeout: number; state: ComicStreamState;
   emit: Emit; log: Log;
   managedModel?: boolean;
+  connection?: ProviderConnection;
 }) {
   const candidates = [options.model, options.model, options.model, ...(options.managedModel || options.model === "gpt-5.4-mini" ? [] : ["gpt-5.4-mini", "gpt-5.4-mini"])]
   const readStage = async (
@@ -34,9 +37,12 @@ export function createComicStageReader(options: {
           max_tokens:maxTokens, response_format:{type:"json_object"}, messages:[{role:"system",content:system},{role:"user",content}] }), signal:controller.signal,
       };
       try {
-        const response = options.proxyUrl
-          ? await undiciFetch(`${options.baseUrl}/v1/chat/completions`, { ...requestOptions, dispatcher:new ProxyAgent(options.proxyUrl) })
-          : await fetch(`${options.baseUrl}/v1/chat/completions`, requestOptions);
+        const response = await requestWithProviderKeys(options.connection, options.apiKey, async key => {
+          const init = { ...requestOptions, headers: { ...requestOptions.headers, authorization: `Bearer ${key}` } };
+          return options.proxyUrl
+            ? await undiciFetch(`${options.baseUrl}/v1/chat/completions`, { ...init, dispatcher:new ProxyAgent(options.proxyUrl) })
+            : await fetch(`${options.baseUrl}/v1/chat/completions`, init);
+        }, controller.signal);
         clearTimeout(timer);
         if (response.ok && response.body) { body = response.body as ReadableStream<Uint8Array>; activeController = controller; stageContentAt = Date.now(); options.state.touch(); break; }
         await response.body?.cancel();
@@ -44,6 +50,7 @@ export function createComicStageReader(options: {
         options.log.warn({stage,attempt:attempt+1,model:options.state.usedModel,status:response.status}, "comic stage upstream unavailable");
       } catch (error) {
         clearTimeout(timer); lastError = safeModelError(error).message;
+        if (error instanceof ModelConfigError) break;
         options.log.warn({stage,attempt:attempt+1,model:options.state.usedModel,message:lastError}, "comic stage upstream retry");
       }
     }

@@ -299,6 +299,7 @@ export function registerComicGenerationRoutes(app: FastifyInstance) {
         headerTimeout,
         idleTimeout,
         managedModel: !!textConfiguration,
+        connection: textConfiguration?.connection,
         state: streamState,
         emit,
         log: request.log,

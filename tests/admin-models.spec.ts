@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test'
 
 async function fixture(page: Page, admin = true, withNode = false) {
   let revision = 1
-  const providers = [{ id: 'p', name: '测试服务商', baseUrl: 'https://example.com', proxyUrl: '', enabled: true, hasKey: true, readOnly: false }]
+  const providers = [{ id: 'p', name: '测试服务商', baseUrl: 'https://example.com', proxyUrl: '', enabled: true, hasKey: true, readOnly: false, keyCount: 2, keys: [{ id: 'key-one-id', status: 'ready', cooldownUntil: null as string | null, reason: '' }, { id: 'key-two-id', status: 'cooling', cooldownUntil: '2026-09-20T20:00:00Z', reason: 'rate-limit' }] }]
   const models = [{ id: 'global:m', name: '全局图片模型', model: 'image-test', providerId: 'p', adapter: 'openai-image', kind: 'image', enabled: true, order: 0, creditCost: 0, capabilities: { referenceImages: 1, transparent: true, sizes: ['512x512', '1024x1024'], resolutions: [], aspectRatios: [], minSeconds: 1, maxSeconds: 18 } }]
   const defaults: Record<string, string> = { image: 'global:m' }
   let devices = Array.from({ length: 9 }, (_, i) => ({ id: `device-${i}`, name: i === 0 ? '当前浏览器' : `设备 ${i}`, current: i === 0, lastUsedAt: new Date(Date.now() - i * 60000).toISOString() }))
@@ -21,7 +21,10 @@ async function fixture(page: Page, admin = true, withNode = false) {
     else if (path === '/api/admin/models' && req.method() === 'GET') body = state()
     else if (path === '/api/admin/model-providers' && req.method() === 'POST') {
       const data = req.postDataJSON()
-      providers.push({ ...data, apiKey: undefined, hasKey: !!data.apiKey, readOnly: false, id: 'p2' }); revision++; body = state()
+      providers.push({ ...data, apiKey: undefined, apiKeys: undefined, hasKey: !!data.apiKeys?.length, keyCount: data.apiKeys?.length || 0, keys: (data.apiKeys || []).map((_: string, i: number) => ({ id: `new-${i}`, status: 'ready', cooldownUntil: null })), readOnly: false, id: 'p2' }); revision++; body = state()
+    } else if (path === '/api/admin/model-providers/p' && req.method() === 'PUT') {
+      const data = req.postDataJSON(), keys = providers[0].keys.filter(k => data.retainedKeyIds.includes(k.id)).concat(data.apiKeys.map((_: string, i: number) => ({ id: `added-${i}`, status: 'ready', cooldownUntil: null, reason: '' })))
+      providers[0] = { ...providers[0], name: data.name, keys, keyCount: keys.length }; revision++; body = state()
     } else if (path === '/api/admin/models' && req.method() === 'POST') {
       const data = req.postDataJSON(); models.push({ ...data, kind: 'image', id: 'global:added' }); revision++; body = state()
     } else if (path.endsWith('/discover')) body = { models: ['new-image-id', 'second-image-id'] }
@@ -50,14 +53,19 @@ for (const width of [375, 1024, 1440]) for (const theme of ['light', 'dark']) te
   const editor = page.getByRole('dialog', { name: '编辑模型配置', exact: true })
   await editor.getByLabel('连接名称', { exact: true }).fill('我的服务商')
   await editor.getByLabel('接口地址', { exact: true }).fill('https://api.example.com/v1')
-  await editor.getByLabel('API 密钥', { exact: false }).fill('test-secret')
+  await editor.getByLabel('新增 API 密钥', { exact: true }).fill('test-secret')
   await editor.getByRole('button', { name: '显示密钥' }).click()
   await expect(editor.locator('[name=apiKey]')).toHaveAttribute('type', 'text')
+  await editor.getByRole('button', { name: '添加 Key' }).click()
+  await editor.locator('[name=apiKey]').nth(1).fill('second-test-secret')
   await editor.getByRole('button', { name: '获取上游模型', exact: true }).click()
   await expect(editor.locator('output')).toContainText('已获取 2 个模型')
   await expect(editor.getByLabel('接口地址', { exact: true })).toHaveValue('https://api.example.com/v1')
   expect(await editor.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true)
+  await page.screenshot({ path: `/tmp/canvas-provider-${width}-${theme}.png` })
+  const saved = page.waitForRequest(req => new URL(req.url()).pathname === '/api/admin/model-providers' && req.method() === 'POST')
   await editor.getByRole('button', { name: '保存配置' }).click()
+  expect((await saved).postDataJSON().apiKeys).toEqual(['test-secret', 'second-test-secret'])
   await expect(editor).not.toBeVisible()
   await expect(workspace.getByText('我的服务商', { exact: true })).toBeVisible()
   await workspace.getByRole('button', { name: '模型目录', exact: true }).click()
@@ -76,6 +84,31 @@ for (const width of [375, 1024, 1440]) for (const theme of ['light', 'dark']) te
   await workspace.getByRole('button', { name: '模型目录', exact: true }).click()
   await page.screenshot({ path: `/tmp/canvas-models-${width}-${theme}.png` })
   expect(errors).toEqual([])
+})
+
+test('existing keys can be retained or removed; adaptive editor fits short landscape screens', async ({ page }) => {
+  await page.setViewportSize({ width: 844, height: 390 })
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await fixture(page)
+  await page.locator('#workspace-user').click()
+  await page.locator('#admin-actions summary').click()
+  await page.locator('#open-global-models').click()
+  const workspace = page.getByRole('dialog', { name: '全局模型管理', exact: true })
+  await workspace.getByRole('button', { name: '服务商连接', exact: true }).click()
+  await expect(workspace.locator('.model-provider-row')).toContainText('1 冷却中')
+  await workspace.getByRole('button', { name: '配置', exact: true }).click()
+  const editor = page.getByRole('dialog', { name: '编辑模型配置', exact: true })
+  await editor.locator('[name=retainedKeyIds]').first().uncheck()
+  await editor.locator('[name=apiKey]').fill('replacement-secret')
+  const saved = page.waitForRequest(req => req.method() === 'PUT' && req.url().endsWith('/admin/model-providers/p'))
+  await editor.getByRole('button', { name: '保存配置' }).click()
+  const data = (await saved).postDataJSON()
+  expect(data.retainedKeyIds).toEqual(['key-two-id'])
+  expect(data.apiKeys).toEqual(['replacement-secret'])
+  await workspace.getByRole('button', { name: '配置', exact: true }).click()
+  await expect(editor.locator('[name=retainedKeyIds]')).toHaveCount(2)
+  await expect(editor.locator('[name=apiKey]')).toHaveValue('')
+  expect(await editor.evaluate(el => el.scrollWidth <= el.clientWidth && el.getBoundingClientRect().bottom <= window.innerHeight)).toBe(true)
 })
 
 test('ordinary users do not see admin entry', async ({ page }) => {

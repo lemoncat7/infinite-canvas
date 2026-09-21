@@ -1,4 +1,5 @@
 import { type FastifyInstance } from "fastify";
+import { requestWithProviderKeys } from '../models/key-pool.js';
 import { randomUUID } from "node:crypto";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 import { requireUser } from "../auth/service.js";
@@ -261,16 +262,18 @@ export function registerComicChatRoutes(app: FastifyInstance) {
             signal: controller.signal,
           };
         try {
-          const response = proxyUrl
+          const response = await requestWithProviderKeys(textConfiguration?.connection, apiKey, async key => proxyUrl
             ? await undiciFetch(`${baseUrl}/v1/chat/completions`, {
                 ...options,
+                headers: { ...options.headers, authorization: `Bearer ${key}` },
                 redirect: "error",
                 dispatcher: new ProxyAgent(proxyUrl),
               })
             : await fetch(`${baseUrl}/v1/chat/completions`, {
                 ...options,
+                headers: { ...options.headers, authorization: `Bearer ${key}` },
                 redirect: "error",
-              });
+              }), controller.signal);
           if (!response.ok) {
             await response.body?.cancel();
             throw new Error(`upstream HTTP ${response.status}`);

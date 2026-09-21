@@ -88,7 +88,7 @@ test('environment credential pools survive import and remain private', t => {
   store.saveProvider({ ...view, revision: 1, apiKey: '' }, view.id)
   assert.deepEqual(store.connection(view.id).apiKeys, ['KEY_ONE', 'KEY_TWO'])
   store.saveProvider({ ...view, revision: 2, apiKey: 'REPLACEMENT' }, view.id)
-  assert.equal(store.connection(view.id).apiKeys, undefined)
+  assert.deepEqual(store.connection(view.id).apiKeys, ['REPLACEMENT'])
 })
 
 test('routes enforce admin, same-origin mutations, revision, and redact discovery failures', async t => {

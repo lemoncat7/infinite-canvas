@@ -7,6 +7,7 @@ import type { ResolvedModel } from './types.js'
 import { apiRoot } from './network.js'
 import { safeModelError } from './errors.js'
 import { createGenerationProvider } from '../providers/index.js'
+import { withProviderKeys } from './key-pool.js'
 
 /** An unconfigured legacy adapter must not prevent administrators configuring models in the UI. */
 export function compatibleLegacyProvider(): GenerationProvider {
@@ -28,7 +29,7 @@ export function configuredProvider(resolved: ResolvedModel): GenerationProvider 
     default: throw new Error('当前模型不是生成模型')
   }
   return { name: provider.name, run: async (input, update) => {
-    try { return await provider.run(input, update) }
+    try { return await withProviderKeys(resolved.connection, resolved.model.kind === 'video', () => provider.run(input, update)) }
     catch (error) { throw safeModelError(error) }
   } }
 }

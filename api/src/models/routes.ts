@@ -4,6 +4,7 @@ import { ModelConfigError } from './types.js'
 import { discoverModels } from './network.js'
 import { configuredProvider } from './runtime.js'
 import { providerInput, endpoint } from './validation.js'
+import { connectionKeys } from './key-pool.js'
 
 export function registerModelRoutes(app: FastifyInstance, store: ModelStore, guards: {
   user(request: FastifyRequest, reply: FastifyReply): unknown;
@@ -42,9 +43,9 @@ export function registerModelRoutes(app: FastifyInstance, store: ModelStore, gua
   route('POST', '/admin/model-providers/:id/discover', (_body, id) => exclusive(id, async () => ({ models: await discoverModels(store.connection(id)), checkedAt: new Date().toISOString() })))
   route('POST', '/admin/model-providers/discover', body => exclusive('draft-discovery', async () => {
     const previous = typeof body.providerId === 'string' && body.providerId ? store.connection(body.providerId) : undefined
-    if (previous?.apiKey && !body.apiKey && endpoint(body.baseUrl) !== endpoint(previous.baseUrl))
-      throw new ModelConfigError('接口地址已改变，请重新填写密钥后获取模型，避免将原密钥发送到新地址')
     const connection = providerInput({ ...body, name: body.name || '连接测试' }, 'draft', previous)
+    if (previous && (endpoint(body.baseUrl) !== endpoint(previous.baseUrl) || connection.proxyUrl !== previous.proxyUrl) && connectionKeys(connection).some(key => connectionKeys(previous).includes(key)))
+      throw new ModelConfigError('接口或代理地址已改变，请移除原密钥并填写新密钥后获取模型，避免向新地址泄露原密钥')
     return { models: await discoverModels(connection), checkedAt: new Date().toISOString() }
   }))
   route('POST', '/admin/models/:id/test', (body, id) => exclusive(id, async () => {

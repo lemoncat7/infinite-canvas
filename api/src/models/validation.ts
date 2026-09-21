@@ -1,4 +1,5 @@
 import { adapterKinds, ModelConfigError, type GlobalModel, type ModelAdapter, type ProviderConnection } from './types.js'
+import { connectionKeys, credentialId } from './key-pool.js'
 export function text(value: unknown, label: string, max = 120) {
   if (typeof value !== 'string' || !value.trim() || value.length > max || /[\x00-\x1f]/.test(value)) throw new ModelConfigError(`${label}不能为空、包含控制字符或超过 ${max} 字`)
   return value.trim()
@@ -24,8 +25,18 @@ function list(value: unknown, label: string) {
   return [...new Set(value.map(item => text(item, label, 40)))]
 }
 export function providerInput(body: Record<string, unknown>, id: string, previous?: ProviderConnection): ProviderConnection {
-  const apiKey = body.apiKey === undefined || body.apiKey === '' ? previous?.apiKey ?? '' : text(body.apiKey, '密钥', 8192)
-  return { id, name: text(body.name, '连接名称'), baseUrl: endpoint(body.baseUrl), proxyUrl: endpoint(body.proxyUrl, '代理地址', true), apiKey, ...(!body.apiKey && previous?.apiKeys ? { apiKeys: previous.apiKeys } : {}), enabled: body.enabled !== false }
+  let keys = previous ? connectionKeys(previous) : []
+  if (body.apiKeys !== undefined) {
+    if (!Array.isArray(body.apiKeys) || body.apiKeys.length > 32) throw new ModelConfigError('每个服务商最多支持 32 个 Key')
+    const added = body.apiKeys.map(key => text(key, '密钥', 8192))
+    if (body.retainedKeyIds !== undefined) {
+      if (!Array.isArray(body.retainedKeyIds) || body.retainedKeyIds.length > 32 || body.retainedKeyIds.some(id => typeof id !== 'string' || !keys.some(k => credentialId(k) === id))) throw new ModelConfigError('保留的 Key 已变化，请刷新配置后重试')
+      keys = keys.filter(key => (body.retainedKeyIds as string[]).includes(credentialId(key)))
+    } else keys = []
+    keys = [...new Set([...keys, ...added])]
+  } else if (body.apiKey !== undefined && body.apiKey !== '') keys = [text(body.apiKey, '密钥', 8192)]
+  if (keys.length > 32) throw new ModelConfigError('每个服务商最多支持 32 个 Key')
+  return { id, name: text(body.name, '连接名称'), baseUrl: endpoint(body.baseUrl), proxyUrl: endpoint(body.proxyUrl, '代理地址', true), apiKey: keys[0] || '', apiKeys: keys, enabled: body.enabled !== false }
 }
 export function modelInput(body: Record<string, unknown>, id: string): GlobalModel {
   const adapter = String(body.adapter) as ModelAdapter

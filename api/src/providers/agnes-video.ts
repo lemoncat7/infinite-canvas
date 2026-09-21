@@ -1,6 +1,7 @@
 import type { GenerationInput, GenerationProvider, GenerationUpdate } from './types.js'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { currentProviderKeys, ProviderKeyCooldownError } from '../models/key-pool.js'
 
 type AgnesTask = {
   id?: string
@@ -70,7 +71,7 @@ export class AgnesVideoProvider implements GenerationProvider {
 
   async run(input: GenerationInput, onUpdate: (update: GenerationUpdate) => void) {
     if (input.kind !== 'video') throw new Error('Agnes Video Adapter 仅支持视频任务')
-    const credential = await acquireAgnesCredential(this.managedKeys)
+    const credential = currentProviderKeys() ? { key: '', channel: 1 } : await acquireAgnesCredential(this.managedKeys)
     const settings = normalizeAgnesSettings(input.parameters)
     const referenceMode = input.parameters?.reference_mode === 'keyframes' ? 'keyframes' : 'references'
     const imageSources = input.inputUrls ?? []
@@ -113,11 +114,19 @@ export class AgnesVideoProvider implements GenerationProvider {
     while (Date.now() - startedAt < this.timeout) {
       await wait(this.pollInterval)
       const query = `/agnesapi?video_id=${encodeURIComponent(videoId)}&model_name=${encodeURIComponent(input.model || this.defaultModel)}`
-      let statusResponse = await this.request(query, {}, this.queryTimeout, credential.key)
-      let task = await readTask(statusResponse)
-      if (statusResponse.status === 404 && taskId) {
-        statusResponse = await this.request(`/v1/videos/${encodeURIComponent(taskId)}`, {}, this.queryTimeout, credential.key)
+      let statusResponse: Response, task: AgnesTask
+      try {
+        statusResponse = await this.request(query, {}, this.queryTimeout, credential.key)
         task = await readTask(statusResponse)
+        if (statusResponse.status === 404 && taskId) {
+          statusResponse = await this.request(`/v1/videos/${encodeURIComponent(taskId)}`, {}, this.queryTimeout, credential.key)
+          task = await readTask(statusResponse)
+        }
+      }
+      catch (error) {
+        if (!(error instanceof ProviderKeyCooldownError) || !error.pollingRateLimit) throw error
+        await wait(Math.min(Math.max(1000, error.until - Date.now()), Math.max(1, this.timeout - (Date.now() - startedAt))))
+        continue
       }
       if (!statusResponse.ok) {
         if (statusResponse.status === 429 || /rate limit/i.test(taskError(task))) continue
@@ -146,11 +155,15 @@ export class AgnesVideoProvider implements GenerationProvider {
   }
 
   private async request(path: string, init: { method?: string; body?: string; headers?: Record<string, string> } = {}, timeout = this.queryTimeout, apiKey = required('AGNES_VIDEO_API_KEY')) {
+    const pool = currentProviderKeys()
+    return pool ? pool.run(key => this.requestWithKey(path, init, timeout, key)) : this.requestWithKey(path, init, timeout, apiKey)
+  }
+  private async requestWithKey(path: string, init: { method?: string; body?: string; headers?: Record<string, string> }, timeout: number, apiKey: string) {
     // curl is used only by the Agnes adapter. Its HTTP CONNECT implementation is
     // compatible with the configured LAN proxy; Undici stalls on this proxy/API pair.
     const marker = '\n__AGNES_HTTP_STATUS__:'
     const args = [
-      '--silent', '--show-error',
+      '--silent', '--show-error', '--dump-header', '-',
       '--connect-timeout', '10', '--max-time', String(Math.ceil(timeout / 1000)),
       '--write-out', `${marker}%{http_code}`,
       '--header', `Authorization: Bearer ${apiKey}`,
@@ -165,7 +178,20 @@ export class AgnesVideoProvider implements GenerationProvider {
       const markerIndex = stdout.lastIndexOf(marker)
       if (markerIndex < 0) throw new Error('Agnes 响应缺少 HTTP 状态码')
       const status = Number(stdout.slice(markerIndex + marker.length).trim())
-      return new Response(stdout.slice(0, markerIndex), { status })
+      // CONNECT proxies and 100 Continue can prepend header blocks. Only the
+      // final upstream headers belong to the response (not the proxy's headers).
+      let body = stdout.slice(0, markerIndex), headers = new Headers()
+      while (/^HTTP\/\S+ \d{3}/.test(body)) {
+        const boundary = /\r?\n\r?\n/.exec(body)
+        if (!boundary) break
+        headers = new Headers()
+        for (const line of body.slice(0, boundary.index).split(/\r?\n/).slice(1)) {
+          const colon = line.indexOf(':')
+          if (colon > 0 && line.slice(0, colon).toLowerCase() === 'retry-after') headers.set('retry-after', line.slice(colon + 1).trim())
+        }
+        body = body.slice(boundary.index + boundary[0].length)
+      }
+      return new Response(status === 204 || status === 304 ? null : body, { status, headers })
     } catch (error) {
       const action = init.method === 'POST' ? '创建任务' : '查询任务'
       const message = sanitizeError(error instanceof Error ? error.message : String(error))

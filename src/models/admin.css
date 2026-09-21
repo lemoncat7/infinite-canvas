@@ -38,5 +38,33 @@
 .model-workspace [hidden],.model-editor [hidden]{display:none!important}
 @media(max-width:640px){.model-workspace>header{padding:16px}.model-workspace>header p{display:none}.model-workspace nav{padding:10px 16px}.model-page-body{padding:12px 16px 24px}.model-toolbar{flex-wrap:wrap}.model-toolbar input{flex-basis:100%}.model-row{grid-template-columns:1fr auto;gap:8px}.model-row>span:nth-child(3){grid-column:1}.model-row>span:nth-child(2){text-align:right}.model-row button{grid-column:2;grid-row:3}.model-notice,.model-provider-row{display:flex;align-items:stretch;flex-direction:column}.model-editor{border-radius:0}.model-editor form,.model-editor>header{padding:16px}.model-workspace input,.model-workspace select,.model-editor input,.model-editor select{font-size:16px}.model-workspace button,.model-editor button{min-height:44px}}
 [data-catalog-hidden][hidden] { display: none !important; }
+.model-workspace>header{padding-top:16px;padding-bottom:16px;background:var(--ui-surface-solid)}
+.model-workspace h1{font-size:21px;margin:0}
+.model-workspace nav{gap:24px;padding-top:0;padding-bottom:0}
+.model-workspace nav button{border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;padding:14px 0;color:var(--ui-text-secondary)}
+.model-workspace nav button[aria-pressed=true]{background:transparent;border-color:var(--ui-accent);color:var(--ui-text)}
+.model-feedback:empty{display:none}
+.model-toolbar{margin:8px 0 24px}.model-toolbar input{max-width:520px;margin-right:auto}
+.model-row,.model-provider-row{padding:18px 4px}.model-row small,.model-provider-row small{margin-top:4px}
+.model-editor{width:clamp(560px,58vw,840px);max-width:100%;height:min(900px,calc(100dvh - 48px));max-height:calc(100dvh - 48px);margin:auto;border-radius:16px}
+.model-editor fieldset{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:20px}
+.model-editor fieldset>*{grid-column:1/-1;min-width:0}
+.model-editor fieldset>label:nth-child(1),.model-editor fieldset>label:nth-child(2){grid-column:auto}
+.model-editor input,.model-editor select{width:100%}
+.model-editor input[type=checkbox]{width:auto;flex-shrink:0}
+.model-editor footer{position:sticky;bottom:-20px;padding:16px 0;background:var(--ui-surface-solid);border-top:1px solid var(--ui-border);z-index:1}
+.model-key-section{border-top:1px solid var(--ui-border);margin-top:24px;padding-top:16px}
+.model-key-section h3{font-size:14px;margin:0 0 16px;display:flex;justify-content:space-between;align-items:center}
+.model-key-section h3 small{font-weight:400;color:var(--ui-text-secondary)}
+.model-editor label.model-saved-key{display:flex;flex-direction:row;align-items:center;gap:12px;padding:12px 0;margin:0;border-bottom:1px solid var(--ui-border)}
+.model-saved-key span{flex:1}.model-saved-key small{display:block;font-size:12px;color:var(--ui-text-secondary);font-weight:400;line-height:1.6}
+.model-editor .model-saved-key + .model-help{margin:12px 0 16px}
+.model-key-input{display:flex;align-items:center;gap:8px;margin:12px 0}
+.model-key-input label{width:100%;margin:0}.model-key-input input{width:100%;min-width:0}
+.model-key-actions{display:flex;justify-content:space-between;gap:8px}
+.model-editor [data-fetch-models]{justify-self:start;margin:0 0 12px}
+.model-editor form{scroll-padding-block:16px 88px}
+@media(max-width:640px){.model-workspace nav{gap:20px}.model-toolbar{margin-bottom:16px}.model-editor{width:100%;height:100dvh;max-height:100dvh;border-radius:0}.model-editor fieldset{grid-template-columns:1fr}.model-editor footer{bottom:-16px}.model-provider-row>div:last-child{justify-content:flex-end}.model-key-input input{font-size:16px}}
+@media(max-height:560px){.model-editor{height:100dvh;max-height:100dvh;border-radius:0}.model-editor>header{padding-top:12px;padding-bottom:12px}}
 .catalog-setting { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; font: inherit; color: var(--ui-text); }
 .catalog-setting select { max-width: 70%; min-width: 0; padding: 6px 8px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-surface-solid); color: var(--ui-text); font: inherit; }

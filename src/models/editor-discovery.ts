@@ -1,4 +1,5 @@
 import { modelRequest } from './admin-api'
+import { providerDraft } from './provider-editor'
 
 /** Discover without saving or rebuilding the editor, preserving all draft fields. */
 export function bindEditorDiscovery(form: HTMLFormElement, kind: 'model' | 'provider', providerId?: string) {
@@ -14,14 +15,14 @@ export function bindEditorDiscovery(form: HTMLFormElement, kind: 'model' | 'prov
   let version = 0
   form.addEventListener('input', event => {
     const name = (event.target as HTMLInputElement).name
-    if (['providerId', 'baseUrl', 'apiKey', 'proxyUrl'].includes(name)) {
+    if (['providerId', 'baseUrl', 'apiKey', 'proxyUrl', 'retainedKeyIds'].includes(name) || event.target === form) {
       version++; results.hidden = true; results.replaceChildren()
       form.querySelector('datalist')?.replaceChildren()
     }
   })
   button.addEventListener('click', async () => {
     const current = ++version
-    const values = Object.fromEntries(new FormData(form))
+    const values = kind === 'provider' ? providerDraft(form) : Object.fromEntries(new FormData(form))
     const id = String(values.providerId || '')
     if (kind === 'model' && !id) { output.textContent = '请先选择服务商'; return }
     button.disabled = true; button.textContent = '正在获取…'

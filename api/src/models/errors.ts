@@ -1,5 +1,7 @@
+import { ModelConfigError } from './types.js'
 /** Preserve retry classification without exposing upstream bodies or credentials. */
 export function safeModelError(error: unknown): Error {
+  if (error instanceof ModelConfigError) return error
   const message = error instanceof Error ? error.message : String(error)
   if (/video queue is full|queue full|queue is full|server queue.*full|队列.*(?:已满|繁忙)/i.test(message))
     return new Error('模型服务队列已满，请稍后重试')

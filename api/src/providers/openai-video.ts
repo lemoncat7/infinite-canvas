@@ -1,5 +1,6 @@
 import type { GenerationInput, GenerationProvider, GenerationStatus, GenerationUpdate } from './types.js'
 import { modelFetch } from '../models/network.js'
+import { ProviderKeyCooldownError } from '../models/key-pool.js'
 
 type Payload = Record<string, unknown>
 
@@ -45,7 +46,15 @@ export class OpenAiVideoProvider implements GenerationProvider {
     if (!id) throw new Error(`CPA/Grok 创建响应未返回 request_id（字段：${Object.keys(created).join(', ') || '空响应'}）`)
     const startedAt = Date.now(); let lastProgress = 0, started = false
     while (Date.now() - startedAt < this.timeout) {
-      const payload = await this.request(`/v1/videos/${encodeURIComponent(id)}`)
+      let payload: Payload
+      try { payload = await this.request(`/v1/videos/${encodeURIComponent(id)}`) }
+      catch (error) {
+        if (!(error instanceof ProviderKeyCooldownError) || !error.pollingRateLimit) throw error
+        // Preserve the accepted task; wait for its own key instead of creating
+        // another job or querying a different account's task namespace.
+        await wait(Math.min(Math.max(1000, error.until - Date.now()), Math.max(1, this.timeout - (Date.now() - startedAt))))
+        continue
+      }
       const normalized = normalize(payload, id, this.baseUrl)
       const update = { ...normalized, status: (started || normalized.progress > 1) && normalized.status === 'queued' ? 'running' as const : normalized.status, progress: Math.max(lastProgress, normalized.progress) }
       if (update.status === 'running') started = true

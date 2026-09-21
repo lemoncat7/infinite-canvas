@@ -2,6 +2,7 @@ import { loadModelCatalog, type CatalogModel } from './catalog'
 import { modelRequest, type AdminModels } from './admin-api'
 import { defaultsForm, escape, kinds, modelForm, modelRows, providerForm, providerRows } from './admin-views'
 import { bindEditorDiscovery } from './editor-discovery'
+import { bindProviderKeys, providerDraft } from './provider-editor'
 
 export class AdminModelController {
   private readonly page = document.createElement('dialog')
@@ -15,7 +16,7 @@ export class AdminModelController {
   constructor(private readonly options: { isAdmin(): boolean; closeUserMenu(): void }) {
     this.page.className = 'model-workspace'
     this.page.setAttribute('aria-label', '全局模型管理')
-    this.page.innerHTML = `<header><div><small>管理员工作区</small><h1>全局模型</h1><p>统一配置连接与模型，供所有用户使用。</p></div><button type="button" data-close>返回画布</button></header><nav aria-label="模型管理分类">${[['models', '模型目录'], ['providers', '服务商连接'], ['defaults', '默认分配']].map(([id, title]) => `<button type="button" data-tab="${id}" aria-pressed="${id === 'models'}">${title}</button>`).join('')}</nav><div class="model-page-body"><output class="model-feedback" aria-live="polite"></output><div data-import></div><div class="model-toolbar"><input type="search" aria-label="搜索模型" placeholder="搜索名称或模型 ID" data-search><select aria-label="筛选模型类型" data-kind><option value="">全部类型</option>${Object.entries(kinds).map(([key, title]) => `<option value="${key}">${title}</option>`).join('')}</select><button type="button" data-refresh>刷新</button><button type="button" class="model-primary" data-new>新增模型</button></div><section data-content aria-label="模型配置"></section></div>`
+    this.page.innerHTML = `<header><div><h1>全局模型</h1></div><button type="button" data-close>返回画布</button></header><nav aria-label="模型管理分类">${[['models', '模型目录'], ['providers', '服务商连接'], ['defaults', '默认分配']].map(([id, title]) => `<button type="button" data-tab="${id}" aria-pressed="${id === 'models'}">${title}</button>`).join('')}</nav><div class="model-page-body"><output class="model-feedback" aria-live="polite"></output><div data-import></div><div class="model-toolbar"><input type="search" aria-label="搜索模型" placeholder="搜索名称或模型 ID" data-search><select aria-label="筛选模型类型" data-kind><option value="">全部类型</option>${Object.entries(kinds).map(([key, title]) => `<option value="${key}">${title}</option>`).join('')}</select><button type="button" data-refresh>刷新</button><button type="button" class="model-primary" data-new>新增模型</button></div><section data-content aria-label="模型配置"></section></div>`
     this.editor.className = 'model-editor'
     this.editor.setAttribute('aria-label', '编辑模型配置')
     document.body.append(this.page, this.editor)
@@ -23,7 +24,7 @@ export class AdminModelController {
     this.page.addEventListener('cancel', event => { if (this.busy) event.preventDefault() })
     this.page.querySelector('[data-refresh]')!.addEventListener('click', () => void this.load())
     this.page.querySelector('[data-new]')!.addEventListener('click', () => this.edit(this.tab === 'providers' ? 'provider' : 'model'))
-    this.page.querySelectorAll<HTMLButtonElement>('[data-tab]').forEach(button => button.addEventListener('click', () => { this.tab = button.dataset.tab!; this.render() }))
+    this.page.querySelectorAll<HTMLButtonElement>('[data-tab]').forEach(button => button.addEventListener('click', () => { this.tab = button.dataset.tab!; (this.page.querySelector('[data-search]') as HTMLInputElement).value = ''; this.render() }))
     this.page.querySelector('[data-search]')!.addEventListener('input', () => this.renderContent())
     this.page.querySelector('[data-kind]')!.addEventListener('change', () => this.renderContent())
     this.page.addEventListener('click', event => {
@@ -62,20 +63,24 @@ export class AdminModelController {
     if (!this.state) return
     this.page.querySelectorAll<HTMLButtonElement>('[data-tab]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.tab === this.tab)))
     const importArea = this.page.querySelector<HTMLElement>('[data-import]')!
-    importArea.innerHTML = this.state.imported ? '' : '<aside class="model-notice"><span>环境配置仍兼容运行。导入后可在这里编辑，重启不会覆盖页面配置。</span><button type="button" data-import-button>导入环境配置</button></aside>'
+    importArea.innerHTML = this.state.imported || this.tab !== 'providers' ? '' : '<aside class="model-notice"><span>环境配置仍兼容运行。导入后可在这里编辑，重启不会覆盖页面配置。</span><button type="button" data-import-button>导入环境配置</button></aside>'
     importArea.querySelector('button')?.addEventListener('click', async () => {
       if (await this.confirm('导入环境配置？', '将复制当前配置到页面管理，不删除环境变量，也不改动已提交任务。')) void this.save('/admin/models/import-environment', 'POST', {})
     })
     const add = this.page.querySelector<HTMLButtonElement>('[data-new]')!
     add.textContent = this.tab === 'providers' ? '新增连接' : '新增模型'
     add.hidden = this.tab === 'defaults'
-    for (const selector of ['[data-search]', '[data-kind]']) (this.page.querySelector(selector) as HTMLElement).hidden = this.tab !== 'models'
+    const search = this.page.querySelector<HTMLInputElement>('[data-search]')!
+    search.hidden = this.tab === 'defaults'
+    search.placeholder = this.tab === 'providers' ? '搜索服务商或接口地址' : '搜索名称或模型 ID'
+    search.setAttribute('aria-label', this.tab === 'providers' ? '搜索服务商' : '搜索模型')
+    ;(this.page.querySelector('[data-kind]') as HTMLElement).hidden = this.tab !== 'models'
     this.renderContent()
   }
   private renderContent() {
     if (!this.state) return
     const content = this.page.querySelector<HTMLElement>('[data-content]')!
-    content.innerHTML = this.tab === 'models' ? modelRows(this.state, (this.page.querySelector('[data-search]') as HTMLInputElement).value, (this.page.querySelector('[data-kind]') as HTMLSelectElement).value) : this.tab === 'providers' ? providerRows(this.state) : defaultsForm(this.state)
+    content.innerHTML = this.tab === 'models' ? modelRows(this.state, (this.page.querySelector('[data-search]') as HTMLInputElement).value, (this.page.querySelector('[data-kind]') as HTMLSelectElement).value) : this.tab === 'providers' ? providerRows(this.state, (this.page.querySelector('[data-search]') as HTMLInputElement).value) : defaultsForm(this.state)
     content.querySelector<HTMLFormElement>('[data-defaults]')?.addEventListener('submit', event => {
       event.preventDefault()
       void this.save('/admin/model-defaults', 'PUT', { defaults: Object.fromEntries(new FormData(event.target as HTMLFormElement)) })
@@ -94,7 +99,7 @@ export class AdminModelController {
       this.state = await modelRequest<AdminModels>(path, method, { ...body, revision: this.state.revision })
       if (!this.page.open || !this.options.isAdmin()) { this.state = undefined; return }
       this.dirty = false
-      if (fromEditor) this.editor.close()
+      if (fromEditor) { this.editor.close(); this.editor.replaceChildren() }
       this.render(); this.feedback('已保存，新请求立即生效。')
       await loadModelCatalog().catch(() => this.feedback('配置已保存，但当前页面目录刷新失败，请点击刷新重试。', true))
     } catch (error) {
@@ -115,11 +120,8 @@ export class AdminModelController {
     this.editor.innerHTML = `<header><h2>${id ? '编辑' : '新增'}${kind === 'provider' ? '服务商连接' : '模型'}</h2><button type="button" data-cancel aria-label="关闭编辑">×</button></header><form><output tabindex="-1" aria-live="polite" class="model-feedback"></output>${readonly ? '<p class="model-notice">当前为环境配置，请先导入后编辑。</p>' : ''}<fieldset ${readonly ? 'disabled' : ''}>${kind === 'provider' ? providerForm(provider) : modelForm(this.state, model, this.discovered)}</fieldset><footer><button type="button" data-cancel>取消</button>${!readonly ? '<button type="submit" class="model-primary">保存配置</button>' : ''}${model?.enabled && model.kind !== 'text' ? '<button type="button" data-test>实际生成测试</button>' : ''}</footer></form>`
     this.editor.showModal()
     this.editor.querySelectorAll('[data-cancel]').forEach(button => button.addEventListener('click', () => void this.closeEditor()))
-    this.editor.querySelector('[data-reveal]')?.addEventListener('click', event => {
-      const input = this.editor.querySelector<HTMLInputElement>('[name=apiKey]')!
-      input.type = input.type === 'password' ? 'text' : 'password'; (event.target as HTMLElement).textContent = input.type === 'password' ? '显示密钥' : '隐藏密钥'
-    })
     const form = this.editor.querySelector('form')!
+    if (kind === 'provider') bindProviderKeys(form)
     if (!readonly) bindEditorDiscovery(form, kind, provider?.id)
     form.addEventListener('input', () => { this.dirty = true })
     const updateCapabilities = () => {
@@ -131,8 +133,8 @@ export class AdminModelController {
     form.addEventListener('submit', event => {
       event.preventDefault()
       if (readonly) return
-      const values = Object.fromEntries(new FormData(form)) as Record<string, unknown>
-      values.enabled = values.enabled === 'on'
+      const values = kind === 'provider' ? providerDraft(form) : Object.fromEntries(new FormData(form)) as Record<string, unknown>
+      if (kind === 'model') values.enabled = values.enabled === 'on'
       if (kind === 'model') {
         const split = (key: string) => String(values[key] || '').split(/[,，\n]/).map(s => s.trim()).filter(Boolean)
         values.capabilities = { referenceImages: Number(values.referenceImages), transparent: values.transparent === 'on', sizes: split('sizes'), resolutions: split('resolutions'), aspectRatios: split('aspectRatios'), minSeconds: Number(values.minSeconds), maxSeconds: Number(values.maxSeconds) }

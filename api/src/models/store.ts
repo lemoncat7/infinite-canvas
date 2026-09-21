@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, openSyn
 import { randomUUID } from 'node:crypto'
 import { ModelSecrets } from './secrets.js'
 import { legacyModels } from './legacy.js'
+import { connectionKeys, providerKeyPool } from './key-pool.js'
 import { modelInput, providerInput } from './validation.js'
 import { ModelConfigError, purposeKinds, type ModelConfiguration, type ModelKind, type ModelPurpose, type ResolvedModel } from './types.js'
 
@@ -23,7 +24,7 @@ export class ModelStore {
   }
   admin() {
     const value = this.effective()
-    return { ...value, providers: value.providers.map(({ apiKey, apiKeys, ...provider }) => ({ ...provider, hasKey: !!apiKey, keyCount: apiKeys?.length || (apiKey ? 1 : 0), readOnly: !value.imported && provider.id.startsWith('env-') })) }
+    return { ...value, providers: value.providers.map(({ apiKey, apiKeys, ...provider }) => ({ ...provider, hasKey: connectionKeys({ apiKey, apiKeys }).length > 0, keyCount: connectionKeys({ apiKey, apiKeys }).length, keys: providerKeyPool.status({ ...provider, apiKey, apiKeys }), readOnly: !value.imported && provider.id.startsWith('env-') })) }
   }
   catalog() {
     const value = this.effective(), enabled = new Set(value.providers.filter(p => p.enabled).map(p => p.id))

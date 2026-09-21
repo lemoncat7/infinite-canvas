@@ -1,4 +1,5 @@
 import { type FastifyInstance } from "fastify";
+import { requestWithProviderKeys } from '../models/key-pool.js';
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 import {
   resolveOwnedInputUrls,
@@ -161,12 +162,13 @@ export function registerAgentsPromptRoutes(app: FastifyInstance) {
             ),
           ]),
         };
-        const response = proxyUrl
+        const response = await requestWithProviderKeys(textConfiguration?.connection, apiKey, async key => proxyUrl
           ? await undiciFetch(url, {
               ...options,
+              headers: { ...options.headers, authorization: `Bearer ${key}` },
               dispatcher: new ProxyAgent(proxyUrl),
             })
-          : await fetch(url, options);
+          : await fetch(url, { ...options, headers: { ...options.headers, authorization: `Bearer ${key}` } }), options.signal);
         const payload = (await response.json()) as {
           choices?: Array<{
             finish_reason?: string;
