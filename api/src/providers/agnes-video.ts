@@ -7,6 +7,7 @@ import { createAgnes25Body, isAgnesVideo25 } from './agnes-video-v25.js'
 import { ModelConfigError } from '../models/types.js'
 import sharp from 'sharp'
 import { EMBEDDED_ONLY, URL_FIRST, prepareReferenceImages, canFallbackReference } from './reference-transport.js'
+import { TrackingDeferred } from './task-tracking.js'
 
 type AgnesTask = {
   id?: string
@@ -78,14 +79,19 @@ export class AgnesVideoProvider implements GenerationProvider {
 
   async run(input: GenerationInput, onUpdate: (update: GenerationUpdate) => void) {
     if (input.kind !== 'video') throw new Error('Agnes Video Adapter 仅支持视频任务')
+    if (input.acceptedTask) {
+      if (input.acceptedTask.provider !== this.name) throw new TrackingDeferred(300000)
+      currentProviderKeys()?.restoreKey(input.acceptedTask.key)
+      return this.poll(input, onUpdate, input.acceptedTask.id, input.acceptedTask.taskId, input.acceptedTask.key)
+    }
     const credential = currentProviderKeys() ? { key: '', channel: 1 } : await acquireAgnesCredential(this.managedKeys)
     const settings = normalizeAgnesSettings(input.parameters)
     const referenceMode = input.parameters?.reference_mode === 'keyframes' ? 'keyframes' : 'references'
     const imageSources = input.inputUrls ?? []
     const modern = isAgnesVideo25(input.model || this.defaultModel)
     if (modern) createAgnes25Body(input, imageSources)
-    if (!modern && referenceMode === 'keyframes' && imageSources.length < 2) throw new Error('Agnes 关键帧动画至少需要 2 张按时间顺序排列的图片')
-    if (!modern && referenceMode !== 'keyframes' && imageSources.length > 1) throw new Error('Agnes 官方接口不支持多图自由参考；多张图片请改用关键帧动画')
+    if (!modern && referenceMode === 'keyframes' && imageSources.length < 2) throw new ModelConfigError(`参考图数量不符合要求：当前 ${imageSources.length} 张，Agnes 关键帧动画至少需要 2 张按时间顺序排列的图片`)
+    if (!modern && referenceMode !== 'keyframes' && imageSources.length > 1) throw new ModelConfigError(`参考图数量超出接口限制：当前 ${imageSources.length} 张，Agnes 此模式最多支持 1 张参考图；多张图片请改用关键帧动画`)
     // Agnes accepts embedded image data for keyframes as well as ordinary
     // image-to-video jobs. Prefer the signed public URL when it is usable, but
     // never make a CDN a hard requirement: the upstream service occasionally
@@ -132,34 +138,40 @@ export class AgnesVideoProvider implements GenerationProvider {
     const videoId = created.video_id || created.task_id || created.id
     const taskId = created.task_id || created.id || videoId
     if (!videoId) throw new Error('Agnes 创建任务响应中没有 video_id 或 task_id')
+    input.saveAcceptedTask?.({ provider: this.name, id: videoId, taskId, key: currentProviderKeys()?.pinnedKey() ?? credential.key })
     console.info('[agnes-video] task created', { internalJobId: input.internalJobId, videoId, model: input.model || this.defaultModel, imageCount: images.length, mode: images.length > 1 ? referenceMode : images.length ? 'ti2vid' : 'text' })
 
+    return this.poll(input, onUpdate, videoId, taskId, credential.key)
+  }
+
+  private async poll(input: GenerationInput, onUpdate: (update: GenerationUpdate) => void, videoId: string, taskId: string | undefined, key: string) {
     const startedAt = Date.now()
     while (Date.now() - startedAt < this.timeout) {
+      input.checkTracking?.()
       await wait(this.pollInterval)
+      input.checkTracking?.()
       const query = `/agnesapi?video_id=${encodeURIComponent(videoId)}&model_name=${encodeURIComponent(input.model || this.defaultModel)}`
       let statusResponse: Response, task: AgnesTask
       try {
-        statusResponse = await this.request(query, {}, this.queryTimeout, credential.key)
+        statusResponse = await this.request(query, {}, this.queryTimeout, key)
         task = await readTask(statusResponse)
         if (statusResponse.status === 404 && taskId) {
-          statusResponse = await this.request(`/v1/videos/${encodeURIComponent(taskId)}`, {}, this.queryTimeout, credential.key)
+          statusResponse = await this.request(`/v1/videos/${encodeURIComponent(taskId)}`, {}, this.queryTimeout, key)
           task = await readTask(statusResponse)
         }
       }
       catch (error) {
-        if (!(error instanceof ProviderKeyCooldownError) || !error.pollingRateLimit) throw error
-        await wait(Math.min(Math.max(1000, error.until - Date.now()), Math.max(1, this.timeout - (Date.now() - startedAt))))
-        continue
+        throw new TrackingDeferred(error instanceof ProviderKeyCooldownError ? Math.max(15000, error.until - Date.now()) : 15000)
       }
       if (!statusResponse.ok) {
-        if (statusResponse.status === 429 || /rate limit/i.test(taskError(task))) continue
-        throw agnesResponseError(statusResponse.status, task, 'poll')
+        throw new TrackingDeferred(statusResponse.status === 429 ? 60000 : 15000)
       }
-      if (task.status === 'failed') throw new Error(taskError(task) || 'Agnes 视频生成失败')
+      input.checkTracking?.()
+      if (!task || typeof task.status !== 'string') throw new TrackingDeferred()
+      if (['failed', 'error', 'canceled', 'cancelled'].includes(task.status)) throw new Error(taskError(task) || 'Agnes 视频任务失败或已取消')
       if (task.status === 'completed') {
         const resultUrl = task.url || task.metadata?.url
-        if (!resultUrl) throw new Error('Agnes 任务已完成，但响应中没有视频 URL')
+        if (!resultUrl) throw new TrackingDeferred()
         const resultMetadata = {
           ...(task.seconds ? { seconds:task.seconds } : {}),
           ...(task.size ? { size:task.size } : {}),
@@ -175,7 +187,7 @@ export class AgnesVideoProvider implements GenerationProvider {
       console.info('[agnes-video] task progress', { internalJobId: input.internalJobId, videoId, status: task.status, progress })
       onUpdate({ status: 'running', progress })
     }
-    throw new Error('Agnes 视频生成超时')
+    throw new TrackingDeferred()
   }
 
   private async request(path: string, init: { method?: string; body?: string; headers?: Record<string, string> } = {}, timeout = this.queryTimeout, apiKey = required('AGNES_VIDEO_API_KEY')) {

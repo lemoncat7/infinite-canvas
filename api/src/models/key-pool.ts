@@ -47,7 +47,7 @@ export class ProviderKeyPool {
   }
   session(p: ProviderConnection, pinOnSuccess = false) {
     const keys = connectionKeys(p); let pinned: string | undefined
-    return { run: async <R extends ResponseLike>(send: (key: string) => Promise<R>, signal?: AbortSignal): Promise<R> => {
+    return { pinnedKey: () => pinned, restoreKey: (key: string) => { pinned = key }, run: async <R extends ResponseLike>(send: (key: string) => Promise<R>, signal?: AbortSignal): Promise<R> => {
       if (!keys.length) return send('') // Explicitly unauthenticated local endpoints remain supported.
       const tried = new Set<string>()
       while (tried.size < keys.length) {

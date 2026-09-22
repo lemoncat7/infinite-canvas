@@ -11,6 +11,8 @@ import { database, getAll, getOne, persist } from "../storage/database.js";
 import { generationProvider, modelStore } from "./config.js";
 import { localImageFallback } from "./fallback.js";
 import { updateJob } from "./job-state.js";
+import { checkTracking, deferTracking, loadAcceptedTask, recoverTracking, saveAcceptedTask } from './task-tracking.js';
+import { TrackingDeferred, TrackingStopped } from '../providers/task-tracking.js';
 
 export const configuredImageConcurrency = Number(
   process.env.IMAGE_GENERATION_CONCURRENCY || 3,
@@ -43,6 +45,7 @@ export let queuePumpRunning = false;
 export let generationQueueWakeTimer: ReturnType<typeof setTimeout> | null =
   null;
 let stopping = false;
+let recoveredTracking = false;
 const runningTasks = new Set<Promise<void>>();
 
 /** Stop admitting jobs and drain accepted work before closing the database. */
@@ -58,7 +61,7 @@ export function scheduleGenerationQueueWake() {
   if (generationQueueWakeTimer) clearTimeout(generationQueueWakeTimer);
   generationQueueWakeTimer = null;
   const next = getOne(
-      "SELECT MIN(retry_after) AS retryAfter FROM jobs WHERE status='queued' AND retry_after IS NOT NULL",
+      "SELECT MIN(retry_after) AS retryAfter FROM jobs WHERE (status='queued' OR (status='running' AND id IN (SELECT job_id FROM video_task_checkpoints))) AND retry_after IS NOT NULL",
       [],
     ),
     retryAt = Date.parse(String(next?.retryAfter || ""));
@@ -75,6 +78,7 @@ export function scheduleGenerationQueueWake() {
 
 export function pumpGenerationQueue() {
   if (stopping || queuePumpRunning) return;
+  if (!recoveredTracking) { recoverTracking(); recoveredTracking = true; }
   queuePumpRunning = true;
   try {
     for (const kind of ["video", "image"] as const)
@@ -84,7 +88,7 @@ export function pumpGenerationQueue() {
         const id = String(job.id);
         activeGenerationJobs[kind].add(id);
         database.run(
-          "UPDATE jobs SET status = 'running', progress = 0, error = NULL, retry_after = NULL, updated_at = ? WHERE id = ? AND status = 'queued'",
+          "UPDATE jobs SET status = 'running', error = NULL, retry_after = NULL, updated_at = ? WHERE id = ? AND status IN ('queued','running')",
           [new Date().toISOString(), id],
         );
         persist();
@@ -130,8 +134,8 @@ export function activeImageEditCount() {
 export function nextQueuedGenerationJob(kind: JobInput["kind"]) {
   if (kind !== "image")
     return getOne(
-      "SELECT * FROM jobs WHERE status = 'queued' AND kind = ? AND (retry_after IS NULL OR retry_after <= ?) ORDER BY created_at ASC, rowid ASC LIMIT 1",
-      [kind, new Date().toISOString()],
+      "SELECT * FROM jobs WHERE kind = ? AND ((status='queued' AND (retry_after IS NULL OR retry_after <= ?)) OR (status='running' AND retry_after <= ? AND id IN (SELECT job_id FROM video_task_checkpoints))) ORDER BY COALESCE(retry_after,created_at) ASC, rowid ASC LIMIT 1",
+      [kind, new Date().toISOString(), new Date().toISOString()],
     );
   const imageEditConcurrency = Number.isFinite(configuredImageEditConcurrency)
     ? Math.max(
@@ -155,6 +159,7 @@ export async function executeQueuedJob(job: Record<string, unknown>) {
     userId = String(job.user_id),
     model = String(job.model);
   try {
+    const acceptedTask = loadAcceptedTask(id);
     const customId = String(job.custom_model_id || ""),
       custom = customId
         ? getOne("SELECT * FROM user_api_models WHERE id = ? AND user_id = ?", [
@@ -181,13 +186,14 @@ export async function executeQueuedJob(job: Record<string, unknown>) {
             })
         : generationProvider;
     const rawInputUrls = parseJsonArray(job.input_urls),
-      preparedInputs = prepareOwnedGenerationInputs(
+      preparedInputs = acceptedTask ? { inputUrls: rawInputUrls, readInputAsDataUrl: undefined } : prepareOwnedGenerationInputs(
         rawInputUrls,
         userId,
         kind,
         provider.referencePolicy?.(model, kind) || EMBEDDED_ONLY,
       ), inputUrls = preparedInputs.inputUrls!;
     const parameters = parseJsonObject(job.parameters);
+    let progress = Number(job.progress || 0);
     let updates = Promise.resolve(),
       lastError: unknown;
     // Video acceptance may be ambiguous after a timeout. Only the provider can
@@ -206,8 +212,13 @@ export async function executeQueuedJob(job: Record<string, unknown>) {
             inputUrls,
             readInputAsDataUrl: preparedInputs.readInputAsDataUrl,
             parameters,
+            acceptedTask,
+            saveAcceptedTask: task => saveAcceptedTask(id, task),
+            checkTracking: () => checkTracking(id, stopping),
           },
           (update) => {
+            progress = Math.max(progress, update.progress);
+            update = { ...update, progress };
             updates = updates.then(() =>
               updateJob(
                 id,
@@ -221,6 +232,7 @@ export async function executeQueuedJob(job: Record<string, unknown>) {
         await updates;
         return;
       } catch (error) {
+        await updates;
         lastError = error;
         if (attempt >= attempts || !isTransientGenerationError(error))
           throw error;
@@ -295,6 +307,12 @@ export async function executeQueuedJob(job: Record<string, unknown>) {
     }
     throw lastError;
   } catch (error) {
+    if (error instanceof TrackingStopped) return;
+    if (error instanceof TrackingDeferred) {
+      deferTracking(id, error);
+      logger.warn({ jobId: id }, 'accepted video tracking deferred; original task will be queried again');
+      return;
+    }
     if (kind === "video" && isProviderQueueCapacityError(error)) {
       const retryCount = Number(job.retry_count || 0) + 1,
         retryDelayMs =

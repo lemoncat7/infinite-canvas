@@ -12,6 +12,9 @@ export type GenerationInput = {
   /** Owned originals are read lazily; never serialize this execution-only callback. */
   readInputAsDataUrl?: (index: number, proxyUrl?: string) => Promise<string>
   parameters?: Record<string, unknown>
+  acceptedTask?: import('./task-tracking.js').AcceptedVideoTask
+  saveAcceptedTask?: (task: import('./task-tracking.js').AcceptedVideoTask) => void
+  checkTracking?: () => void
 }
 
 export type GenerationUpdate = {

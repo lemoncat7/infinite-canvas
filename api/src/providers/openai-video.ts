@@ -1,6 +1,7 @@
 import type { GenerationInput, GenerationProvider, GenerationStatus, GenerationUpdate } from './types.js'
 import { modelFetch } from '../models/network.js'
-import { ProviderKeyCooldownError } from '../models/key-pool.js'
+import { currentProviderKeys, ProviderKeyCooldownError } from '../models/key-pool.js'
+import { TrackingDeferred } from './task-tracking.js'
 import { URL_FIRST, prepareReferenceImages, submitWithReferenceFallback } from './reference-transport.js'
 import { ModelConfigError } from '../models/types.js'
 import { canFallbackTerminalReference, isReferenceDownloadFailure, ReferenceDownloadFailure, runWithTerminalReferenceFallback } from './reference-transport.js'
@@ -24,8 +25,13 @@ export class OpenAiVideoProvider implements GenerationProvider {
 
   async run(input: GenerationInput, onUpdate: (update: GenerationUpdate) => void) {
     if (input.kind !== 'video') throw new Error('OpenAI Video Adapter 仅支持视频任务')
+    if (input.acceptedTask) {
+      if (input.acceptedTask.provider !== this.name) throw new TrackingDeferred(300000)
+      currentProviderKeys()?.restoreKey(input.acceptedTask.key)
+      return this.poll(input, onUpdate, input.acceptedTask.id, [], input.acceptedTask.key)
+    }
     onUpdate({ status: 'queued', progress: 0 })
-    if ((input.inputUrls?.length ?? 0) > 7) throw new Error('Grok 多图视频最多支持 7 张参考图片')
+    if ((input.inputUrls?.length ?? 0) > 7) throw new ModelConfigError(`参考图数量超出接口限制：当前 ${input.inputUrls!.length} 张，Grok 多图视频最多支持 7 张参考图片。请减少参考图后重新提交。`)
     // A conservative embedded payload budget, not an upstream image-size claim.
     const options = { proxyUrl: this.proxyUrl, embeddedBudget: Math.floor(768 * 1024 / Math.max(1, input.inputUrls?.length || 0)) }
     const imageUrls = await prepareReferenceImages(input, URL_FIRST, options)
@@ -65,25 +71,30 @@ export class OpenAiVideoProvider implements GenerationProvider {
     if (immediate.status === 'failed') this.throwTaskFailure(created, submittedImages)
     const id = text(created.request_id) || text(created.id) || text(created.video_id) || text(nested(created, 'data', 'id'))
     if (!id) throw new Error(`CPA/Grok 创建响应未返回 request_id（字段：${Object.keys(created).join(', ') || '空响应'}）`)
+    input.saveAcceptedTask?.({ provider: this.name, id, key: currentProviderKeys()?.pinnedKey() ?? this.apiKey })
+    return this.poll(input, onUpdate, id, submittedImages)
+  }
+
+  private async poll(input: GenerationInput, onUpdate: (update: GenerationUpdate) => void, id: string, submittedImages: string[], key = this.apiKey) {
     const startedAt = Date.now(); let lastProgress = 0, started = false
     while (Date.now() - startedAt < this.timeout) {
+      input.checkTracking?.()
       let payload: Payload
-      try { payload = await this.request(`/v1/videos/${encodeURIComponent(id)}`) }
+      try { payload = await this.request(`/v1/videos/${encodeURIComponent(id)}`, {}, key) }
       catch (error) {
-        if (!(error instanceof ProviderKeyCooldownError) || !error.pollingRateLimit) throw error
-        // Preserve the accepted task; wait for its own key instead of creating
-        // another job or querying a different account's task namespace.
-        await wait(Math.min(Math.max(1000, error.until - Date.now()), Math.max(1, this.timeout - (Date.now() - startedAt))))
-        continue
+        throw new TrackingDeferred(error instanceof ProviderKeyCooldownError ? Math.max(15000, error.until - Date.now()) : 15000)
       }
+      input.checkTracking?.()
+      if (!payload || !(payload.status || nested(payload, 'data', 'status'))) throw new TrackingDeferred()
       const normalized = normalize(payload, id, this.baseUrl)
       const update = { ...normalized, status: (started || normalized.progress > 1) && normalized.status === 'queued' ? 'running' as const : normalized.status, progress: Math.max(lastProgress, normalized.progress) }
       if (update.status === 'running') started = true
       lastProgress = update.progress
-      console.info('[openai-video] task progress', { internalJobId: input.internalJobId, requestId: id, status: update.status, progress: update.progress, imageCount: imageUrls.length,
+      console.info('[openai-video] task progress', { internalJobId: input.internalJobId, requestId: id, status: update.status, progress: update.progress, imageCount: input.inputUrls?.length || 0,
         ...(update.status === 'failed' ? { failureCategory: isReferenceDownloadFailure(payload) ? 'reference_download' : 'upstream_task', referenceTransport: submittedImages.some(image => /^https?:/i.test(image)) ? 'url' : 'embedded', embeddedFallbackEligible: canFallbackTerminalReference(payload, submittedImages) } : {}) })
       // Do not settle/refund the local job before a permitted embedded fallback.
       if (update.status === 'failed') this.throwTaskFailure(payload, submittedImages)
+      if (update.status === 'succeeded' && !update.resultUrl) throw new TrackingDeferred()
       onUpdate(update)
       if (update.status === 'succeeded') {
         if (!update.resultUrl) throw new Error('CPA video API 已完成但未返回视频地址')
@@ -91,7 +102,7 @@ export class OpenAiVideoProvider implements GenerationProvider {
       }
       await wait(this.pollInterval)
     }
-    throw new Error(`CPA video API 超时（${Math.round(this.timeout / 1000)} 秒）`)
+    throw new TrackingDeferred()
   }
 
   private throwTaskFailure(payload: Payload, images: string[]): never {
@@ -99,14 +110,14 @@ export class OpenAiVideoProvider implements GenerationProvider {
     throw new ModelConfigError('上游视频任务已失败，未自动重复提交；请检查内容限制或联系服务商查询任务', 422)
   }
 
-  private async request(path: string, init: RequestInit = {}) {
-    const result = await this.response(path, init)
+  private async request(path: string, init: RequestInit = {}, key = this.apiKey) {
+    const result = await this.response(path, init, key)
     if (!result.ok) throw new ModelConfigError(`视频查询失败（HTTP ${result.status}）`, result.status)
     return result.payload
   }
 
-  private async response(path: string, init: RequestInit = {}) {
-    const response = await modelFetch(`${this.baseUrl}${path}`, { ...init, headers: { authorization: `Bearer ${this.apiKey}`, 'content-type': 'application/json', ...(init.headers as Record<string, string> | undefined) }, signal: AbortSignal.timeout(120000) }, this.proxyUrl)
+  private async response(path: string, init: RequestInit = {}, key = this.apiKey) {
+    const response = await modelFetch(`${this.baseUrl}${path}`, { ...init, headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json', ...(init.headers as Record<string, string> | undefined) }, signal: AbortSignal.timeout(120000) }, this.proxyUrl)
     const body = await response.text(); let payload: Payload = {}
     try { payload = body ? JSON.parse(body) as Payload : {} } catch { throw new Error(`CPA video API 返回了非 JSON 内容（${response.status}）`) }
     return { ok: response.ok, status: response.status, payload }

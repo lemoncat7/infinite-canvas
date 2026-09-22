@@ -3,6 +3,7 @@ import { settleJobCredits } from "../billing/settlement.js";
 import { logger } from "../core/logging.js";
 import { type GenerationUpdate } from "../providers/index.js";
 import { database, getOne, persist } from "../storage/database.js";
+import { TrackingDeferred } from '../providers/task-tracking.js';
 
 export async function updateJob(id: string, update: GenerationUpdate) {
   if (
@@ -15,6 +16,7 @@ export async function updateJob(id: string, update: GenerationUpdate) {
   try {
     if (update.status === "succeeded" && resultUrl)
       resultUrl = await archiveJobResult(id, resultUrl);
+    if (getOne('SELECT status FROM jobs WHERE id=?', [id])?.status === 'canceled') return;
     database.run(
       "UPDATE jobs SET status = ?, progress = ?, result_url = COALESCE(?, result_url), result_metadata = COALESCE(?, result_metadata), error = ?, updated_at = ? WHERE id = ?",
       [
@@ -28,6 +30,8 @@ export async function updateJob(id: string, update: GenerationUpdate) {
       ],
     );
   } catch (error) {
+    // The video exists upstream. A failed download must not discard its task or refund it as a generation failure.
+    if (getOne('SELECT job_id FROM video_task_checkpoints WHERE job_id=?', [id])) throw new TrackingDeferred(30000);
     succeeded = false;
     logger.error(
       {

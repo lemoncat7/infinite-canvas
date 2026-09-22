@@ -8,6 +8,7 @@ import { apiRoot } from './network.js'
 import { safeModelError } from './errors.js'
 import { createGenerationProvider } from '../providers/index.js'
 import { withProviderKeys } from './key-pool.js'
+import { TrackingDeferred, TrackingStopped } from '../providers/task-tracking.js'
 
 /** An unconfigured legacy adapter must not prevent administrators configuring models in the UI. */
 export function compatibleLegacyProvider(): GenerationProvider {
@@ -30,6 +31,6 @@ export function configuredProvider(resolved: ResolvedModel): GenerationProvider 
   }
   return { name: provider.name, referencePolicy: provider.referencePolicy?.bind(provider), run: async (input, update) => {
     try { return await withProviderKeys(resolved.connection, resolved.model.kind === 'video', () => provider.run(input, update)) }
-    catch (error) { throw safeModelError(error) }
+    catch (error) { if (error instanceof TrackingDeferred || error instanceof TrackingStopped) throw error; throw safeModelError(error) }
   } }
 }

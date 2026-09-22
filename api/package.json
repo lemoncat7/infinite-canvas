@@ -8,6 +8,7 @@
     "build": "tsc",
     "test:comic": "npm run build && node scripts/test-comic-validation.mjs && node scripts/test-comic-stages.mjs",
     "test:agnes": "npm run build && node scripts/test-agnes-video.mjs",
+    "test:tracking": "npm run build && node scripts/test-video-tracking.mjs",
     "test:references": "npm run build && node scripts/test-reference-transport.mjs",
     "test:models": "npm run build && node scripts/test-models.mjs && node scripts/test-key-pool.mjs",
     "test:sessions": "npm run build && node scripts/test-sessions.mjs",
