@@ -10,6 +10,7 @@ import { pumpGenerationQueue } from "./queue.js";
 
 import { ApplicationError } from "../core/errors.js";
 import { generationRequest, recordGenerationRequest } from "./idempotency.js";
+import { createAgnes25Body, isAgnesVideo25 } from '../providers/agnes-video-v25.js';
 
 export function submitGeneration(
   user: Record<string, unknown>,
@@ -132,26 +133,31 @@ export function submitGeneration(
       ? selectedModel.model.adapter === "agnes-video"
       : model.startsWith("agnes-"))
   ) {
-    const referenceMode =
-      input.parameters?.reference_mode === "keyframes"
-        ? "keyframes"
-        : "references";
-    if (referenceMode === "keyframes" && inputUrls.length < 2)
-      throw new ApplicationError(
-        400,
-        { error: "Agnes 关键帧动画至少需要 2 张按顺序连接的图片" }.error,
-      );
-    if (referenceMode !== "keyframes" && inputUrls.length > 1)
-      throw new ApplicationError(
-        400,
-        { error: "Agnes 官方接口不支持多图自由参考，请改用关键帧动画" }.error,
-      );
-    const ratio = String(input.parameters?.aspect_ratio || "16:9");
-    if (!["1:1", "4:3", "3:4", "16:9", "9:16"].includes(ratio))
-      throw new ApplicationError(
-        400,
-        { error: "Agnes 不支持当前视频画幅" }.error,
-      );
+    if (isAgnesVideo25(model)) {
+      try { createAgnes25Body({ model, prompt: input.prompt, parameters: input.parameters }, inputUrls); }
+      catch (error) { throw new ApplicationError(400, error instanceof Error ? error.message : 'Agnes Video 2.5 参数无效'); }
+    } else {
+      const referenceMode =
+        input.parameters?.reference_mode === "keyframes"
+          ? "keyframes"
+          : "references";
+      if (referenceMode === "keyframes" && inputUrls.length < 2)
+        throw new ApplicationError(
+          400,
+          { error: "Agnes 关键帧动画至少需要 2 张按顺序连接的图片" }.error,
+        );
+      if (referenceMode !== "keyframes" && inputUrls.length > 1)
+        throw new ApplicationError(
+          400,
+          { error: "Agnes 官方接口不支持多图自由参考，请改用关键帧动画" }.error,
+        );
+      const ratio = String(input.parameters?.aspect_ratio || "16:9");
+      if (!["1:1", "4:3", "3:4", "16:9", "9:16"].includes(ratio))
+        throw new ApplicationError(
+          400,
+          { error: "Agnes 不支持当前视频画幅" }.error,
+        );
+    }
   }
   try {
     validateOwnedInputUrls(inputUrls, userId, input.kind);

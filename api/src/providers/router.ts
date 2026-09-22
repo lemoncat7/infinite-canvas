@@ -15,4 +15,7 @@ export class GenerationRouter implements GenerationProvider {
   run(input: GenerationInput, onUpdate: (update: GenerationUpdate) => void) {
     return (input.kind === 'video' ? this.video : this.image).run(input, onUpdate)
   }
+  referencePolicy(model: string, kind: GenerationInput['kind']) {
+    return (kind === 'video' ? this.video : this.image).referencePolicy?.(model, kind) || { preferred: 'base64' as const, fallbackToBase64: false }
+  }
 }

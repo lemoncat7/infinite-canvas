@@ -2,6 +2,11 @@ import type { GenerationInput, GenerationProvider, GenerationUpdate } from './ty
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { currentProviderKeys, ProviderKeyCooldownError } from '../models/key-pool.js'
+import { agnesResponseError } from './agnes-errors.js'
+import { createAgnes25Body, isAgnesVideo25 } from './agnes-video-v25.js'
+import { ModelConfigError } from '../models/types.js'
+import sharp from 'sharp'
+import { EMBEDDED_ONLY, URL_FIRST, prepareReferenceImages, canFallbackReference } from './reference-transport.js'
 
 type AgnesTask = {
   id?: string
@@ -18,6 +23,7 @@ type AgnesTask = {
   error?: { message?: string } | string | null
   message?: string
   code?: string
+  data?: { param?: string }
 }
 
 const agnesCooldownMs = Math.max(1000, Number(process.env.AGNES_VIDEO_KEY_COOLDOWN_MS || 60000))
@@ -49,6 +55,7 @@ async function acquireAgnesCredential(managedKeys?: string[]) {
 }
 
 export class AgnesVideoProvider implements GenerationProvider {
+  referencePolicy(model: string) { return isAgnesVideo25(model || this.defaultModel) ? EMBEDDED_ONLY : URL_FIRST }
   readonly name = 'agnes-video'
   private readonly baseUrl: string
   private readonly managedKeys?: string[]
@@ -75,25 +82,42 @@ export class AgnesVideoProvider implements GenerationProvider {
     const settings = normalizeAgnesSettings(input.parameters)
     const referenceMode = input.parameters?.reference_mode === 'keyframes' ? 'keyframes' : 'references'
     const imageSources = input.inputUrls ?? []
-    if (referenceMode === 'keyframes' && imageSources.length < 2) throw new Error('Agnes 关键帧动画至少需要 2 张按时间顺序排列的图片')
-    if (referenceMode !== 'keyframes' && imageSources.length > 1) throw new Error('Agnes 官方接口不支持多图自由参考；多张图片请改用关键帧动画')
+    const modern = isAgnesVideo25(input.model || this.defaultModel)
+    if (modern) createAgnes25Body(input, imageSources)
+    if (!modern && referenceMode === 'keyframes' && imageSources.length < 2) throw new Error('Agnes 关键帧动画至少需要 2 张按时间顺序排列的图片')
+    if (!modern && referenceMode !== 'keyframes' && imageSources.length > 1) throw new Error('Agnes 官方接口不支持多图自由参考；多张图片请改用关键帧动画')
     // Agnes accepts embedded image data for keyframes as well as ordinary
     // image-to-video jobs. Prefer the signed public URL when it is usable, but
     // never make a CDN a hard requirement: the upstream service occasionally
     // rejects an otherwise reachable URL and must then receive embedded data.
-    let images = await Promise.all(imageSources.map(source => this.resolveImage(source)))
+    let images = modern
+      ? await prepareReferenceImages(input, EMBEDDED_ONLY, { proxyUrl: this.proxyUrl })
+      : await Promise.all(imageSources.map(source => this.resolveImage(source)))
+    if (modern) {
+      let totalBytes = 0;
+      for (const [index, image] of images.entries()) {
+        if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(image)) throw new ModelConfigError(`参考图 ${index + 1} 无法读取为图片，请检查素材地址`);
+        const bytes = Buffer.from(image.slice(image.indexOf(',') + 1), 'base64');
+        totalBytes += bytes.length;
+        const metadata = await sharp(bytes).metadata();
+        if (!metadata.width || !metadata.height || Math.min(metadata.width, metadata.height) < 256 || Math.max(metadata.width, metadata.height) > 5760)
+          throw new ModelConfigError(`参考图 ${index + 1} 尺寸为 ${metadata.width || 0}×${metadata.height || 0}；Agnes Video 2.5 要求宽高均为 256–5760 像素，请更换符合尺寸的图片`);
+        if (bytes.length >= 15 * 1024 * 1024) throw new ModelConfigError(`参考图 ${index + 1} 必须小于 15 MiB`);
+      }
+      if (totalBytes >= 50 * 1024 * 1024) throw new ModelConfigError('Agnes Video 2.5 参考图片总大小必须小于 50 MiB');
+    }
     onUpdate({ status: 'running', progress: 0 })
     console.info('[agnes-video] preparing ordered inputs', { internalJobId: input.internalJobId, imageCount: images.length, orderedInputIndexes: images.map((_, index) => index + 1) })
     console.info('[agnes-video] credential assigned', { internalJobId:input.internalJobId, channel:credential.channel, channelCount:agnesCredentialPool.length })
     let response = await this.request('/v1/videos', { method: 'POST', body: createAgnesRequestBody(input, images, settings, this.defaultModel, referenceMode) }, this.timeoutForImages(images), credential.key)
     let created = await readTask(response)
-    if (!response.ok && imageSources.length && images.some(image => /^https?:\/\//i.test(image)) && /image URL|image.*download/i.test(taskError(created))) {
+    if (!response.ok && canFallbackReference(response.status, created, images)) {
       console.info('[agnes-video] public image rejected, retrying with embedded images', { internalJobId: input.internalJobId, imageCount: imageSources.length })
-      images = await Promise.all(imageSources.map(source => this.resolveImage(source, true)))
+      images = await prepareReferenceImages(input, EMBEDDED_ONLY, { proxyUrl: this.proxyUrl })
       response = await this.request('/v1/videos', { method: 'POST', body: createAgnesRequestBody(input, images, settings, this.defaultModel, referenceMode) }, this.timeoutForImages(images), credential.key)
       created = await readTask(response)
     }
-    if (!response.ok && /num_frames exceeds max frames/i.test(taskError(created))) {
+    if (!modern && !response.ok && [400, 422].includes(response.status) && !created.id && !created.task_id && !created.video_id && /num_frames exceeds max frames/i.test(taskError(created))) {
       const reducedSettings = reduceAgnesFrames(settings)
       console.warn('[agnes-video] resolved resolution has a lower frame budget; retrying with adjusted frame rate', {
         internalJobId:input.internalJobId,
@@ -104,7 +128,7 @@ export class AgnesVideoProvider implements GenerationProvider {
       response = await this.request('/v1/videos', { method:'POST', body:createAgnesRequestBody(input, images, reducedSettings, this.defaultModel, referenceMode) }, this.timeoutForImages(images), credential.key)
       created = await readTask(response)
     }
-    if (!response.ok) throw new Error(taskError(created) || `Agnes 创建视频任务失败（${response.status}）`)
+    if (!response.ok) throw agnesResponseError(response.status, created, 'create')
     const videoId = created.video_id || created.task_id || created.id
     const taskId = created.task_id || created.id || videoId
     if (!videoId) throw new Error('Agnes 创建任务响应中没有 video_id 或 task_id')
@@ -130,7 +154,7 @@ export class AgnesVideoProvider implements GenerationProvider {
       }
       if (!statusResponse.ok) {
         if (statusResponse.status === 429 || /rate limit/i.test(taskError(task))) continue
-        throw new Error(taskError(task) || `Agnes 查询视频任务失败（${statusResponse.status}）`)
+        throw agnesResponseError(statusResponse.status, task, 'poll')
       }
       if (task.status === 'failed') throw new Error(taskError(task) || 'Agnes 视频生成失败')
       if (task.status === 'completed') {
@@ -236,7 +260,7 @@ export class AgnesVideoProvider implements GenerationProvider {
       const mimeType = response.headers.get('content-type')?.split(';')[0] || 'image/png'
       const bytes = Buffer.from(await response.arrayBuffer())
       if (!bytes.length || bytes.length > 15 * 1024 * 1024) throw new Error('首帧图片为空或超过 15MB')
-      if ((this.assetMode === 'cdn' || this.assetMode === 'auto') && this.cdnUploadUrl) {
+      if (!forceEmbedded && (this.assetMode === 'cdn' || this.assetMode === 'auto') && this.cdnUploadUrl) {
         try { return await this.uploadToCdn(bytes, mimeType) }
         catch (error) { console.warn('[agnes-video] CDN upload failed, using data URL', { message: sanitizeError(error instanceof Error ? error.message : String(error)) }) }
       }
@@ -326,6 +350,7 @@ function taskError(task: AgnesTask) { return typeof task.error === 'string' ? ta
 function wait(ms: number) { return new Promise(resolve => setTimeout(resolve, ms)) }
 function required(name: string) { const value = process.env[name]; if (!value) throw new Error(`${name} is required`); return value }
 export function createAgnesRequestBody(input: GenerationInput, images: string[], settings: Record<string, unknown>, defaultModel: string, referenceMode: 'keyframes'|'references') {
+  if (isAgnesVideo25(input.model || defaultModel)) return JSON.stringify(createAgnes25Body({ ...input, model: input.model || defaultModel }, images))
   const media = images.length > 1
     ? { extra_body: { image: images, mode: 'keyframes' } }
     : images.length === 1 ? { image: images[0], mode: 'ti2vid' } : {}

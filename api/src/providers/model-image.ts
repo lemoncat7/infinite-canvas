@@ -3,9 +3,11 @@ import { GeminiImageProvider } from './gemini-image.js'
 import { OpenAiImageProvider } from './openai-image.js'
 import { SdCppImageProvider } from './sdcpp-image.js'
 import type { GenerationInput, GenerationProvider, GenerationUpdate } from './types.js'
+import { EMBEDDED_ONLY, URL_FIRST } from './reference-transport.js'
 
 export class ModelImageProvider implements GenerationProvider {
   readonly name='model-image'
+  referencePolicy(model: string) { return model.startsWith('agnes-image-') ? URL_FIRST : EMBEDDED_ONLY }
   private readonly openai=new OpenAiImageProvider()
   private readonly agnes=new AgnesImageProvider()
   private readonly gemini=new GeminiImageProvider()

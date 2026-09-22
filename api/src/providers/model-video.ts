@@ -10,4 +10,5 @@ export class ModelVideoProvider implements GenerationProvider {
   run(input: GenerationInput, onUpdate: (update: GenerationUpdate) => void) {
     return (input.model.startsWith('agnes-') ? this.agnes : this.openai).run(input, onUpdate)
   }
+  referencePolicy(model: string) { return (model.startsWith('agnes-') ? this.agnes : this.openai).referencePolicy(model) }
 }

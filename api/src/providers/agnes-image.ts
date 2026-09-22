@@ -1,6 +1,6 @@
-import { fetch as undiciFetch } from 'undici'
 import { modelFetch } from '../models/network.js'
 import type { GenerationInput, GenerationProvider, GenerationUpdate } from './types.js'
+import { URL_FIRST, prepareReferenceImages, submitWithReferenceFallback } from './reference-transport.js'
 
 type AgnesImageResponse = {
   data?: Array<{ url?: string; b64_json?: string }>
@@ -9,6 +9,7 @@ type AgnesImageResponse = {
 
 export class AgnesImageProvider implements GenerationProvider {
   readonly name = 'agnes-image'
+  referencePolicy(_model: string) { return URL_FIRST }
   private readonly baseUrl: string
   private readonly apiKey: string
   private readonly proxyUrl: string
@@ -22,20 +23,23 @@ export class AgnesImageProvider implements GenerationProvider {
   async run(input: GenerationInput, onUpdate: (update: GenerationUpdate) => void) {
     if (input.kind !== 'image') throw new Error('Agnes Image Adapter 仅支持图片任务')
     onUpdate({ status:'running', progress:12 })
-    const images = await Promise.all((input.inputUrls || []).map(source => this.resolveImage(source)))
+    const images = await prepareReferenceImages(input, URL_FIRST, { proxyUrl: this.proxyUrl })
     const aspectRatio = normalizedAspectRatio(input.parameters?.size)
     const body = {
       model:input.model || 'agnes-image-2.1-flash', prompt:input.prompt, n:1,
       ...(aspectRatio ? { aspect_ratio:aspectRatio } : {}),
       ...(images.length ? { extra_body:{ image:images, response_format:'url' } } : {}),
     }
-    const response = await modelFetch(`${this.baseUrl}/v1/images/generations`, {
+    const response = await submitWithReferenceFallback(images, URL_FIRST, async references => {
+    const result = await modelFetch(`${this.baseUrl}/v1/images/generations`, {
       method:'POST',
       headers:{ authorization:`Bearer ${this.apiKey}`, 'content-type':'application/json' },
-      body:JSON.stringify(body),
+      body:JSON.stringify({ ...body, ...(references.length ? { extra_body: { image: references, response_format: 'url' } } : {}) }),
       signal:AbortSignal.timeout(this.timeout),
     }, this.proxyUrl)
-    const payload = await response.json() as AgnesImageResponse
+    return { ok: result.ok, status: result.status, payload: await result.json() as Record<string, unknown> }
+    }, () => prepareReferenceImages(input, URL_FIRST, { proxyUrl: this.proxyUrl, forceEmbedded: true }))
+    const payload = response.payload as AgnesImageResponse
     if (!response.ok) throw new Error(errorMessage(payload.error) || `Agnes image API returned ${response.status}`)
     const image = payload.data?.[0]
     const resultUrl = image?.url || (image?.b64_json ? `data:image/png;base64,${image.b64_json}` : undefined)
@@ -45,14 +49,6 @@ export class AgnesImageProvider implements GenerationProvider {
     return result
   }
 
-  private async resolveImage(source:string) {
-    if (source.startsWith('data:') || /^https?:\/\//i.test(source)) return source
-    const url=source.startsWith('/api/')?`http://127.0.0.1:${process.env.PORT||3000}/${source.slice(5)}`:source
-    const response=await undiciFetch(url,{ signal:AbortSignal.timeout(120000) })
-    if(!response.ok)throw new Error(`读取 Agnes 参考图片失败（${response.status}）`)
-    const type=response.headers.get('content-type')?.split(';')[0]||'image/png'
-    return `data:${type};base64,${Buffer.from(await response.arrayBuffer()).toString('base64')}`
-  }
 }
 
 function normalizedAspectRatio(value:unknown) {

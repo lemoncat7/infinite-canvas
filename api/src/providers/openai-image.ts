@@ -5,6 +5,7 @@ import { modelFetch } from '../models/network.js'
 type ImageResponse = { data?: Array<{ url?: string; b64_json?: string; revised_prompt?: string }>; error?: { message?: string } }
 
 export class OpenAiImageProvider implements GenerationProvider {
+  referencePolicy(_model: string) { return { preferred: 'base64' as const, fallbackToBase64: false } }
   readonly name = 'openai-image'
   private readonly baseUrl: string
   private readonly apiKey: string

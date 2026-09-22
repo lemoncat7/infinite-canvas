@@ -1,4 +1,5 @@
-import { resolveOwnedInputUrls } from "../assets/generation-inputs.js";
+import { prepareOwnedGenerationInputs } from "../assets/generation-inputs.js";
+import { EMBEDDED_ONLY } from "../providers/reference-transport.js";
 import { parseJsonArray, parseJsonObject } from "../core/json.js";
 import { logger } from "../core/logging.js";
 import { type JobInput } from "../core/types.js";
@@ -180,23 +181,18 @@ export async function executeQueuedJob(job: Record<string, unknown>) {
             })
         : generationProvider;
     const rawInputUrls = parseJsonArray(job.input_urls),
-      inputUrls = resolveOwnedInputUrls(
+      preparedInputs = prepareOwnedGenerationInputs(
         rawInputUrls,
         userId,
         kind,
-        snapshot
-          ? snapshot.model.adapter === "agnes-video"
-            ? "agnes-managed"
-            : "managed"
-          : model,
-      );
+        provider.referencePolicy?.(model, kind) || EMBEDDED_ONLY,
+      ), inputUrls = preparedInputs.inputUrls!;
     const parameters = parseJsonObject(job.parameters);
     let updates = Promise.resolve(),
       lastError: unknown;
-    // Both image and video providers may lose a response stream after the
-    // request has been accepted. Retry bounded transient transport failures;
-    // validation/authentication errors still fail immediately.
-    const attempts = kind === "image" ? 3 : kind === "video" ? 3 : 1;
+    // Video acceptance may be ambiguous after a timeout. Only the provider can
+    // safely retry an explicit rejection; never replay the entire video workflow.
+    const attempts = kind === "image" ? 3 : 1;
     for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
         await provider.run(
@@ -208,6 +204,7 @@ export async function executeQueuedJob(job: Record<string, unknown>) {
             prompt: String(job.prompt),
             model,
             inputUrls,
+            readInputAsDataUrl: preparedInputs.readInputAsDataUrl,
             parameters,
           },
           (update) => {
