@@ -1,6 +1,8 @@
 import type { GenerationInput, GenerationProvider, GenerationUpdate } from './types.js'
 import sharp from 'sharp'
 import { modelFetch } from '../models/network.js'
+import { safeModelError } from '../models/errors.js'
+import { imageResponseError } from './image-errors.js'
 
 type ImageResponse = { data?: Array<{ url?: string; b64_json?: string; revised_prompt?: string }>; error?: { message?: string } }
 
@@ -35,7 +37,10 @@ export class OpenAiImageProvider implements GenerationProvider {
         }
         response = input.inputUrls?.length ? await this.edit(requestInput) : await this.create(requestInput)
         console.info('[image-generation-request]', { stage: 'headers', mode, attempt, elapsedMs: Date.now() - startedAt, status: response.status, contentType: response.headers.get('content-type'), contentLength: response.headers.get('content-length') })
-        payload = await response.json() as ImageResponse
+        try { payload = await response.json() as ImageResponse }
+        catch { throw imageResponseError(response.status, { message: 'Invalid JSON response' }, response.headers.get('x-request-id')) }
+        if (!response.ok) throw imageResponseError(response.status, payload, response.headers.get('x-request-id'))
+        if (!payload || typeof payload !== 'object' || !Array.isArray(payload.data)) throw imageResponseError(response.status, { message: '未返回图片结果' }, response.headers.get('x-request-id'))
         const image = payload.data?.[0]
         console.info('[image-generation-request]', { stage: 'body', mode, attempt, elapsedMs: Date.now() - startedAt, status: response.status, keys: Object.keys(payload), dataCount: payload.data?.length ?? 0, imageKeys: image ? Object.keys(image) : [], hasError: Boolean(payload.error) })
         if (response.ok && transparent && image && !(await imageHasUsefulTransparency(image))) {
@@ -45,18 +50,15 @@ export class OpenAiImageProvider implements GenerationProvider {
         }
         break
       } catch (error) {
-        const bodyStage = Boolean(response), timedOut = error instanceof Error && error.name === 'TimeoutError'
-        console.error('[image-generation-request]', { stage: bodyStage ? 'body-error' : 'request-error', mode, attempt, elapsedMs: Date.now() - startedAt, status: response?.status, errorName: error instanceof Error ? error.name : 'UnknownError', errorMessage: error instanceof Error ? error.message : String(error) })
-        if (bodyStage && timedOut) throw new Error('CPA 已返回响应头，但图片结果传输超时')
-        if (timedOut) throw new Error('图片生成请求超时')
-        throw error
+        const safe = safeModelError(error, { stage: '图片生成', status: response?.status, timeoutMs: Number(process.env.OPENAI_IMAGE_TIMEOUT_MS ?? 180000), requestId: response?.headers.get('x-request-id') })
+        console.error('[image-generation-request]', { stage: response ? 'response-error' : 'request-error', mode, attempt, elapsedMs: Date.now() - startedAt, status: response?.status, errorMessage: safe.message })
+        throw safe
       }
     }
-    if (!response || !payload) throw new Error('图片生成未返回结果')
-    if (!response.ok) throw new Error(payload.error?.message || `CPA image API returned ${response.status}`)
+    if (!response || !payload) throw safeModelError(new Error('图片生成未返回结果'), { stage: '图片生成' })
     const image = payload.data?.[0]
     const resultUrl = image?.url || (image?.b64_json ? `data:${base64ImageMime(image.b64_json)};base64,${image.b64_json}` : undefined)
-    if (!resultUrl) throw new Error('CPA image API did not return data[0].url or data[0].b64_json')
+    if (!resultUrl) throw safeModelError(new Error('模型未返回图片结果'), { stage: '图片生成', status: response.status, requestId: response.headers.get('x-request-id') })
     const result: GenerationUpdate = { status: 'succeeded', progress: 100, resultUrl }
     onUpdate(result)
     return result
@@ -78,11 +80,13 @@ export class OpenAiImageProvider implements GenerationProvider {
     form.set('model', input.model || 'gpt-image-2'); form.set('prompt', input.prompt); form.set('n', '1'); form.set('response_format', 'b64_json'); form.set('output_format', 'png')
     for (const [key, value] of Object.entries(parameters)) form.set(key, String(value))
     for (const [index, source] of (input.inputUrls ?? []).entries()) {
+      try {
       const url = source.startsWith('/api/') ? `http://127.0.0.1:${process.env.PORT ?? 3000}/${source.slice(5)}` : source
       const image = await fetch(url, { signal: AbortSignal.timeout(120000) })
       if (!image.ok) throw new Error(`读取上游图片失败（${image.status}）`)
       const type = image.headers.get('content-type')?.split(';')[0] || 'image/png'
       form.append('image', new Blob([await image.arrayBuffer()], { type }), `input-${index}.${type.split('/')[1] || 'png'}`)
+      } catch (error) { throw safeModelError(error, { stage: '参考图片读取', timeoutMs: 120000 }) }
     }
     return modelFetch(`${this.baseUrl}/v1/images/edits`, { method: 'POST', headers: { authorization: `Bearer ${this.apiKey}` }, body: form, signal: this.timeoutSignal() }, this.proxyUrl)
   }

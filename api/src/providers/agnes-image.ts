@@ -1,4 +1,6 @@
 import { modelFetch } from '../models/network.js'
+import { safeModelError } from '../models/errors.js'
+import { imageResponseError } from './image-errors.js'
 import type { GenerationInput, GenerationProvider, GenerationUpdate } from './types.js'
 import { URL_FIRST, prepareReferenceImages, submitWithReferenceFallback } from './reference-transport.js'
 
@@ -31,19 +33,24 @@ export class AgnesImageProvider implements GenerationProvider {
       ...(images.length ? { extra_body:{ image:images, response_format:'url' } } : {}),
     }
     const response = await submitWithReferenceFallback(images, URL_FIRST, async references => {
-    const result = await modelFetch(`${this.baseUrl}/v1/images/generations`, {
+    let result: Response
+    try { result = await modelFetch(`${this.baseUrl}/v1/images/generations`, {
       method:'POST',
       headers:{ authorization:`Bearer ${this.apiKey}`, 'content-type':'application/json' },
       body:JSON.stringify({ ...body, ...(references.length ? { extra_body: { image: references, response_format: 'url' } } : {}) }),
       signal:AbortSignal.timeout(this.timeout),
-    }, this.proxyUrl)
-    return { ok: result.ok, status: result.status, payload: await result.json() as Record<string, unknown> }
+    }, this.proxyUrl) } catch (error) { throw safeModelError(error, { stage: '图片生成', timeoutMs: this.timeout }) }
+    let payload: Record<string, unknown>
+    try { payload = await result.json() as Record<string, unknown> }
+    catch { throw imageResponseError(result.status, { message: 'Invalid JSON response' }, result.headers.get('x-request-id')) }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw imageResponseError(result.status, { message: 'Invalid JSON response' }, result.headers.get('x-request-id'))
+    return { ok: result.ok, status: result.status, payload, requestId: result.headers.get('x-request-id') }
     }, () => prepareReferenceImages(input, URL_FIRST, { proxyUrl: this.proxyUrl, forceEmbedded: true }))
     const payload = response.payload as AgnesImageResponse
-    if (!response.ok) throw new Error(errorMessage(payload.error) || `Agnes image API returned ${response.status}`)
-    const image = payload.data?.[0]
+    if (!response.ok) throw imageResponseError(response.status, payload, response.requestId)
+    const image = payload?.data?.[0]
     const resultUrl = image?.url || (image?.b64_json ? `data:image/png;base64,${image.b64_json}` : undefined)
-    if (!resultUrl) throw new Error('Agnes image API 未返回图片结果')
+    if (!resultUrl) throw imageResponseError(response.status, { message: '未返回图片结果' }, response.requestId)
     const result:GenerationUpdate = { status:'succeeded', progress:100, resultUrl }
     onUpdate(result)
     return result
@@ -55,5 +62,4 @@ function normalizedAspectRatio(value:unknown) {
   const ratios:Record<string,string>={ '1024x1024':'1:1','1536x1024':'3:2','1024x1536':'2:3','1536x864':'16:9','864x1536':'9:16' }
   return ratios[String(value||'')]
 }
-function errorMessage(error:AgnesImageResponse['error']) { return typeof error === 'string' ? error : error?.message }
 function required(name:string,fallback?:string) { const value=process.env[name]||fallback; if(!value)throw new Error(`${name} is required when using Agnes image models`); return value }

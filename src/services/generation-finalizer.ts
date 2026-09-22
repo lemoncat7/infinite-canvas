@@ -2,6 +2,7 @@ import type { FlowNode } from "../nodes/node-types";
 import type { AuthUser } from "../ui/user-menu-controller";
 import { apiFetch } from "./api";
 import type { GenerationJob } from "./generation";
+import { friendlyGenerationError } from "./generation-error-presenter";
 
 export class GenerationFinalizer {
   constructor(private readonly options: {
@@ -50,8 +51,8 @@ export class GenerationFinalizer {
   }
 
   private applyFailure(node: FlowNode, job: GenerationJob) {
-    const message = job.error || "视频生成失败";
-    this.options.jobLabel.textContent = `生成失败：${message}`;
+    const message = job.error || "生成失败";
+    this.options.jobLabel.textContent = friendlyGenerationError(message, "生成失败").title;
     this.options.toast(message, "error");
     if (node.role === "result") this.options.removeFailedResult(node);
   }

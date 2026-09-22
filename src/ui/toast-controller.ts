@@ -35,6 +35,8 @@ export class ToastController {
           : "操作完成";
     const title = friendly?.title || (type === "success" ? successTitle : type === "warning" ? "提示" : "操作失败");
     toast.className = `app-toast ${type}`;
+    toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+    toast.setAttribute('aria-atomic', 'true');
     toast.innerHTML = `<i>${type === "error" ? "!" : type === "success" ? "✓" : "i"}</i><span><b>${this.escapeHtml(title)}</b><small>${this.escapeHtml(friendly?.message || message)}</small>${friendly ? `<p>${this.escapeHtml(friendly.advice)}</p><details><summary>技术详情</summary><em>${this.escapeHtml(raw)}${friendly.requestId ? `\nRequest ID: ${this.escapeHtml(friendly.requestId)}` : ""}</em></details>` : detail ? `<em>${this.escapeHtml(detail)}</em>` : ""}</span><button type="button" aria-label="关闭">×</button>`;
     let timer = type === "error" ? 0 : window.setTimeout(() => toast.remove(), type === "warning" ? 9000 : 6000);
     toast.querySelector("button")!.addEventListener("click", () => {

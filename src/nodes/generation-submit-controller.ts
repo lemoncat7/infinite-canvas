@@ -1,4 +1,5 @@
 import type { FlowLink, FlowNode } from "./node-types";
+import { friendlyGenerationError } from '../services/generation-error-presenter';
 import {
   missingGenerationInputs,
   runGenerationJob,
@@ -106,11 +107,13 @@ export class GenerationSubmitController {
       this.deps.pollJob(result.node);
       return;
     }
-    this.deps.setJobLabel("提交失败，请检查 API");
+    const errorMessage = result.error instanceof Error ? result.error.message : "未知错误";
+    const friendly = friendlyGenerationError(errorMessage, "任务提交失败");
+    this.deps.setJobLabel(`${friendly.title}：${friendly.message}`);
     this.deps.toast(
-      "任务提交失败，请检查接口配置",
+      friendly.title,
       "error",
-      result.error instanceof Error ? result.error.message : "未知错误",
+      errorMessage,
     );
     if (result.node?.role === "result")
       this.deps.removeFailedResult(result.node, source.id);
