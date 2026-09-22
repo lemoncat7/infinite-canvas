@@ -3,11 +3,14 @@ import type { FastifyInstance } from "fastify";
 import { currentUser } from "../auth/service.js";
 import { VioraGateway } from "./gateway.js";
 import { createVioraMcp } from "./tools.js";
+import { UploadSessions } from './upload-sessions.js';
 
 /** Stateless MCP: each request has its own server/transport and authenticated user.
  * No in-memory session can leak between tokens or become stale after a restart.
  */
 export function registerMcpRoutes(app: FastifyInstance) {
+  const uploads = new UploadSessions();
+  app.addHook('onClose', async () => uploads.close());
   const origins = new Set(
     (process.env.MCP_ALLOWED_ORIGINS || "")
       .split(",")
@@ -62,6 +65,7 @@ export function registerMcpRoutes(app: FastifyInstance) {
           .send({ error: "Invalid MCP public URL configuration" });
       const server = createVioraMcp(
         new VioraGateway(app, authorization, origin.origin),
+        uploads,
       );
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,

@@ -485,6 +485,26 @@ test("an idle Pixi label clamps long text and opens DOM editing on double click"
   await expect(titleEditor).not.toBeVisible();
 });
 
+test("MCP video result opens preview before and after reload", async ({ page }) => {
+  const { canvas } = await mockApi(page, 1);
+  Object.assign(canvas.nodes[0], {
+    kind: "video", role: "result", jobId: "mcp-completed-video",
+    status: "succeeded", progress: 100, title: "MCP 视频结果",
+    mediaUrl: "/api/assets/test-video/content/test.mp4",
+  });
+  await page.goto("/?canvasPerf=1#/canvas");
+  const node = page.locator('.flow-node[data-id="1"]');
+  await expect(node).toBeVisible({ timeout: 15_000 });
+  await node.dblclick({ position: { x: 120, y: 85 } });
+  await expect(page.locator("#asset-preview")).toHaveClass(/open/);
+  await expect(page.locator("#preview-video")).toHaveAttribute("src", /test-video/);
+  await page.locator("#close-preview").click();
+  await page.reload();
+  await expect(node).toBeVisible();
+  await node.dblclick({ position: { x: 120, y: 85 } });
+  await expect(page.locator("#asset-preview")).toHaveClass(/open/);
+});
+
 test("a Pixi image opens the existing preview on double click", async ({ page }) => {
   const { canvas } = await mockApi(page, 1);
   Object.assign(canvas.nodes[0], {

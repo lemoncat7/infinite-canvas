@@ -1,4 +1,4 @@
-import { isAgnesVideo } from '../models/catalog';
+import { isAgnesVideo, isAgnesVideo25 } from '../models/catalog';
 import type { FlowLink, FlowNode } from "./node-types";
 import { VIDEO_CARD_LAYOUT } from "./video-card-layout";
 import {
@@ -60,7 +60,7 @@ export function syncVideoReferenceView(options: VideoReferenceViewOptions) {
           Boolean(item.source.mediaUrl),
         ).length;
       const agnesKeyframes =
-          isAgnesVideo(node.model) && totalReferences > 1,
+          isAgnesVideo(node.model) && (isAgnesVideo25(node.model) ? node.videoSettings?.referenceMode === 'keyframes' : totalReferences > 1),
         mode = agnesKeyframes
           ? "关键帧动画"
           : totalReferences > 1

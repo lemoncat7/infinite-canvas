@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
 import { identifier, pagination, result } from "./contracts.js";
 import { page, projectPath, type VioraGateway } from "./gateway.js";
+import { prepareMcpNodes } from './canvas-node-contract.js';
 
 const batchId = z.string().regex(/^[A-Za-z0-9_-]{8,100}$/);
 const side = z.enum(["top", "right", "bottom", "left"]);
@@ -99,8 +100,9 @@ export function registerCanvasTools(server: McpServer, api: VioraGateway) {
     },
     ({ projectId, baseVersion, batchId, nodes, links }) =>
       result(async () => {
+        const prepared = await prepareMcpNodes(api, projectId, nodes);
         const operations = [
-          ...nodes.map((value) => ({
+          ...prepared.map((value) => ({
             type: "node",
             action: "upsert",
             key: String(value.id),

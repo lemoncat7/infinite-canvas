@@ -1,5 +1,5 @@
 import type { FlowLink, FlowNode } from "./node-types";
-import { isAgnesVideo } from '../models/catalog';
+import { isAgnesVideo, isAgnesVideo25 } from '../models/catalog';
 
 interface VideoNodeSyncOptions {
   element: HTMLElement;
@@ -32,6 +32,7 @@ export function syncVideoNodePanel(options: VideoNodeSyncOptions) {
   )!;
   if (node.kind === "video") {
     const supportsNativeKeyframes = isAgnesVideo(node.model),
+      modernAgnes = isAgnesVideo25(node.model),
       imageInputCount = links.filter(
         (link) =>
           link.to === node.id &&
@@ -40,6 +41,7 @@ export function syncVideoNodePanel(options: VideoNodeSyncOptions) {
     if (
       node.role !== "result" &&
       supportsNativeKeyframes &&
+      !modernAgnes &&
       imageInputCount > 1 &&
       node.videoSettings?.referenceMode !== "keyframes"
     ) {
@@ -50,7 +52,7 @@ export function syncVideoNodePanel(options: VideoNodeSyncOptions) {
       scheduleSave();
     } else if (
       node.role !== "result" &&
-      (!supportsNativeKeyframes || imageInputCount < 2) &&
+      (!supportsNativeKeyframes || imageInputCount < (modernAgnes ? 1 : 2) || (modernAgnes && imageInputCount > 2)) &&
       node.videoSettings?.referenceMode === "keyframes"
     ) {
       node.videoSettings.referenceMode = "references";
@@ -140,12 +142,12 @@ export function syncVideoNodePanel(options: VideoNodeSyncOptions) {
             key === "referenceMode" && button.dataset.value === "references",
           unsupported =
             (keyframes &&
-              (!supportsNativeKeyframes || imageInputCount < 2)) ||
-            (references && supportsNativeKeyframes && imageInputCount > 1);
+              (!supportsNativeKeyframes || imageInputCount < (modernAgnes ? 1 : 2) || (modernAgnes && imageInputCount > 2))) ||
+            (references && supportsNativeKeyframes && !modernAgnes && imageInputCount > 1);
         button.disabled = unsupported;
         button.title = unsupported
           ? keyframes
-            ? "关键帧动画需要 Agnes 和至少两张有序图片"
+            ? modernAgnes ? "Agnes 2.5 首尾帧需要 1–2 张图片" : "关键帧动画需要 Agnes 和至少两张有序图片"
             : "Agnes 官方接口不支持多图自由参考，请使用关键帧动画"
           : keyframes
             ? "Agnes 原生关键帧动画，严格按卡片中的图片编号排序"

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { createHash } from "node:crypto";
 
 export class ApiFailure extends Error {
   constructor(
@@ -19,6 +20,11 @@ export class VioraGateway {
     private readonly authorization: string,
     private readonly publicOrigin?: string,
   ) {}
+
+  /** Bind temporary MCP uploads to this credential without storing the token. */
+  uploadOwner() {
+    return createHash('sha256').update(this.authorization).digest('hex');
+  }
 
   downloadUrl(path: string) {
     if (!this.publicOrigin)

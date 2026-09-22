@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { createHash, randomBytes } from 'node:crypto';
+import sharp from 'sharp';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
@@ -64,7 +66,7 @@ test('MCP and existing HTTP routes share authorization, canvas conflicts, jobs a
       assert.ok(app.hasRoute({ method, url }), `Original HTTP route was not registered: ${route}`);
     }
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 10);
+    assert.equal(tools.length, 13);
     assert.ok(tools.every(tool => !/delete|admin|clear/.test(tool.name)));
     assert.equal((await app.inject({ method: 'POST', url: '/mcp', payload: {} })).statusCode, 401);
     const cookie = `flow_session=${sessionStore.createSession('alice')}`;
@@ -118,6 +120,11 @@ test('MCP and existing HTTP routes share authorization, canvas conflicts, jobs a
       await new Promise(resolve => setTimeout(resolve, 30));
     }
     assert.equal(job.status, 'succeeded', JSON.stringify(job));
+    assert.equal(job.canvasLinked, true);
+    const persisted = JSON.parse(String(getOne('SELECT document FROM project_canvases WHERE project_id=?', [projectId]).document));
+    const resultNode = persisted.nodes.find(n => n.jobId === job.id);
+    assert.equal(resultNode.mediaUrl, job.result_url);
+    assert.equal(resultNode.status, 'succeeded');
     assert.equal(providerCalls, 1);
     assert.equal(getOne('SELECT credits FROM users WHERE id=?', ['alice']).credits, 27);
     assert.equal(getOne('SELECT reserved_credits FROM users WHERE id=?', ['alice']).reserved_credits, 0);
@@ -211,6 +218,107 @@ test('MCP and existing HTTP routes share authorization, canvas conflicts, jobs a
     const missing = await client.callTool({ name: 'viora_asset_get', arguments: { assetId: 'missing' } });
     assert.equal(missing.isError, true);
     assert.equal(JSON.parse(missing.content[0].text).status, 404);
+  });
+
+  await t.test('video repair persists a previewable result through real MCP without generation or billing', async () => {
+    const credits = getOne('SELECT credits FROM users WHERE id=?', ['alice']).credits;
+    const calls = providerCalls;
+    const ids = await call('viora_canvas_allocate_ids', { projectId, count: 1 });
+    const before = await call('viora_canvas_read', { projectId });
+    const source = { id: ids.start, kind: 'video', title: 'Video source', body: 'retain configuration', accent: '#888', x: 800, y: 0, width: 280, height: 220 };
+    await call('viora_canvas_apply', { projectId, baseVersion: before.version, batchId: 'video-source-fixture', nodes: [source] });
+    const jobId = 'mcp-video-repair-fixture';
+    const url = '/api/assets/test-video/content/test.mp4';
+    const now = new Date().toISOString();
+    database.run('INSERT INTO jobs (id,project_id,user_id,node_id,kind,prompt,model,status,progress,result_url,created_at,updated_at,input_urls) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      [jobId, projectId, 'alice', source.id, 'video', 'test', 'test-video', 'succeeded', 100, url, now, now, JSON.stringify([job.result_url])]);
+    const repaired = await call('viora_generation_sync', { jobId, createMissing: true });
+    assert.equal(repaired.canvasSync, 'synced');
+    assert.notEqual(repaired.resultNodeId, source.id);
+    const raw = () => JSON.parse(getOne('SELECT document FROM project_canvases WHERE project_id=?', [projectId]).document);
+    const node = raw().nodes.find(n => n.id === repaired.resultNodeId);
+    assert.equal(node.role, 'result');
+    assert.equal(node.jobId, jobId);
+    assert.equal(node.status, 'succeeded');
+    assert.equal(node.mediaUrl, url);
+    assert.deepEqual(raw().nodes.find(n => n.id === source.id), source);
+    assert.ok(raw().links.some(l => l.from === source.id && l.to === node.id));
+    assert.equal(repaired.referencesSync, 'synced');
+    assert.ok(raw().links.some(l => l.from === nodeId && l.to === node.id && l.inputOrder === 0));
+    const version = (await call('viora_canvas_read', { projectId })).version;
+    await call('viora_generation_get', { jobId, syncCanvas: false });
+    await call('viora_generation_get', { jobId });
+    assert.equal((await call('viora_canvas_read', { projectId })).version, version);
+    assert.equal((await other.callTool({ name: 'viora_generation_sync', arguments: { jobId, createMissing: true } })).isError, true);
+    assert.equal(providerCalls, calls);
+    assert.equal(getOne('SELECT credits FROM users WHERE id=?', ['alice']).credits, credits);
+  });
+
+  await t.test('MCP image upload reuses validation, ownership and optionally creates a canvas node', async () => {
+    const data = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
+    const input = { projectId, name: '本地图片.png', mimeType: 'image/png', data };
+    const initial = (await call('viora_assets_list', { projectId })).total;
+    const credits = getOne('SELECT credits FROM users WHERE id=?', ['alice']).credits;
+    const uploaded = await call('viora_asset_upload', input);
+    assert.equal(uploaded.canvasSync, 'not_requested');
+    assert.equal(uploaded.asset.size, Buffer.from(data, 'base64').length);
+    assert.deepEqual((await api('GET', uploaded.asset.url.slice(4))).rawPayload, Buffer.from(data, 'base64'));
+    const placed = await call('viora_asset_upload', { ...input, placement: { x: 1100, y: 600 } });
+    assert.equal(placed.canvasSync, 'synced');
+    const document = JSON.parse(getOne('SELECT document FROM project_canvases WHERE project_id=?', [projectId]).document);
+    const node = document.nodes.find(n => n.id === placed.nodeId);
+    assert.equal(node.kind, 'image');
+    assert.equal(node.mediaUrl, placed.asset.url);
+    assert.equal(node.x, 1100);
+    assert.equal(node.width, 280);
+    for (const invalid of [
+      { ...input, data: '/local/image.png' },
+      { ...input, data: `data:image/png;base64,${data}` },
+      { ...input, mimeType: 'image/jpeg' },
+      { ...input, data: Buffer.from('not an image').toString('base64') },
+      { ...input, name: '../image.png' },
+      { ...input, data: Buffer.alloc(1024 * 1024 + 1).toString('base64') },
+    ]) assert.equal((await client.callTool({ name: 'viora_asset_upload', arguments: invalid })).isError, true);
+    assert.equal((await other.callTool({ name: 'viora_asset_upload', arguments: input })).isError, true);
+    assert.equal((await call('viora_assets_list', { projectId })).total, initial + 2);
+    assert.equal(getOne('SELECT credits FROM users WHERE id=?', ['alice']).credits, credits);
+  });
+
+  await t.test('real MCP chunk upload accepts images above 1 MiB with retry and ownership protection', async () => {
+    const bytes = await sharp(randomBytes(1024 * 1024 * 3), { raw: { width: 1024, height: 1024, channels: 3 } }).png().toBuffer();
+    assert.ok(bytes.length > 1024 * 1024);
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
+    const input = { action: 'begin', requestId: 'chunked-real-test', projectId, name: 'large.png', mimeType: 'image/png', size: bytes.length, sha256, placement: { x: 1200, y: 500 } };
+    const tool = 'viora_asset_upload_chunked';
+    const initial = (await call('viora_assets_list', { projectId })).total;
+    const session = await call(tool, input);
+    assert.equal((await call(tool, input)).uploadId, session.uploadId);
+    const uploadId = session.uploadId;
+    assert.equal((await other.callTool({ name: tool, arguments: { action: 'status', uploadId } })).isError, true);
+    assert.equal((await other.callTool({ name: tool, arguments: input })).isError, true);
+    assert.equal((await client.callTool({ name: tool, arguments: { ...input, size: 100 * 1024 * 1024 + 1 } })).isError, true);
+    assert.equal((await client.callTool({ name: tool, arguments: { action: 'complete', uploadId } })).isError, true);
+    for (let index = session.chunkCount - 1; index >= 0; index--) {
+      const data = bytes.subarray(index * session.chunkBytes, (index + 1) * session.chunkBytes).toString('base64');
+      await call(tool, { action: 'write', uploadId, index, data });
+      if (index === 0) await call(tool, { action: 'write', uploadId, index, data });
+    }
+    const completed = await call(tool, { action: 'complete', uploadId });
+    assert.equal(completed.canvasSync, 'synced');
+    assert.deepEqual(await call(tool, { action: 'complete', uploadId }), completed);
+    assert.deepEqual((await call(tool, { action: 'status', uploadId })).result, completed);
+    assert.deepEqual((await api('GET', completed.asset.url.slice(4))).rawPayload, bytes);
+    assert.equal((await call('viora_assets_list', { projectId })).total, initial + 1);
+    const localFile = join(directory, 'local-large.png');
+    writeFileSync(localFile, bytes);
+    const invokeScript = () => promisify(execFile)(process.execPath,
+      ['scripts/mcp-upload-image.mjs', projectId, localFile, 'local-script-retry'],
+      { cwd: new URL('..', import.meta.url), timeout: 30000,
+        env: { ...process.env, VIORA_MCP_URL: `${base}/mcp`, VIORA_MCP_TOKEN: alice, VIORA_UPLOAD_PLACEMENT: '' } });
+    const firstScript = await invokeScript(), repeatedScript = await invokeScript();
+    assert.equal(JSON.parse(firstScript.stdout).asset.id, JSON.parse(repeatedScript.stdout).asset.id);
+    assert.ok(!firstScript.stderr.includes(alice));
+    assert.equal((await call('viora_assets_list', { projectId })).total, initial + 2);
   });
 
   await t.test('rotated tokens take effect on the next MCP request', async () => {
