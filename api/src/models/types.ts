@@ -12,10 +12,10 @@ export type ModelCapabilities = {
 export type ProviderConnection = { id: string; name: string; baseUrl: string; apiKey: string; apiKeys?: string[]; proxyUrl: string; enabled: boolean }
 export type GlobalModel = {
   id: string; name: string; model: string; providerId: string; adapter: ModelAdapter; kind: ModelKind;
-  enabled: boolean; order: number; creditCost: number; capabilities: ModelCapabilities;
+  enabled: boolean; order: number; creditCost: number; capabilities: ModelCapabilities; purposes?: ModelPurpose[];
 }
 export type ModelConfiguration = {
-  revision: number; imported: boolean; providers: ProviderConnection[]; models: GlobalModel[];
+  revision: number; imported: boolean; schemaVersion?: number; providers: ProviderConnection[]; models: GlobalModel[];
   defaults: Partial<Record<ModelPurpose, string>>;
 }
 export type ResolvedModel = { revision: number; model: GlobalModel; connection: ProviderConnection }

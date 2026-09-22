@@ -33,7 +33,7 @@ export function bindEditorDiscovery(form: HTMLFormElement, kind: 'model' | 'prov
       kind === 'model' ? {} : { ...values, providerId })
       if (!form.isConnected || current !== version) return
       results.replaceChildren(new Option('选择模型（也可手填）', ''), ...result.models.map(id => new Option(id, id)))
-      results.hidden = !result.models.length
+      results.hidden = kind === 'provider' || !result.models.length
       const suggestions = form.querySelector('datalist')
       suggestions?.replaceChildren(...result.models.map(id => new Option(id, id)))
       output.textContent = result.models.length ? `已获取 ${result.models.length} 个模型。请按上游文档确认协议与能力；尚未保存配置。` : '上游没有返回模型，可以继续手动填写。'

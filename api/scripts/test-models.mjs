@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, unlinkSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Fastify from 'fastify'
@@ -9,6 +9,7 @@ import { registerModelRoutes } from '../dist/models/routes.js'
 import { validateGeneration } from '../dist/models/validation.js'
 import { configuredProvider } from '../dist/models/runtime.js'
 import { safeModelError } from '../dist/models/errors.js'
+import { credentialId } from '../dist/models/key-pool.js'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import sharp from 'sharp'
@@ -28,6 +29,16 @@ function setup(t, env = {}) {
 }
 function provider(store, values = {}) { return store.saveProvider({ revision: store.admin().revision, name: 'Test connection', baseUrl: 'https://example.com/v1', apiKey: 'PRIVATE_TEST_CREDENTIAL', ...values }).providers.at(-1) }
 function model(store, providerId, values = {}) { return store.saveModel({ revision: store.admin().revision, name: '中文模型', model: 'image-v1', adapter: 'openai-image', providerId, capabilities: { referenceImages: 1, transparent: true }, ...values }).models.at(-1) }
+
+test('replacement Key persists after restart and old unchecked Keys are actually removed', t => {
+  const { dir, store } = setup(t)
+  const p = provider(store, { apiKeys: ['old-one', 'old-two'] })
+  store.saveProvider({ ...p, revision: store.admin().revision, retainedKeyIds: [], apiKeys: ['new-key'] }, p.id)
+  const restored = new ModelStore(dir, {})
+  assert.deepEqual(restored.connection(p.id).apiKeys, ['new-key'])
+  assert.equal(restored.connection(p.id).apiKey, 'new-key')
+  assert.deepEqual(restored.admin().providers[0].keys.map(k => k.id), [credentialId('new-key')])
+})
 
 test('encrypted persistence, no credentials in public/admin output, restart and immutable execution snapshot', t => {
   const { dir, store } = setup(t)
@@ -66,29 +77,63 @@ test('defaults protect enabled connections and models; unsupported inputs fail c
   assert.throws(() => store.resolve(undefined, 'image', 'image'), /未指定默认/)
 })
 
-test('environment import is explicit, preserves stable aliases, and never overwrites on restart', t => {
-  const env = { OPENAI_IMAGE_BASE_URL: 'https://example.com', OPENAI_IMAGE_API_KEY: 'ENV_SECRET' }
-  const { dir, store } = setup(t, env)
-  assert.equal(store.admin().imported, false)
-  assert.equal(store.resolve('gpt-image-2', 'image', 'image').model.id, 'global:env-image-0')
-  store.importEnvironment(0)
-  const p = store.admin().providers[0]
-  store.saveProvider({ ...p, revision: 1, baseUrl: 'https://configured.example.com' }, p.id)
-  const restarted = new ModelStore(dir, { ...env, OPENAI_IMAGE_BASE_URL: 'https://new-env.example.com' })
-  assert.equal(restarted.connection(p.id).baseUrl, 'https://configured.example.com')
-  assert.throws(() => restarted.importEnvironment(2), /重复/)
+test('saved configuration upgrades without reading environment and preserves hand-edited models, credentials and backup', t => {
+  const { dir, store: initial } = setup(t)
+  const p = provider(initial), m = model(initial, p.id, { model: 'user-edited-id' })
+  initial.saveDefaults({ revision: initial.admin().revision, defaults: { image: m.id } })
+  const config = initial.secrets.open(readFileSync(join(dir, 'model-config.json'), 'utf8'))
+  delete config.schemaVersion; config.imported = false
+  config.providers[0].id = 'env-image'; config.providers[0].name = '环境 · OpenAI 图片'; config.models[0].providerId = 'env-image'
+  config.providers.push({ ...config.providers[0], id: 'env-text', name: '环境 · 文本助手' })
+  config.providers.push({ ...config.providers[0], id: 'env-other', name: '环境 · Agnes 视频', apiKey: 'DIFFERENT_KEY', apiKeys: ['DIFFERENT_KEY'] })
+  const before = initial.secrets.seal(config)
+  writeFileSync(join(dir, 'model-config.json'), before)
+  const env = { OPENAI_IMAGE_BASE_URL: 'https://must-not-load.example.com', OPENAI_IMAGE_API_KEY: 'ENV_SECRET' }
+  const store = new ModelStore(dir, env)
+  assert.equal(store.admin().schemaVersion, 2)
+  assert.equal(store.admin().providers.length, 2)
+  assert.equal(store.admin().models.length, 1)
+  assert.equal(store.resolve(undefined, 'image', 'image').model.model, 'user-edited-id')
+  assert.equal(store.connection('env-image').apiKey, 'PRIVATE_TEST_CREDENTIAL')
+  assert.equal(store.connection('env-other').apiKey, 'DIFFERENT_KEY')
+  assert.doesNotMatch(JSON.stringify(store.admin()), /环境|ENV_SECRET/)
+  assert.equal(readFileSync(join(dir, 'model-config.json.before-provider-v2'), 'utf8'), before)
+  const restarted = new ModelStore(dir, env)
+  assert.equal(restarted.admin().revision, store.admin().revision)
+  assert.throws(() => restarted.importEnvironment(store.admin().revision), /取消环境模型导入/)
 })
 
-test('environment credential pools survive import and remain private', t => {
-  const { store } = setup(t, { AGNES_VIDEO_BASE_URL: 'https://example.com', AGNES_VIDEO_API_KEY: 'KEY_ONE', AGNES_VIDEO_API_KEY_2: 'KEY_TWO' })
-  store.importEnvironment(0)
-  const view = store.admin().providers.find(p => p.id === 'env-agnes-video')
-  assert.equal(view.keyCount, 2)
-  assert.doesNotMatch(JSON.stringify(store.admin()), /KEY_ONE|KEY_TWO/)
-  store.saveProvider({ ...view, revision: 1, apiKey: '' }, view.id)
-  assert.deepEqual(store.connection(view.id).apiKeys, ['KEY_ONE', 'KEY_TWO'])
-  store.saveProvider({ ...view, revision: 2, apiKey: 'REPLACEMENT' }, view.id)
-  assert.deepEqual(store.connection(view.id).apiKeys, ['REPLACEMENT'])
+test('pre-import installations do not import environment definitions on upgrade', t => {
+  const { dir, store } = setup(t)
+  writeFileSync(join(dir, 'model-config.json'), store.secrets.seal({ revision: 0, imported: false, providers: [], models: [], defaults: { video: 'global:env-agnes-video-0' } }))
+  const upgraded = new ModelStore(dir, { AGNES_VIDEO_BASE_URL: 'https://example.com', AGNES_VIDEO_API_KEY: 'MUST_NOT_IMPORT' })
+  assert.equal(upgraded.admin().providers.length, 0)
+  assert.equal(upgraded.catalog().models.length, 0)
+  assert.equal(upgraded.catalog().defaults.video, '')
+})
+
+test('purpose eligibility and priority govern automatic defaults without switching explicit choices', t => {
+  const { store } = setup(t), p = provider(store)
+  const first = model(store, p.id, { model: 'first', adapter: 'openai-chat', purposes: ['prompt'], order: 20 })
+  const second = model(store, p.id, { model: 'second', adapter: 'openai-chat', purposes: ['prompt', 'comic'], order: 10 })
+  store.saveDefaults({ revision: store.admin().revision, defaults: { prompt: '@auto', comic: '@auto' } })
+  assert.equal(store.resolve(undefined, 'text', 'prompt').model.id, second.id)
+  assert.equal(store.catalog().defaults.comic, second.id)
+  assert.throws(() => store.resolve(first.id, 'text', 'comic'), /用途/)
+  assert.throws(() => model(store, p.id, { purposes: ['prompt'] }), /用途/)
+  store.saveModel({ ...second, enabled: false, revision: store.admin().revision }, second.id)
+  assert.equal(store.resolve(undefined, 'text', 'prompt').model.id, first.id)
+  assert.throws(() => store.resolve(undefined, 'text', 'comic'), /未指定默认/)
+  store.saveDefaults({ revision: store.admin().revision, defaults: { prompt: first.id } })
+  assert.throws(() => store.saveModel({ ...first, purposes: [], revision: store.admin().revision }, first.id), /替代模型/)
+})
+
+test('new installations ignore environment model definitions', t => {
+  const { dir, store } = setup(t, { OPENAI_IMAGE_BASE_URL: 'https://example.com', OPENAI_IMAGE_API_KEY: 'ENV_SECRET' })
+  assert.equal(store.admin().imported, true)
+  assert.equal(store.admin().providers.length, 0)
+  assert.equal(new ModelStore(dir, { OPENAI_IMAGE_BASE_URL: 'https://another.example.com' }).catalog().models.length, 0)
+  assert.throws(() => store.resolve(undefined, 'image', 'image'), /未指定默认/)
 })
 
 test('routes enforce admin, same-origin mutations, revision, and redact discovery failures', async t => {
@@ -112,6 +157,12 @@ test('routes enforce admin, same-origin mutations, revision, and redact discover
   assert.equal(result.statusCode, 200)
   assert.doesNotMatch(result.body, /PRIVATE_TEST_CREDENTIAL/)
   const id = result.json().providers[0].id
+  const verification = { url: `/admin/model-providers/${id}/verify-key`, method: 'POST', payload: { keyId: credentialId('PRIVATE_TEST_CREDENTIAL') } }
+  assert.equal((await app.inject({ ...verification, headers: { authorization: 'user' } })).statusCode, 403)
+  assert.equal((await app.inject({ ...verification, headers: { authorization: 'admin', origin: 'https://evil.example' } })).statusCode, 403)
+  const verificationFailure = await app.inject({ ...verification, headers: { authorization: 'admin' } })
+  assert.equal(verificationFailure.statusCode, 502)
+  assert.doesNotMatch(verificationFailure.body, /PRIVATE_TEST_CREDENTIAL/)
   const beforeDiscovery = store.admin().revision
   const changedEndpoint = await app.inject({ url: '/admin/model-providers/discover', method: 'POST', headers: { authorization: 'admin' }, payload: { providerId: id, baseUrl: 'https://different.example', apiKey: '' } })
   assert.equal(changedEndpoint.statusCode, 400)

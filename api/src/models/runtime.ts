@@ -28,7 +28,7 @@ export function configuredProvider(resolved: ResolvedModel): GenerationProvider 
     case 'agnes-video': provider = new AgnesVideoProvider(config); break
     default: throw new Error('当前模型不是生成模型')
   }
-  return { name: provider.name, run: async (input, update) => {
+  return { name: provider.name, referencePolicy: provider.referencePolicy?.bind(provider), run: async (input, update) => {
     try { return await withProviderKeys(resolved.connection, resolved.model.kind === 'video', () => provider.run(input, update)) }
     catch (error) { throw safeModelError(error) }
   } }

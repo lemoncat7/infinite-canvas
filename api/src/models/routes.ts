@@ -5,6 +5,7 @@ import { discoverModels } from './network.js'
 import { configuredProvider } from './runtime.js'
 import { providerInput, endpoint } from './validation.js'
 import { connectionKeys } from './key-pool.js'
+import { verifyProviderKey } from './key-verification.js'
 
 export function registerModelRoutes(app: FastifyInstance, store: ModelStore, guards: {
   user(request: FastifyRequest, reply: FastifyReply): unknown;
@@ -41,6 +42,7 @@ export function registerModelRoutes(app: FastifyInstance, store: ModelStore, gua
     busy.add(key); try { return await run() } finally { busy.delete(key) }
   }
   route('POST', '/admin/model-providers/:id/discover', (_body, id) => exclusive(id, async () => ({ models: await discoverModels(store.connection(id)), checkedAt: new Date().toISOString() })))
+  route('POST', '/admin/model-providers/:id/verify-key', (body, id) => exclusive(id, () => verifyProviderKey(store.connection(id), body.keyId)))
   route('POST', '/admin/model-providers/discover', body => exclusive('draft-discovery', async () => {
     const previous = typeof body.providerId === 'string' && body.providerId ? store.connection(body.providerId) : undefined
     const connection = providerInput({ ...body, name: body.name || '连接测试' }, 'draft', previous)

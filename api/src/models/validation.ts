@@ -1,4 +1,4 @@
-import { adapterKinds, ModelConfigError, type GlobalModel, type ModelAdapter, type ProviderConnection } from './types.js'
+import { adapterKinds, purposeKinds, ModelConfigError, type GlobalModel, type ModelAdapter, type ModelPurpose, type ProviderConnection } from './types.js'
 import { connectionKeys, credentialId } from './key-pool.js'
 export function text(value: unknown, label: string, max = 120) {
   if (typeof value !== 'string' || !value.trim() || value.length > max || /[\x00-\x1f]/.test(value)) throw new ModelConfigError(`${label}不能为空、包含控制字符或超过 ${max} 字`)
@@ -49,9 +49,11 @@ export function modelInput(body: Record<string, unknown>, id: string): GlobalMod
   }
   if (capabilities.minSeconds > capabilities.maxSeconds) throw new ModelConfigError('最短时长不能大于最长时长')
   const creditCost = integer(body.creditCost, '单次点数', 0, 100000, 0)
+  const purposes = body.purposes === undefined ? (Object.keys(purposeKinds) as ModelPurpose[]).filter(p => purposeKinds[p] === adapterKinds[adapter]) : body.purposes
+  if (!Array.isArray(purposes) || purposes.some(p => typeof p !== 'string' || !Object.hasOwn(purposeKinds, p) || purposeKinds[p as ModelPurpose] !== adapterKinds[adapter])) throw new ModelConfigError('模型用途与接口类型不匹配')
   if (adapterKinds[adapter] === 'text' && creditCost) throw new ModelConfigError('文本助手暂不支持按次计费，请填 0')
   return { id, name: text(body.name, '显示名称'), model: text(body.model, '上游模型 ID'), providerId: text(body.providerId, '服务商'),
-    adapter, kind: adapterKinds[adapter], enabled: body.enabled !== false, order: integer(body.order, '排序', 0, 10000, 0), creditCost, capabilities }
+    adapter, kind: adapterKinds[adapter], purposes: [...new Set(purposes)] as ModelPurpose[], enabled: body.enabled !== false, order: integer(body.order, '优先级', 0, 10000, 0), creditCost, capabilities }
 }
 export function validateGeneration(model: GlobalModel, references: number, parameters: Record<string, unknown>) {
   const c = model.capabilities

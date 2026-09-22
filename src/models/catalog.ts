@@ -2,7 +2,7 @@ import { apiFetch } from '../services/api'
 export type ModelKind = 'image' | 'video' | 'text'
 export type Purpose = 'image' | 'video' | 'prompt' | 'comic'
 export type CatalogModel = {
-  id: string; name: string; model: string; providerId: string; adapter: string; kind: ModelKind; enabled: boolean; order: number; creditCost: number;
+  id: string; name: string; model: string; providerId: string; adapter: string; kind: ModelKind; enabled: boolean; order: number; creditCost: number; purposes?: Purpose[];
   capabilities: { referenceImages: number; transparent: boolean; sizes: string[]; resolutions: string[]; aspectRatios: string[]; minSeconds: number; maxSeconds: number }
 }
 export type Catalog = { revision: number; defaults: Partial<Record<Purpose, string>>; models: CatalogModel[] }
@@ -15,6 +15,7 @@ export function defaultModel(purpose: Purpose, fallback = '') { return catalog ?
 export function upstreamModel(id?: string) { return catalogModel(id)?.model || id || '' }
 export function modelLabel(id?: string) { return catalogModel(id)?.name || id || '' }
 export function isAgnesVideo(id?: string) { return catalogModel(id)?.adapter === 'agnes-video' || upstreamModel(id).startsWith('agnes-') }
+export function isAgnesVideo25(id?: string) { return isAgnesVideo(id) && /^agnes-video-2\.5(?:-flash)?$/.test(upstreamModel(id)) }
 export function clearCatalog() { epoch++; catalog = undefined; loading = undefined }
 export async function loadModelCatalog() {
   if (loading) return loading
