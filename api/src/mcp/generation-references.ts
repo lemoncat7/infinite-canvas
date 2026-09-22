@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { CanvasSnapshot } from './canvas-tools.js';
 import type { McpJob } from './generation-canvas.js';
 import { ApiFailure, projectPath, type VioraGateway } from './gateway.js';
+import { referenceAssetId as assetId, assertReferenceInputs } from './reference-inputs.js';
 
 function inputUrls(job: McpJob): string[] {
   try {
@@ -10,33 +11,29 @@ function inputUrls(job: McpJob): string[] {
   } catch { return []; }
 }
 
-/** Normalize only this site's asset URLs; never equate external URLs by path. */
-function assetId(api: VioraGateway, value: string) {
-  try {
-    let path = value;
-    if (!value.startsWith('/api/')) {
-      const url = new URL(value);
-      if (url.origin !== new URL(api.downloadUrl('/')).origin) return undefined;
-      path = url.pathname;
-    }
-    return /^\/api\/assets\/([^/?#]+)\/content(?:\/[^?#]*)?(?:[?#].*)?$/.exec(path)?.[1];
-  } catch { return undefined; }
-}
-
-/** Reference provenance belongs to the job result, not a reusable generator's current inputs. */
+/** Video inputs belong to the generator; immutable provenance remains in job.input_urls. */
 export async function syncGenerationReferences(api: VioraGateway, job: McpJob, resultNodeId: unknown,
   options: { createMissing?: boolean; repairReferences?: boolean }) {
   const urls = inputUrls(job);
   if (!urls.length) return { referencesSync: 'not_required' };
-  const marker = createHash('sha256').update(JSON.stringify([job.id, urls])).digest('hex').slice(0, 24);
+  const legacyMarker = createHash('sha256').update(JSON.stringify([job.id, urls])).digest('hex').slice(0, 24);
+  const marker = job.kind === 'video' ? `generator-v2-${legacyMarker}` : legacyMarker;
   const path = `${projectPath(job.project_id)}/canvas`;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const canvas = await api.call<CanvasSnapshot>('GET', path);
-      const target = canvas.nodes.find(n => n.id === resultNodeId && n.jobId === job.id);
-      if (!target) return { referencesSync: 'pending', referencesWarning: 'Result card missing; no references were recreated.' };
+      const result = canvas.nodes.find(n => n.id === resultNodeId && n.jobId === job.id);
+      if (!result) return { referencesSync: 'pending', referencesWarning: 'Result card missing; no references were recreated.' };
       // Polling must not undo the user's later deletion/rearrangement of references.
-      if (target.mcpReferenceSync === marker && !options.repairReferences) return { referencesSync: 'synced' };
+      if (result.mcpReferenceSync === marker && !options.repairReferences) return { referencesSync: 'synced' };
+      if (job.kind === 'video' && result.mcpReferenceSync === legacyMarker && !options.repairReferences)
+        return { referencesSync: 'pending', referencesWarning: 'Legacy result reference links require explicit generation_sync(repairReferences=true); no generation is needed.' };
+      const target = job.kind === 'video' ? canvas.nodes.find(n => n.id === job.node_id && n.kind === 'video' && n.role !== 'result' && !n.jobId && !n.mediaUrl) : result;
+      if (!target) return { referencesSync: 'pending', referencesWarning: 'Generator missing or replaced; its inputs were not changed.' };
+      if (job.kind === 'video') {
+        try { assertReferenceInputs(api, canvas, target.id, urls, true); }
+        catch { return { referencesSync: 'pending', referencesWarning: 'Generator inputs differ from this historical job; existing input links were preserved.' }; }
+      }
       const nodes = [...canvas.nodes], links = [...canvas.links];
       const operations: Record<string, unknown>[] = [];
       const unresolved: number[] = [];
@@ -63,6 +60,10 @@ export async function syncGenerationReferences(api: VioraGateway, job: McpJob, r
           }
         }
         if (!reference) { unresolved.push(index); continue; }
+        if (job.kind === 'video' && options.repairReferences && result.mcpReferenceSync === legacyMarker) {
+          for (const old of links.filter(l => l.from === reference!.id && l.to === result.id && l.fromSide === 'right' && l.toSide === 'left' && l.inputOrder === index))
+            operations.push({ type: 'link', action: 'delete', key: `${old.from}:${old.to}:${old.fromSide}:${old.toSide}` });
+        }
         // Preserve existing user connections and their sides/order; never duplicate an edge.
         if (!links.some(l => l.from === reference!.id && l.to === target.id)) {
           const link = { from: reference.id, to: target.id, fromSide: 'right', toSide: 'left', inputOrder: index };
@@ -70,7 +71,7 @@ export async function syncGenerationReferences(api: VioraGateway, job: McpJob, r
           operations.push({ type: 'link', action: 'upsert', key: `${reference.id}:${target.id}:right:left`, value: link });
         }
       }
-      if (!unresolved.length && target.mcpReferenceSync !== marker) operations.push({ type: 'node', action: 'upsert', key: String(target.id), value: { ...target, mcpReferenceSync: marker } });
+      if (!unresolved.length && result.mcpReferenceSync !== marker) operations.push({ type: 'node', action: 'upsert', key: String(result.id), value: { ...result, mcpReferenceSync: marker } });
       if (operations.length) {
         await api.call('POST', `${path}/sync`, { clientId: 'viora-mcp-client',
           batchId: `mcp-refs-${marker}-${canvas.version}`, baseVersion: canvas.version, operations });

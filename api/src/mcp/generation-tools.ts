@@ -4,13 +4,14 @@ import type { CanvasSnapshot } from "./canvas-tools.js";
 import { identifier, requestId, result } from "./contracts.js";
 import { ApiFailure, projectPath, type VioraGateway } from "./gateway.js";
 import { syncGenerationCanvas, type McpJob } from './generation-canvas.js';
+import { assertReferenceInputs } from './reference-inputs.js';
 
 export function registerGenerationTools(server: McpServer, api: VioraGateway) {
   server.registerTool(
     "viora_generation_submit",
     {
       description:
-        "Submit one asynchronous image/video job on an existing matching source node. Videos get a separate result card with a reference link; source contents are preserved. Returns resultNodeId and canvasSync. May spend credits. Reuse the SAME requestId and inputs on retries. Poll generation_get with syncCanvas=true until terminal, including the final poll, to persist results on the canvas. If linking fails use generation_sync; NEVER submit another billable job to repair the canvas.",
+        "Submit one asynchronous image/video job on an existing matching generator node. Video inputUrls must match its connected image inputs and order. Images link to the generator; only the generator links to the separate video result. Returns resultNodeId and canvasSync. May spend credits. Reuse the SAME requestId and inputs on retries. Poll generation_get with syncCanvas=true until terminal, including the final poll, to persist results on the canvas. If linking fails use generation_sync; NEVER submit another billable job to repair the canvas.",
       inputSchema: {
         projectId: identifier,
         nodeId: z.number().int().positive(),
@@ -18,7 +19,7 @@ export function registerGenerationTools(server: McpServer, api: VioraGateway) {
         kind: z.enum(["image", "video"]),
         prompt: z.string().trim().min(1).max(4000),
         model: identifier.optional(),
-        inputUrls: z.array(z.string().min(1).max(4000)).max(16).optional().describe('Actual reference image URLs in input order. MCP links matching image cards to this job result and can create missing same-project asset cards; inspect referencesSync for unresolved inputs.'),
+        inputUrls: z.array(z.string().min(1).max(4000)).max(16).optional().describe('Actual reference image URLs in input order. For video, must match every connected image on the GENERATOR in the same order; mismatches are rejected before billing. MCP links references to the generator, never the video result.'),
         parameters: z
           .object({
             size: z.string().optional(),
@@ -52,12 +53,18 @@ export function registerGenerationTools(server: McpServer, api: VioraGateway) {
             400,
             "Create a matching image/video node before submitting generation.",
           );
+        if (input.kind === 'video') {
+          if (target.role === 'result' || target.mediaUrl || target.jobId) throw new ApiFailure(400, 'Use a video generator node, not a video result card. No job was created.');
+          assertReferenceInputs(api, canvas, input.nodeId, input.inputUrls ?? []);
+        }
+        console.info('[mcp-generation] validated submission', { requestId, projectId: input.projectId, nodeId: input.nodeId, kind: input.kind, inputReferenceCount: input.inputUrls?.length ?? 0, canvasVersion: canvas.version });
         const job = await api.call<Record<string, unknown>>(
           "POST",
           "/jobs",
           input,
           requestId,
         );
+        console.info('[mcp-generation] accepted submission', { requestId, jobId: job.id, nodeId: input.nodeId, inputReferenceCount: input.inputUrls?.length ?? 0 });
         // Fetch the complete job: submit/replay responses omit project/result fields.
         // A failed follow-up must still report that generation was accepted.
         try {

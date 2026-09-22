@@ -244,7 +244,8 @@ test('MCP and existing HTTP routes share authorization, canvas conflicts, jobs a
     assert.deepEqual(raw().nodes.find(n => n.id === source.id), source);
     assert.ok(raw().links.some(l => l.from === source.id && l.to === node.id));
     assert.equal(repaired.referencesSync, 'synced');
-    assert.ok(raw().links.some(l => l.from === nodeId && l.to === node.id && l.inputOrder === 0));
+    assert.ok(raw().links.some(l => l.from === nodeId && l.to === source.id && l.inputOrder === 0));
+    assert.equal(raw().links.some(l => l.from === nodeId && l.to === node.id), false);
     const version = (await call('viora_canvas_read', { projectId })).version;
     await call('viora_generation_get', { jobId, syncCanvas: false });
     await call('viora_generation_get', { jobId });

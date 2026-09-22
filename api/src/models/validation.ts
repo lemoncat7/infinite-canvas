@@ -57,7 +57,7 @@ export function modelInput(body: Record<string, unknown>, id: string): GlobalMod
 }
 export function validateGeneration(model: GlobalModel, references: number, parameters: Record<string, unknown>) {
   const c = model.capabilities
-  if (references > c.referenceImages) throw new ModelConfigError(`该模型最多支持 ${c.referenceImages} 张参考图`)
+  if (references > c.referenceImages) throw new ModelConfigError(`参考图数量超出配置：当前 ${references} 张，模型「${model.name}」配置上限为 ${c.referenceImages} 张。请减少参考图或选择支持更多参考图的模型；若配置有误，请在全局模型中核实后修改。`)
   if (parameters.background === 'transparent' && !c.transparent) throw new ModelConfigError('该模型不支持透明背景')
   for (const [key, values] of [['size', c.sizes], ['resolution', c.resolutions], ['aspect_ratio', c.aspectRatios]] as const) {
     if (parameters[key] !== undefined && values.length && !values.includes(String(parameters[key]))) throw new ModelConfigError(`模型不支持当前 ${key}，请重新选择`)

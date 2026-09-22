@@ -70,7 +70,7 @@ test('defaults protect enabled connections and models; unsupported inputs fail c
   assert.throws(() => provider(store, { baseUrl: 'http://169.254.169.254/latest' }), /元数据/)
   assert.throws(() => model(store, p.id, { adapter: '__proto__' }), /协议/)
   assert.throws(() => model(store, p.id, { creditCost: -1 }), /点数/)
-  assert.throws(() => validateGeneration(m, 2, {}), /参考图/)
+  assert.throws(() => validateGeneration(m, 2, {}), error => /当前 2 张/.test(error.message) && /配置上限/.test(error.message) && error.statusCode === 400)
   store.saveDefaults({ revision: store.admin().revision, defaults: { image: '' } })
   store.saveModel({ ...m, enabled: false, revision: store.admin().revision }, m.id)
   assert.throws(() => store.resolve(m.id, 'image', 'image'), /停用/)

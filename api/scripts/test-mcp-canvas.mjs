@@ -4,6 +4,7 @@ import { syncGenerationCanvas } from '../dist/mcp/generation-canvas.js';
 import { prepareMcpNodes } from '../dist/mcp/canvas-node-contract.js';
 import { ApiFailure } from '../dist/mcp/gateway.js';
 import { registerGenerationTools } from '../dist/mcp/generation-tools.js';
+import { createHash } from 'node:crypto';
 
 function fixture(kind = 'video') {
   const source = { id: 1, kind, x: 0, y: 0, width: 280, height: 220, title: 'Source', body: 'Keep my prompt', model: 'chosen-model', status: 'idle' };
@@ -22,6 +23,7 @@ function fixture(kind = 'video') {
     if (failSync-- > 0 || body.baseVersion !== canvas.version) throw new ApiFailure(409, 'conflict');
     for (const op of body.operations) {
       if (op.type === 'node') { const i = canvas.nodes.findIndex(n => String(n.id) === op.key); if (i < 0) canvas.nodes.push(op.value); else canvas.nodes[i] = op.value; }
+      else if (op.action === 'delete') canvas.links = canvas.links.filter(l => `${l.from}:${l.to}:${l.fromSide}:${l.toSide}` !== op.key);
       else canvas.links.push(op.value);
     }
     canvas.version++;
@@ -44,7 +46,7 @@ test('video submission creates one distinct result, preserves source, links and 
   assert.equal(result.videoSettings.seconds, '8'); assert.equal(result.videoSettings.aspectRatio, '9:16');
   assert.equal(f.calls.filter(c => c.path === '/jobs').length, 0);
 });
-test('actual input images link to their result, preserving user links and not recreating deletions on polling', async () => {
+test('actual input images link to the generator, preserving user links and not recreating deletions on polling', async () => {
   const f = fixture();
   f.job.input_urls = JSON.stringify(['/api/assets/ref-a/content/a.png', '/api/assets/ref-b/content/b.png']);
   f.canvas.nodes.push({ id: 2, kind: 'image', mediaUrl: '/api/assets/ref-a/content/renamed.png' },
@@ -52,7 +54,8 @@ test('actual input images link to their result, preserving user links and not re
   const synced = await syncGenerationCanvas(f.api, f.job, { createMissing: true });
   assert.equal(synced.referencesSync, 'synced');
   const links = f.canvas.links.filter(l => l.from === 2 || l.from === 3);
-  assert.deepEqual(links.map(l => [l.from, l.to, l.inputOrder]), [[2, synced.resultNodeId, 0], [3, synced.resultNodeId, 1]]);
+  assert.deepEqual(links.map(l => [l.from, l.to, l.inputOrder]), [[2, 1, 0], [3, 1, 1]]);
+  assert.equal(f.canvas.links.filter(l => l.to === synced.resultNodeId).length, 1);
   const version = f.canvas.version;
   await syncGenerationCanvas(f.api, f.job, { repairReferences: true });
   assert.equal(f.canvas.version, version);
@@ -76,9 +79,52 @@ test('asset-only inputs can create reference cards but external lookalike URLs a
   assert.deepEqual(result.unresolvedReferenceIndices, [1]);
   const refs = f.canvas.nodes.filter(n => n.kind === 'image');
   assert.equal(refs.length, 1);
-  assert.ok(f.canvas.links.some(l => l.from === refs[0].id && l.to === result.resultNodeId));
+  assert.ok(f.canvas.links.some(l => l.from === refs[0].id && l.to === f.source.id));
   await syncGenerationCanvas(f.api, f.job, { createMissing: true, repairReferences: true });
   assert.equal(f.canvas.nodes.filter(n => n.kind === 'image').length, 1);
+});
+
+test('MCP rejects omitted, missing, swapped video inputs and result-card submissions before billing', async () => {
+  const f = fixture(), tools = new Map();
+  const urls = ['/api/assets/a/content/a.png', '/api/assets/b/content/b.png'];
+  f.canvas.nodes.push({ id: 2, kind: 'image', mediaUrl: urls[0] }, { id: 3, kind: 'image', mediaUrl: urls[1] });
+  f.canvas.links.push({ from: 2, to: 1, inputOrder: 0 }, { from: 3, to: 1, inputOrder: 1 });
+  registerGenerationTools({ registerTool(name, config, handler) { tools.set(name, handler); } }, f.api);
+  const submit = inputUrls => tools.get('viora_generation_submit')({ projectId: 'project', nodeId: 1, kind: 'video', prompt: 'test', requestId: 'multiref-validation', inputUrls });
+  for (const input of [undefined, [], [urls[0]], [urls[1], urls[0]]]) assert.equal((await submit(input)).isError, true);
+  assert.equal(f.calls.filter(c => c.path === '/jobs').length, 0);
+  f.job.input_urls = urls;
+  assert.equal((await submit(urls)).isError, undefined);
+  assert.deepEqual(f.calls.find(c => c.path === '/jobs').body.inputUrls, urls);
+  f.source.role = 'result';
+  assert.equal((await submit(urls)).isError, true);
+  assert.equal(f.calls.filter(c => c.path === '/jobs').length, 1);
+});
+
+test('legacy result reference links require explicit repair and move without creating a generation', async () => {
+  const f = fixture();
+  const urls = ['/api/assets/a/content/a.png', '/api/assets/b/content/b.png'];
+  f.job.input_urls = urls;
+  f.canvas.nodes.push({ id: 2, kind: 'image', mediaUrl: urls[0] }, { id: 3, kind: 'image', mediaUrl: urls[1] });
+  const marker = createHash('sha256').update(JSON.stringify([f.job.id, urls])).digest('hex').slice(0, 24);
+  f.canvas.nodes.push({ id: 100, kind: 'video', role: 'result', jobId: f.job.id, mcpReferenceSync: marker });
+  f.canvas.links.push({ from: 1, to: 100, fromSide: 'right', toSide: 'left' }, ...[2, 3].map((id, i) => ({ from: id, to: 100, fromSide: 'right', toSide: 'left', inputOrder: i })));
+  assert.equal((await syncGenerationCanvas(f.api, f.job)).referencesSync, 'pending');
+  assert.equal(f.canvas.links.filter(l => l.to === 100).length, 3);
+  assert.equal((await syncGenerationCanvas(f.api, f.job, { repairReferences: true })).referencesSync, 'synced');
+  assert.deepEqual(f.canvas.links.filter(l => l.to === 1).map(l => l.from), [2, 3]);
+  assert.equal(f.canvas.links.filter(l => l.to === 100).length, 1);
+  assert.equal(f.calls.filter(c => c.path === '/jobs').length, 0);
+});
+
+test('repairing an older job does not overwrite different current generator references', async () => {
+  const f = fixture(); f.job.input_urls = ['/api/assets/old/content/a.png'];
+  f.canvas.nodes.push({ id: 2, kind: 'image', mediaUrl: '/api/assets/new/content/b.png' });
+  f.canvas.links.push({ from: 2, to: 1, inputOrder: 0 });
+  const result = await syncGenerationCanvas(f.api, f.job, { createMissing: true, repairReferences: true });
+  assert.equal(result.referencesSync, 'pending');
+  assert.match(result.referencesWarning, /historical job/);
+  assert.deepEqual(f.canvas.links.filter(l => l.to === 1), [{ from: 2, to: 1, inputOrder: 0 }]);
 });
 
 test('terminal polling persists video without a browser; repeated polls do not keep writing', async () => {
