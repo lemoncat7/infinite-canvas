@@ -21,7 +21,7 @@ export class OpenAiImageProvider implements GenerationProvider {
 
   async run(input: GenerationInput, onUpdate: (update: GenerationUpdate) => void) {
     if (input.kind !== 'image') throw new Error('OpenAI Image Adapter 仅支持图片任务')
-    onUpdate({ status: 'running', progress: 15, stage: 'cloud_generation' })
+    onUpdate({ status: 'running', progress: 0, progressEstimated: false, stage: 'cloud_generation' })
     const mode = input.inputUrls?.length ? 'edit' : 'create'
     const transparent = input.parameters?.background === 'transparent'
     const attempts = transparent ? 3 : 1
@@ -59,7 +59,7 @@ export class OpenAiImageProvider implements GenerationProvider {
     const image = payload.data?.[0]
     const resultUrl = image?.url || (image?.b64_json ? `data:${base64ImageMime(image.b64_json)};base64,${image.b64_json}` : undefined)
     if (!resultUrl) throw safeModelError(new Error('模型未返回图片结果'), { stage: '图片生成', status: response.status, requestId: response.headers.get('x-request-id') })
-    const result: GenerationUpdate = { status: 'succeeded', progress: 100, stage: 'cloud_generation', resultUrl }
+    const result: GenerationUpdate = { status: 'succeeded', progress: 100, progressEstimated: false, stage: 'cloud_generation', resultUrl }
     onUpdate(result)
     return result
   }

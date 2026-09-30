@@ -11,7 +11,7 @@ export function resolvedGenerationStage(node: Pick<FlowNode, 'status' | 'progres
   return node.kind === 'video' || node.model?.startsWith('agnes-') ? 'cloud_generation' : 'local_generation'
 }
 
-export function generationStageLabel(node: Pick<FlowNode, 'status' | 'progress' | 'model' | 'generationStage' | 'kind'>) {
+export function generationStageLabel(node: Pick<FlowNode, 'status' | 'progress' | 'progressEstimated' | 'model' | 'generationStage' | 'kind'>) {
   const stage = resolvedGenerationStage(node)
   if (!stage) return ''
   const label: Record<GenerationStage, string> = {
@@ -21,5 +21,6 @@ export function generationStageLabel(node: Pick<FlowNode, 'status' | 'progress' 
     cloud_generation: '云端生成',
   }
   const progress = Number(node.progress ?? 0)
-  return `${label[stage]}${stage.endsWith('generation') && progress > 0 ? ` ${Math.round(progress)}%` : ''}`
+  if (!stage.endsWith('generation') || progress <= 0) return label[stage]
+  return `${label[stage]} · ${node.progressEstimated ? '预计 ' : ''}${Math.round(progress)}%`
 }

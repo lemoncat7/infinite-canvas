@@ -39,7 +39,7 @@ export function submitGeneration(
   const request = generationRequest(userId, input, requestKey);
   if (request?.jobId) {
     const job = getOne(
-      "SELECT id, status, progress, generation_stage, model, credit_cost AS creditCost FROM jobs WHERE id=? AND user_id=?",
+      "SELECT id, status, progress, progress_estimated, generation_stage, model, credit_cost AS creditCost FROM jobs WHERE id=? AND user_id=?",
       [request.jobId, userId],
     );
     if (!job)
@@ -184,7 +184,7 @@ export function submitGeneration(
         [creditCost, userId],
       );
     database.run(
-      "INSERT INTO jobs (id, project_id, user_id, node_id, kind, prompt, model, status, progress, generation_stage, input_urls, parameters, custom_model_id, credit_cost, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO jobs (id, project_id, user_id, node_id, kind, prompt, model, status, progress, progress_estimated, generation_stage, input_urls, parameters, custom_model_id, credit_cost, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       [
         id,
         projectId,
@@ -194,6 +194,7 @@ export function submitGeneration(
         finalPrompt,
         model,
         "queued",
+        0,
         0,
         "local_queue",
         JSON.stringify(inputUrls),
@@ -221,6 +222,7 @@ export function submitGeneration(
     id,
     status: "queued",
     progress: 0,
+    progress_estimated: 0,
     generation_stage: "local_queue",
     model,
     provider: generationProvider.name,

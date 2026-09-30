@@ -5,10 +5,12 @@ function preserveLiveGenerationState(current: FlowNode, source: FlowNode) {
   if (!current.jobId || current.jobId !== source.jobId) return source;
   if (current.status !== "running") return source;
   if (source.status !== "queued" && source.status !== "running") return source;
+  const keepCurrentProgress = Number(current.progress ?? 0) >= Number(source.progress ?? 0);
   return {
     ...source,
     status: "running",
     progress: Math.max(Number(current.progress ?? 0), Number(source.progress ?? 0)),
+    progressEstimated: keepCurrentProgress ? current.progressEstimated : source.progressEstimated,
   };
 }
 

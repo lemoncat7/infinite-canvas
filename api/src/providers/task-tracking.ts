@@ -4,6 +4,8 @@ export type AcceptedVideoTask = {
   id: string
   taskId?: string
   key: string
+  /** Persisted so fallback progress survives worker slices and restarts. */
+  startedAt?: number
 }
 
 /** A query failure says nothing about the outcome of an accepted generation. */

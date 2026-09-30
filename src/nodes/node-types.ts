@@ -41,6 +41,7 @@ export type FlowNode = Point & {
   model?: string;
   jobId?: string;
   progress?: number;
+  progressEstimated?: boolean;
   status?: string;
   generationStage?: GenerationStage;
   mediaUrl?: string;

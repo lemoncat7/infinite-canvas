@@ -7,6 +7,7 @@ export type GenerationJob = {
   id: string;
   status: string;
   progress: number;
+  progress_estimated?: boolean | number;
   generation_stage?: GenerationStage;
   creditsAvailable?: number;
   error?: string;
@@ -84,6 +85,7 @@ export async function runGenerationJob(options: {
       jobId: job.id,
       status: job.status,
       progress: job.progress,
+      progressEstimated: Boolean(job.progress_estimated),
       generationStage: job.generation_stage ?? "local_queue",
       generationPrompt: prepared.prompt,
       agentAuto: false,
@@ -91,7 +93,7 @@ export async function runGenerationJob(options: {
     return { ok: true as const, job, node: liveNode };
   } catch (error) {
     const liveNode = nodes.find((node) => node.id === output.id);
-    if (liveNode) Object.assign(liveNode, { status: "failed", progress: 0 });
+    if (liveNode) Object.assign(liveNode, { status: "failed", progress: 0, progressEstimated: false });
     return { ok: false as const, error, node: liveNode };
   }
 }
@@ -104,6 +106,7 @@ export async function hydrateGenerationState(nodes: FlowNode[]) {
         const job = await fetchGenerationJob(node.jobId!);
         node.status = job.status;
         node.progress = Number(job.progress ?? 0);
+        node.progressEstimated = Boolean(job.progress_estimated);
         node.generationStage = job.generation_stage;
         if (job.result_url) node.mediaUrl = job.result_url;
         if (job.result_metadata) {

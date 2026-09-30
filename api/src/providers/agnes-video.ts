@@ -8,6 +8,8 @@ import { ModelConfigError } from '../models/types.js'
 import sharp from 'sharp'
 import { EMBEDDED_ONLY, URL_FIRST, prepareReferenceImages, canFallbackReference } from './reference-transport.js'
 import { TrackingDeferred } from './task-tracking.js'
+import type { AcceptedVideoTask } from './task-tracking.js'
+import { estimatedVideoProgress, exactProgress, expectedVideoDuration, timestampMilliseconds } from './progress.js'
 
 type AgnesTask = {
   id?: string
@@ -18,8 +20,11 @@ type AgnesTask = {
   url?: string
   seconds?: string
   size?: string
-  created_at?: number
-  completed_at?: number
+  created_at?: number | string
+  started_at?: number | string
+  completed_at?: number | string
+  internal_progress?: number
+  internal_status?: string
   metadata?: { url?: string; size_mapping?: Record<string, unknown> }
   error?: { message?: string } | string | null
   message?: string
@@ -82,7 +87,7 @@ export class AgnesVideoProvider implements GenerationProvider {
     if (input.acceptedTask) {
       if (input.acceptedTask.provider !== this.name) throw new TrackingDeferred(300000)
       currentProviderKeys()?.restoreKey(input.acceptedTask.key)
-      return this.poll(input, onUpdate, input.acceptedTask.id, input.acceptedTask.taskId, input.acceptedTask.key)
+      return this.poll(input, onUpdate, input.acceptedTask)
     }
     const credential = currentProviderKeys() ? { key: '', channel: 1 } : await acquireAgnesCredential(this.managedKeys)
     const settings = normalizeAgnesSettings(input.parameters)
@@ -138,15 +143,18 @@ export class AgnesVideoProvider implements GenerationProvider {
     const videoId = created.video_id || created.task_id || created.id
     const taskId = created.task_id || created.id || videoId
     if (!videoId) throw new Error('Agnes 创建任务响应中没有 video_id 或 task_id')
-    input.saveAcceptedTask?.({ provider: this.name, id: videoId, taskId, key: currentProviderKeys()?.pinnedKey() ?? credential.key })
+    const acceptedTask: AcceptedVideoTask = { provider: this.name, id: videoId, taskId, key: currentProviderKeys()?.pinnedKey() ?? credential.key }
+    input.saveAcceptedTask?.(acceptedTask)
     onUpdate({ status: 'running', progress: 0, stage: 'cloud_queue' })
     console.info('[agnes-video] task created', { internalJobId: input.internalJobId, videoId, model: input.model || this.defaultModel, imageCount: images.length, mode: images.length > 1 ? referenceMode : images.length ? 'ti2vid' : 'text' })
 
-    return this.poll(input, onUpdate, videoId, taskId, credential.key)
+    return this.poll(input, onUpdate, acceptedTask)
   }
 
-  private async poll(input: GenerationInput, onUpdate: (update: GenerationUpdate) => void, videoId: string, taskId: string | undefined, key: string) {
+  private async poll(input: GenerationInput, onUpdate: (update: GenerationUpdate) => void, initialTask: AcceptedVideoTask) {
     const startedAt = Date.now()
+    let acceptedTask = initialTask
+    const videoId = acceptedTask.id, taskId = acceptedTask.taskId, key = acceptedTask.key
     while (Date.now() - startedAt < this.timeout) {
       input.checkTracking?.()
       await wait(this.pollInterval)
@@ -182,11 +190,34 @@ export class AgnesVideoProvider implements GenerationProvider {
           videoId,
           taskId,
         }
-        const result: GenerationUpdate = { status: 'succeeded', progress: 100, stage: 'cloud_generation', resultUrl, resultMetadata }; onUpdate(result); return result
+        const result: GenerationUpdate = { status: 'succeeded', progress: 100, progressEstimated: false, stage: 'cloud_generation', resultUrl, resultMetadata }; onUpdate(result); return result
       }
-      const progress = Math.min(99, Math.max(0, Number(task.progress || 0)))
-      console.info('[agnes-video] task progress', { internalJobId: input.internalJobId, videoId, status: task.status, progress })
-      onUpdate({ status: 'running', progress, stage: ['pending', 'queued'].includes(task.status) ? 'cloud_queue' : 'cloud_generation' })
+      const queued = ['pending', 'queued'].includes(task.status)
+      if (queued) {
+        console.info('[agnes-video] task progress', { internalJobId: input.internalJobId, videoId, status: task.status, progress: 0, progressSource: 'queue' })
+        onUpdate({ status: 'running', progress: 0, progressEstimated: false, stage: 'cloud_queue' })
+        continue
+      }
+      let cloudStartedAt = acceptedTask.startedAt
+      if (!cloudStartedAt) {
+        cloudStartedAt = timestampMilliseconds(task.started_at) ?? Date.now()
+        acceptedTask = { ...acceptedTask, startedAt: cloudStartedAt }
+        input.saveAcceptedTask?.(acceptedTask)
+      }
+      // Agnes currently exposes a coarse outer progress value (commonly 10)
+      // while internal_progress/internal_status can remain 0/pending even after
+      // completion. Treat intermediate values as hints, not exact percentages.
+      const upstreamProgress = exactProgress(task.progress)
+      const progress = Math.min(99, Math.max(
+        estimatedVideoProgress(cloudStartedAt, expectedVideoDuration(input.model || this.defaultModel)),
+        upstreamProgress ?? 0,
+      ))
+      console.info('[agnes-video] task progress', {
+        internalJobId: input.internalJobId, videoId, status: task.status, progress,
+        progressSource: 'estimate-with-upstream-floor', upstreamProgress,
+        upstreamInternalProgress: exactProgress(task.internal_progress), internalStatus: task.internal_status,
+      })
+      onUpdate({ status: 'running', progress, progressEstimated: true, stage: 'cloud_generation' })
     }
     throw new TrackingDeferred()
   }

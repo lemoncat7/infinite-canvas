@@ -3,6 +3,22 @@ import assert from 'node:assert/strict'
 import {videoResponseError} from '../dist/providers/video-errors.js'
 import {OpenAiVideoProvider} from '../dist/providers/openai-video.js'
 import {validateGeneration} from '../dist/models/validation.js'
+import {estimatedVideoProgress, exactProgress, expectedVideoDuration, timestampMilliseconds} from '../dist/providers/progress.js'
+
+test('fallback progress is explicit, monotonic and never claims completion', () => {
+  const startedAt = 1_000_000
+  const duration = expectedVideoDuration('agnes-video-2.5-flash')
+  const samples = [0, 60_000, 240_000, 720_000, 3_600_000]
+    .map(elapsed => estimatedVideoProgress(startedAt, duration, startedAt + elapsed))
+  assert.deepEqual([...samples].sort((a, b) => a - b), samples)
+  assert.ok(samples[0] >= 1)
+  assert.ok(samples.at(-1) <= 95)
+  assert.equal(exactProgress(undefined), undefined)
+  assert.equal(exactProgress('10'), 10)
+  assert.equal(exactProgress('not-a-number'), undefined)
+  assert.equal(timestampMilliseconds(1_700_000_000), 1_700_000_000_000)
+  assert.equal(timestampMilliseconds('2026-09-30T00:00:00Z'), Date.parse('2026-09-30T00:00:00Z'))
+})
 
 test('video diagnostics distinguish duration, moderation, quota and unavailable credentials without leaking bodies', () => {
   for (const [payload, expected] of [

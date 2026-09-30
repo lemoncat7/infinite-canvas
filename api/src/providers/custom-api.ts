@@ -1,4 +1,5 @@
 import type { GenerationInput, GenerationProvider, GenerationStatus, GenerationUpdate } from './types.js'
+import { estimatedVideoProgress, exactProgress, expectedVideoDuration } from './progress.js'
 
 type RemotePayload = Record<string, unknown>
 
@@ -27,7 +28,9 @@ export class CustomApiGenerationProvider implements GenerationProvider {
     if (!remoteId) throw new Error('Custom generation API did not return id or taskId')
     const startedAt = Date.now()
     while (Date.now() - startedAt < this.timeout) {
-      const update = normalize(await this.request(this.statusPath.replace('{id}', encodeURIComponent(remoteId))))
+      let update = normalize(await this.request(this.statusPath.replace('{id}', encodeURIComponent(remoteId))))
+      if (input.kind === 'video' && update.status === 'running' && update.progressEstimated)
+        update = { ...update, progress: estimatedVideoProgress(startedAt, expectedVideoDuration(input.model)) }
       onUpdate(update)
       if (update.status === 'succeeded') {
         if (!update.resultUrl) throw new Error('Custom generation API succeeded without resultUrl')
@@ -56,8 +59,8 @@ export class CustomApiGenerationProvider implements GenerationProvider {
 function normalize(payload: RemotePayload): GenerationUpdate {
   const rawStatus = String(payload.status ?? nested(payload, 'data', 'status') ?? 'running').toLowerCase()
   const status: GenerationStatus = ['success', 'succeeded', 'completed', 'done'].includes(rawStatus) ? 'succeeded' : ['failed', 'error', 'cancelled', 'canceled'].includes(rawStatus) ? 'failed' : ['queued', 'pending'].includes(rawStatus) ? 'queued' : 'running'
-  const progressValue = Number(payload.progress ?? nested(payload, 'data', 'progress') ?? (status === 'succeeded' ? 100 : 0))
-  return { status, progress: Math.max(0, Math.min(100, Number.isFinite(progressValue) ? progressValue : 0)), stage: status === 'queued' ? 'cloud_queue' : 'cloud_generation', resultUrl: stringValue(payload.resultUrl) ?? stringValue(payload.result_url) ?? stringValue(nested(payload, 'data', 'resultUrl')) ?? stringValue(nested(payload, 'data', 'result_url')) ?? stringValue(nested(payload, 'output', 'url')), error: stringValue(payload.error) ?? stringValue(payload.message) }
+  const upstreamProgress = exactProgress(payload.progress ?? nested(payload, 'data', 'progress'))
+  return { status, progress: status === 'succeeded' ? 100 : upstreamProgress ?? 0, progressEstimated: status === 'running' && upstreamProgress === undefined, stage: status === 'queued' ? 'cloud_queue' : 'cloud_generation', resultUrl: stringValue(payload.resultUrl) ?? stringValue(payload.result_url) ?? stringValue(nested(payload, 'data', 'resultUrl')) ?? stringValue(nested(payload, 'data', 'result_url')) ?? stringValue(nested(payload, 'output', 'url')), error: stringValue(payload.error) ?? stringValue(payload.message) }
 }
 function nested(value: RemotePayload, first: string, second: string) { const child = value[first]; return child && typeof child === 'object' ? (child as RemotePayload)[second] : undefined }
 function stringValue(value: unknown) { return typeof value === 'string' && value ? value : undefined }

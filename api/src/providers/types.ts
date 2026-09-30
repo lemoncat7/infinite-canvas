@@ -21,6 +21,7 @@ export type GenerationInput = {
 export type GenerationUpdate = {
   status: GenerationStatus
   progress: number
+  progressEstimated?: boolean
   stage?: GenerationStage
   resultUrl?: string
   resultMetadata?: Record<string, unknown>

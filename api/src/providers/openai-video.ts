@@ -1,7 +1,8 @@
 import type { GenerationInput, GenerationProvider, GenerationStatus, GenerationUpdate } from './types.js'
 import { modelFetch } from '../models/network.js'
 import { currentProviderKeys, ProviderKeyCooldownError } from '../models/key-pool.js'
-import { TrackingDeferred } from './task-tracking.js'
+import { TrackingDeferred, type AcceptedVideoTask } from './task-tracking.js'
+import { estimatedVideoProgress, exactProgress, expectedVideoDuration } from './progress.js'
 import { URL_FIRST, prepareReferenceImages, submitWithReferenceFallback } from './reference-transport.js'
 import { ModelConfigError } from '../models/types.js'
 import { videoResponseError } from './video-errors.js'
@@ -29,7 +30,7 @@ export class OpenAiVideoProvider implements GenerationProvider {
     if (input.acceptedTask) {
       if (input.acceptedTask.provider !== this.name) throw new TrackingDeferred(300000)
       currentProviderKeys()?.restoreKey(input.acceptedTask.key)
-      return this.poll(input, onUpdate, input.acceptedTask.id, [], input.acceptedTask.key)
+      return this.poll(input, onUpdate, input.acceptedTask, [])
     }
     onUpdate({ status: 'running', progress: 0, stage: 'local_generation' })
     if ((input.inputUrls?.length ?? 0) > 7) throw new ModelConfigError(`参考图数量超出接口限制：当前 ${input.inputUrls!.length} 张，Grok 多图视频最多支持 7 张参考图片。请减少参考图后重新提交。`)
@@ -74,13 +75,15 @@ export class OpenAiVideoProvider implements GenerationProvider {
     if (immediate.status === 'failed') this.throwTaskFailure(created, submittedImages)
     const id = text(created.request_id) || text(created.id) || text(created.video_id) || text(nested(created, 'data', 'id'))
     if (!id) throw new Error(`CPA/Grok 创建响应未返回 request_id（字段：${Object.keys(created).join(', ') || '空响应'}）`)
-    input.saveAcceptedTask?.({ provider: this.name, id, key: currentProviderKeys()?.pinnedKey() ?? this.apiKey })
+    const acceptedTask: AcceptedVideoTask = { provider: this.name, id, key: currentProviderKeys()?.pinnedKey() ?? this.apiKey }
+    input.saveAcceptedTask?.(acceptedTask)
     onUpdate({ status: 'running', progress: 0, stage: 'cloud_queue' })
-    return this.poll(input, onUpdate, id, submittedImages)
+    return this.poll(input, onUpdate, acceptedTask, submittedImages)
   }
 
-  private async poll(input: GenerationInput, onUpdate: (update: GenerationUpdate) => void, id: string, submittedImages: string[], key = this.apiKey) {
-    const startedAt = Date.now(); let lastProgress = 0, started = false
+  private async poll(input: GenerationInput, onUpdate: (update: GenerationUpdate) => void, initialTask: AcceptedVideoTask, submittedImages: string[]) {
+    const startedAt = Date.now(), id = initialTask.id, key = initialTask.key
+    let acceptedTask = initialTask, lastProgress = 0, lastProgressEstimated = false, started = false
     while (Date.now() - startedAt < this.timeout) {
       input.checkTracking?.()
       let payload: Payload
@@ -91,9 +94,29 @@ export class OpenAiVideoProvider implements GenerationProvider {
       input.checkTracking?.()
       if (!payload || !(payload.status || nested(payload, 'data', 'status'))) throw new TrackingDeferred()
       const normalized = normalize(payload, id, this.baseUrl)
-      const update = { ...normalized, status: (started || normalized.progress > 1) && normalized.status === 'queued' ? 'running' as const : normalized.status, progress: Math.max(lastProgress, normalized.progress) }
+      const normalizedStatus = (started || normalized.progress > 1) && normalized.status === 'queued' ? 'running' as const : normalized.status
+      if (normalizedStatus === 'running' && normalized.progressEstimated && !acceptedTask.startedAt) {
+        acceptedTask = { ...acceptedTask, startedAt: Date.now() }
+        input.saveAcceptedTask?.(acceptedTask)
+      }
+      const candidateProgress = normalizedStatus === 'running' && normalized.progressEstimated
+        ? estimatedVideoProgress(acceptedTask.startedAt ?? Date.now(), expectedVideoDuration(input.model))
+        : normalized.progress
+      let progress = candidateProgress, progressEstimated = Boolean(normalized.progressEstimated)
+      if (lastProgress > candidateProgress) {
+        progress = lastProgress
+        progressEstimated = lastProgressEstimated
+      }
+      const update: GenerationUpdate = {
+        ...normalized,
+        status: normalizedStatus,
+        progress,
+        progressEstimated,
+        stage: normalizedStatus === 'queued' ? 'cloud_queue' : 'cloud_generation',
+      }
       if (update.status === 'running') started = true
       lastProgress = update.progress
+      lastProgressEstimated = Boolean(update.progressEstimated)
       console.info('[openai-video] task progress', { internalJobId: input.internalJobId, requestId: id, status: update.status, progress: update.progress, imageCount: input.inputUrls?.length || 0,
         ...(update.status === 'failed' ? { failureCategory: isReferenceDownloadFailure(payload) ? 'reference_download' : 'upstream_task', referenceTransport: submittedImages.some(image => /^https?:/i.test(image)) ? 'url' : 'embedded', embeddedFallbackEligible: canFallbackTerminalReference(payload, submittedImages) } : {}) })
       // Do not settle/refund the local job before a permitted embedded fallback.
@@ -137,10 +160,11 @@ export class OpenAiVideoProvider implements GenerationProvider {
 function normalize(payload: Payload, id?: string, baseUrl?: string): GenerationUpdate {
   const raw = String(payload.status ?? nested(payload, 'data', 'status') ?? '').toLowerCase()
   const status: GenerationStatus = ['completed', 'complete', 'succeeded', 'success', 'done'].includes(raw) ? 'succeeded' : ['failed', 'error', 'cancelled', 'canceled'].includes(raw) ? 'failed' : ['queued', 'pending'].includes(raw) ? 'queued' : 'running'
-  const rawProgress = Number(payload.progress ?? nested(payload, 'data', 'progress') ?? (status === 'succeeded' ? 100 : 0))
+  const upstreamProgress = exactProgress(payload.progress ?? nested(payload, 'data', 'progress'))
+  const progress = status === 'succeeded' ? 100 : upstreamProgress ?? 0
   const direct = text(payload.video_url) || text(nested(payload, 'video', 'url')) || text(payload.url) || text(payload.result_url) || text(payload.output_url) || text(nested(payload, 'data', 'url')) || text(nested(payload, 'output', 'url'))
   const resultUrl = direct || (status === 'succeeded' && id && baseUrl ? `${baseUrl}/v1/videos/${encodeURIComponent(id)}/content` : undefined)
-  return { status, progress: Math.max(0, Math.min(100, Number.isFinite(rawProgress) ? rawProgress : 10)), stage: status === 'queued' ? 'cloud_queue' : 'cloud_generation', resultUrl, error: text(nested(payload, 'error', 'message')) || text(payload.error) || text(payload.message) }
+  return { status, progress, progressEstimated: status === 'running' && upstreamProgress === undefined, stage: status === 'queued' ? 'cloud_queue' : 'cloud_generation', resultUrl, error: text(nested(payload, 'error', 'message')) || text(payload.error) || text(payload.message) }
 }
 function nested(value: Payload, first: string, second: string) { const child = value[first]; return child && typeof child === 'object' ? (child as Payload)[second] : undefined }
 function text(value: unknown) { return typeof value === 'string' && value ? value : undefined }

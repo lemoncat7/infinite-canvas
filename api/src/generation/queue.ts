@@ -94,7 +94,7 @@ export function pumpGenerationQueue() {
         const id = String(job.id);
         activeGenerationJobs[kind].add(id);
         database.run(
-          "UPDATE jobs SET status = 'running', generation_stage = 'local_generation', error = NULL, retry_after = NULL, updated_at = ? WHERE id = ? AND status IN ('queued','running')",
+          "UPDATE jobs SET status = 'running', generation_stage = CASE WHEN id IN (SELECT job_id FROM video_task_checkpoints) THEN generation_stage ELSE 'local_generation' END, progress_estimated = CASE WHEN id IN (SELECT job_id FROM video_task_checkpoints) THEN progress_estimated ELSE 0 END, error = NULL, retry_after = NULL, updated_at = ? WHERE id = ? AND status IN ('queued','running')",
           [new Date().toISOString(), id],
         );
         persist();
@@ -199,7 +199,8 @@ export async function executeQueuedJob(job: Record<string, unknown>) {
         provider.referencePolicy?.(model, kind) || EMBEDDED_ONLY,
       ), inputUrls = preparedInputs.inputUrls!;
     const parameters = parseJsonObject(job.parameters);
-    let progress = Number(job.progress || 0);
+    let progress = Number(job.progress || 0),
+      progressEstimated = Boolean(job.progress_estimated);
     let updates = Promise.resolve(),
       lastError: unknown;
     // Video acceptance may be ambiguous after a timeout. Only the provider can
@@ -223,8 +224,14 @@ export async function executeQueuedJob(job: Record<string, unknown>) {
             checkTracking: () => checkTracking(id, stopping),
           },
           (update) => {
-            progress = Math.max(progress, update.progress);
-            update = { ...update, progress };
+            const incomingProgress = Number(update.progress || 0);
+            if (incomingProgress > progress) {
+              progress = incomingProgress;
+              progressEstimated = Boolean(update.progressEstimated);
+            } else if (incomingProgress === progress && update.progressEstimated !== undefined) {
+              progressEstimated = update.progressEstimated;
+            }
+            update = { ...update, progress, progressEstimated };
             updates = updates.then(() =>
               updateJob(
                 id,
@@ -253,7 +260,8 @@ export async function executeQueuedJob(job: Record<string, unknown>) {
         );
         await updateJob(id, {
           status: "running",
-          progress: Math.max(5, Math.min(20, attempt * 8)),
+          progress,
+          progressEstimated,
           error: undefined,
         });
         await new Promise((resolve) => setTimeout(resolve, attempt * 2500));
@@ -282,7 +290,9 @@ export async function executeQueuedJob(job: Record<string, unknown>) {
         );
         await updateJob(id, {
           status: "running",
-          progress: 3,
+          progress: 0,
+          progressEstimated: false,
+          stage: "local_generation",
           error: undefined,
         });
         await localImageFallback.run(
@@ -334,7 +344,7 @@ export async function executeQueuedJob(job: Record<string, unknown>) {
       if (retryCount >= providerQueueRetryLimit) {
         const message = `${modelLabel} 云端队列持续繁忙，已自动重试 ${retryCount} 次，任务尚未被上游接受。请稍后重新生成，或切换其他视频模型。`;
         database.run(
-          "UPDATE jobs SET status='failed',progress=0,generation_stage='cloud_queue',error=?,retry_after=NULL,retry_count=?,updated_at=? WHERE id=? AND status!='canceled'",
+          "UPDATE jobs SET status='failed',progress=0,progress_estimated=0,generation_stage='cloud_queue',error=?,retry_after=NULL,retry_count=?,updated_at=? WHERE id=? AND status!='canceled'",
           [message, retryCount, now, id],
         );
         persist();
@@ -345,7 +355,7 @@ export async function executeQueuedJob(job: Record<string, unknown>) {
         return;
       }
       database.run(
-        "UPDATE jobs SET status='queued',progress=0,generation_stage='cloud_queue',error=?,retry_after=?,retry_count=?,updated_at=? WHERE id=? AND status!='canceled'",
+        "UPDATE jobs SET status='queued',progress=0,progress_estimated=0,generation_stage='cloud_queue',error=?,retry_after=?,retry_count=?,updated_at=? WHERE id=? AND status!='canceled'",
         [
           `${modelLabel} 云端队列繁忙，正在自动重试（${retryCount}/${providerQueueRetryLimit}，约 ${Math.max(1, Math.ceil(retryDelayMs / 60000))} 分钟后）`,
           retryAfter,

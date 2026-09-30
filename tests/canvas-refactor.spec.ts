@@ -267,7 +267,7 @@ test("generation state preserves stale progress but accepts an explicit cloud qu
       { status: "running", progress: 38 },
       { status: "queued", progress: 0 },
     ),
-  ).toEqual({ status: "running", progress: 38, terminal: false, generationStage: undefined });
+  ).toEqual({ status: "running", progress: 38, progressEstimated: undefined, terminal: false, generationStage: undefined });
   expect(
     mergeGenerationState(
       { status: "running", progress: 38 },
@@ -279,12 +279,12 @@ test("generation state preserves stale progress but accepts an explicit cloud qu
       { status: "running", progress: 38, generationStage: "cloud_generation" },
       { status: "queued", progress: 0, generation_stage: "cloud_queue" },
     ),
-  ).toEqual({ status: "queued", progress: 0, terminal: false, generationStage: "cloud_queue" });
+  ).toEqual({ status: "queued", progress: 0, progressEstimated: undefined, terminal: false, generationStage: "cloud_queue" });
   const stageNode = { kind: "video" as const, status: "running", progress: 10, model: "agnes-video-2.5-flash" };
   expect(generationStageLabel({ ...stageNode, status: "queued", generationStage: "local_queue" })).toBe("本地排队");
   expect(generationStageLabel({ ...stageNode, generationStage: "cloud_queue" })).toBe("云端排队");
-  expect(generationStageLabel({ ...stageNode, generationStage: "local_generation" })).toBe("本地生成 10%");
-  expect(generationStageLabel({ ...stageNode, generationStage: "cloud_generation" })).toBe("云端生成 10%");
+  expect(generationStageLabel({ ...stageNode, generationStage: "local_generation" })).toBe("本地生成 · 10%");
+  expect(generationStageLabel({ ...stageNode, generationStage: "cloud_generation", progressEstimated: true })).toBe("云端生成 · 预计 10%");
 });
 
 test("video result card exposes the cloud queue phase at mobile width", async ({ page }) => {

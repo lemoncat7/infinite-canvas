@@ -31,17 +31,17 @@ export class SdCppImageProvider implements GenerationProvider {
       init_image:images[0]||null,ref_images:images,
       sample_params:{scheduler:'simple',sample_method:'euler',sample_steps:steps,guidance:{txt_cfg:1,distilled_guidance:3.5}},
     }
-    onUpdate({status:'running',progress:5,stage:'local_generation'})
+    onUpdate({status:'running',progress:0,progressEstimated:false,stage:'local_generation'})
     const submitted=await this.request<SubmitResponse>('/sdcpp/v1/img_gen',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)},20000)
     if(!submitted.id)throw new Error(formatError(submitted.error)||'SD Server 未返回任务 ID')
     const started=Date.now();let lastStatus=''
     while(Date.now()-started<this.timeout){
       const job=await this.request<JobResponse>(`/sdcpp/v1/jobs/${encodeURIComponent(submitted.id)}`,undefined,15000)
-      if(job.status!==lastStatus){lastStatus=String(job.status||'');onUpdate({status:'running',progress:job.status==='queued'?8:15,stage:job.status==='queued'?'local_queue':'local_generation'})}
+      if(job.status!==lastStatus){lastStatus=String(job.status||'');onUpdate({status:'running',progress:0,progressEstimated:false,stage:job.status==='queued'?'local_queue':'local_generation'})}
       if(job.status==='completed'){
         const encoded=job.result?.images?.[0]?.b64_json,format=job.result?.output_format||'png'
         if(!encoded)throw new Error('SD Server 任务完成但未返图片')
-        const result:GenerationUpdate={status:'succeeded',progress:100,stage:'local_generation',resultUrl:`data:image/${format==='jpg'?'jpeg':format};base64,${encoded}`};onUpdate(result);return result
+        const result:GenerationUpdate={status:'succeeded',progress:100,progressEstimated:false,stage:'local_generation',resultUrl:`data:image/${format==='jpg'?'jpeg':format};base64,${encoded}`};onUpdate(result);return result
       }
       if(job.status==='failed'||job.status==='cancelled')throw new Error(formatError(job.error)||`SD Server 任务${job.status==='failed'?'失败':'已取消'}`)
       await delay(this.pollInterval)
