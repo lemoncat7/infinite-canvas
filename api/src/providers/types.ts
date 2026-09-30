@@ -1,5 +1,6 @@
 export type GenerationKind = 'image' | 'video'
 export type GenerationStatus = 'queued' | 'running' | 'succeeded' | 'failed'
+export type GenerationStage = 'local_queue' | 'cloud_queue' | 'local_generation' | 'cloud_generation'
 
 export type GenerationInput = {
   internalJobId: string
@@ -20,6 +21,7 @@ export type GenerationInput = {
 export type GenerationUpdate = {
   status: GenerationStatus
   progress: number
+  stage?: GenerationStage
   resultUrl?: string
   resultMetadata?: Record<string, unknown>
   error?: string

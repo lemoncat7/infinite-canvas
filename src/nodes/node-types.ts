@@ -11,6 +11,8 @@ export type NodeKind =
 
 export type PortSide = "top" | "right" | "bottom" | "left";
 
+export type GenerationStage = "local_queue" | "cloud_queue" | "local_generation" | "cloud_generation";
+
 export type FlowNode = Point & {
   id: number;
   publicId?: string;
@@ -40,6 +42,7 @@ export type FlowNode = Point & {
   jobId?: string;
   progress?: number;
   status?: string;
+  generationStage?: GenerationStage;
   mediaUrl?: string;
   fontScale?: number;
   labelScroll?: number;

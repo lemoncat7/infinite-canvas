@@ -64,6 +64,7 @@ export class GenerationFinalizer {
         node.originalPrompt || node.generationPrompt || "",
       );
     delete node.jobId;
+    delete node.generationStage;
     this.options.jobLabel.textContent = "任务已取消，可重新生成";
     this.options.toast(
       "等待任务已取消",

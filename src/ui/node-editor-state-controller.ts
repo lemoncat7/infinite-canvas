@@ -1,4 +1,5 @@
 import type { FlowNode } from "../nodes/node-types";
+import { generationStageLabel, resolvedGenerationStage } from "../services/generation-stage";
 
 export class NodeEditorStateController {
   constructor(
@@ -53,10 +54,8 @@ export class NodeEditorStateController {
     this.deps.jobLabel.textContent =
       node.status === "succeeded"
         ? "生成完成（模拟结果）"
-        : node.status === "running"
-          ? `生成中 ${node.progress ?? 0}%`
-          : node.status === "queued"
-            ? "任务排队中"
+        : node.status === "running" || node.status === "queued"
+          ? generationStageLabel(node)
             : "准备生成";
     this.deps.jobProgress.style.width = `${node.progress ?? 0}%`;
   }
@@ -102,15 +101,10 @@ export class NodeEditorStateController {
     const label = element.querySelector<HTMLElement>(".video-generation-count");
     if (!label) return;
     label.textContent =
-      node.status === "queued"
-        ? "任务排队中"
-        : node.status === "running"
-          ? Number(node.progress ?? 0) > 0
-            ? `生成中 ${Math.round(node.progress ?? 0)}%`
-            : node.model?.startsWith("agnes-")
-              ? "云端处理中"
-              : "生成中 · 等待进度"
+      node.status === "queued" || node.status === "running"
+        ? generationStageLabel(node)
           : label.textContent;
+    label.dataset.stage = resolvedGenerationStage(node) || "";
   }
 
   private bindInputs() {

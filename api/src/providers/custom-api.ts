@@ -57,7 +57,7 @@ function normalize(payload: RemotePayload): GenerationUpdate {
   const rawStatus = String(payload.status ?? nested(payload, 'data', 'status') ?? 'running').toLowerCase()
   const status: GenerationStatus = ['success', 'succeeded', 'completed', 'done'].includes(rawStatus) ? 'succeeded' : ['failed', 'error', 'cancelled', 'canceled'].includes(rawStatus) ? 'failed' : ['queued', 'pending'].includes(rawStatus) ? 'queued' : 'running'
   const progressValue = Number(payload.progress ?? nested(payload, 'data', 'progress') ?? (status === 'succeeded' ? 100 : 0))
-  return { status, progress: Math.max(0, Math.min(100, Number.isFinite(progressValue) ? progressValue : 0)), resultUrl: stringValue(payload.resultUrl) ?? stringValue(payload.result_url) ?? stringValue(nested(payload, 'data', 'resultUrl')) ?? stringValue(nested(payload, 'data', 'result_url')) ?? stringValue(nested(payload, 'output', 'url')), error: stringValue(payload.error) ?? stringValue(payload.message) }
+  return { status, progress: Math.max(0, Math.min(100, Number.isFinite(progressValue) ? progressValue : 0)), stage: status === 'queued' ? 'cloud_queue' : 'cloud_generation', resultUrl: stringValue(payload.resultUrl) ?? stringValue(payload.result_url) ?? stringValue(nested(payload, 'data', 'resultUrl')) ?? stringValue(nested(payload, 'data', 'result_url')) ?? stringValue(nested(payload, 'output', 'url')), error: stringValue(payload.error) ?? stringValue(payload.message) }
 }
 function nested(value: RemotePayload, first: string, second: string) { const child = value[first]; return child && typeof child === 'object' ? (child as RemotePayload)[second] : undefined }
 function stringValue(value: unknown) { return typeof value === 'string' && value ? value : undefined }

@@ -16,7 +16,7 @@ export class GeminiImageProvider implements GenerationProvider {
   async run(input:GenerationInput,onUpdate:(update:GenerationUpdate)=>void) {
     if(input.kind!=='image')throw new Error('Gemini Image Adapter 仅支持图片任务')
     const model=input.model||'gemini-3.1-flash-image'
-    onUpdate({status:'running',progress:15})
+    onUpdate({status:'running',progress:15,stage:'cloud_generation'})
     const parts:Array<Record<string,unknown>>=[{text:input.prompt}]
     for(const source of (input.inputUrls??[]).slice(0,8))parts.push({inlineData:await this.resolveImage(source)})
     const ratio=aspectRatio(input.parameters?.size)
@@ -31,7 +31,7 @@ export class GeminiImageProvider implements GenerationProvider {
     const imagePart=payload.candidates?.flatMap(candidate=>candidate.content?.parts??[]).find(part=>part.inlineData?.data||part.inline_data?.data)
     const inline=imagePart?.inlineData??(imagePart?.inline_data?{mimeType:imagePart.inline_data.mime_type,data:imagePart.inline_data.data}:undefined)
     if(!inline?.data)throw new Error('CPA Gemini image API 未返回图片数据')
-    const result:GenerationUpdate={status:'succeeded',progress:100,resultUrl:`data:${inline.mimeType||'image/png'};base64,${inline.data}`}
+    const result:GenerationUpdate={status:'succeeded',progress:100,stage:'cloud_generation',resultUrl:`data:${inline.mimeType||'image/png'};base64,${inline.data}`}
     onUpdate(result);return result
   }
 

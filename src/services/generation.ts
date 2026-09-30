@@ -1,11 +1,13 @@
 import { apiFetch } from "./api";
 import type { FlowLink, FlowNode } from "../nodes/node-types";
+import type { GenerationStage } from "../nodes/node-types";
 import { prepareGenerationRequest } from "../nodes/generation-request";
 
 export type GenerationJob = {
   id: string;
   status: string;
   progress: number;
+  generation_stage?: GenerationStage;
   creditsAvailable?: number;
   error?: string;
   result?: Record<string, unknown>;
@@ -82,6 +84,7 @@ export async function runGenerationJob(options: {
       jobId: job.id,
       status: job.status,
       progress: job.progress,
+      generationStage: job.generation_stage ?? "local_queue",
       generationPrompt: prepared.prompt,
       agentAuto: false,
     });
@@ -101,6 +104,7 @@ export async function hydrateGenerationState(nodes: FlowNode[]) {
         const job = await fetchGenerationJob(node.jobId!);
         node.status = job.status;
         node.progress = Number(job.progress ?? 0);
+        node.generationStage = job.generation_stage;
         if (job.result_url) node.mediaUrl = job.result_url;
         if (job.result_metadata) {
           try {

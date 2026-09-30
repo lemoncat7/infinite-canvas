@@ -27,4 +27,4 @@ function createProvider(name: string): GenerationProvider {
   throw new Error(`Unsupported GENERATION_PROVIDER: ${name}`)
 }
 
-export type { GenerationCapabilities, GenerationInput, GenerationProvider, GenerationUpdate } from './types.js'
+export type { GenerationCapabilities, GenerationInput, GenerationProvider, GenerationStage, GenerationUpdate } from './types.js'

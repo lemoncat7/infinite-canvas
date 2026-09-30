@@ -10,17 +10,18 @@ type Options = {
 };
 
 export function mergeGenerationState(
-  current: Pick<FlowNode, "status" | "progress">,
-  incoming: Pick<GenerationJob, "status" | "progress">,
+  current: Pick<FlowNode, "status" | "progress" | "generationStage">,
+  incoming: Pick<GenerationJob, "status" | "progress" | "generation_stage">,
 ) {
   const terminal = ["succeeded", "failed", "canceled"].includes(incoming.status);
-  const preventQueueRegression = current.status === "running" && incoming.status === "queued";
+  const explicitQueueStage = incoming.generation_stage === "local_queue" || incoming.generation_stage === "cloud_queue";
+  const preventQueueRegression = current.status === "running" && incoming.status === "queued" && !explicitQueueStage;
   const status = preventQueueRegression ? "running" : incoming.status;
   const progress =
     !terminal && status === "running"
       ? Math.max(Number(current.progress ?? 0), Number(incoming.progress ?? 0))
       : Number(incoming.progress ?? 0);
-  return { status, progress, terminal };
+  return { status, progress, terminal, generationStage: incoming.generation_stage ?? current.generationStage };
 }
 
 export class GenerationPoller {
@@ -57,8 +58,8 @@ export class GenerationPoller {
         if (!current?.jobId || current.jobId !== jobId) return this.cancel(jobId);
         failures = 0; failureNotified = false;
         const merged = mergeGenerationState(current, job);
-        const changed = current.status !== merged.status || Number(current.progress ?? 0) !== merged.progress;
-        current.status = merged.status; current.progress = merged.progress;
+        const changed = current.status !== merged.status || Number(current.progress ?? 0) !== merged.progress || current.generationStage !== merged.generationStage;
+        current.status = merged.status; current.progress = merged.progress; current.generationStage = merged.generationStage;
         const stableJob = { ...job, status: merged.status, progress: merged.progress };
         if (current.kind === "image" && merged.status === "running" && merged.progress === 20 && !this.retryNotified.has(jobId)) {
           this.retryNotified.add(jobId); this.o.onRetry(current);

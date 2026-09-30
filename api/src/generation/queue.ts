@@ -94,7 +94,7 @@ export function pumpGenerationQueue() {
         const id = String(job.id);
         activeGenerationJobs[kind].add(id);
         database.run(
-          "UPDATE jobs SET status = 'running', error = NULL, retry_after = NULL, updated_at = ? WHERE id = ? AND status IN ('queued','running')",
+          "UPDATE jobs SET status = 'running', generation_stage = 'local_generation', error = NULL, retry_after = NULL, updated_at = ? WHERE id = ? AND status IN ('queued','running')",
           [new Date().toISOString(), id],
         );
         persist();
@@ -334,7 +334,7 @@ export async function executeQueuedJob(job: Record<string, unknown>) {
       if (retryCount >= providerQueueRetryLimit) {
         const message = `${modelLabel} 云端队列持续繁忙，已自动重试 ${retryCount} 次，任务尚未被上游接受。请稍后重新生成，或切换其他视频模型。`;
         database.run(
-          "UPDATE jobs SET status='failed',progress=0,error=?,retry_after=NULL,retry_count=?,updated_at=? WHERE id=? AND status!='canceled'",
+          "UPDATE jobs SET status='failed',progress=0,generation_stage='cloud_queue',error=?,retry_after=NULL,retry_count=?,updated_at=? WHERE id=? AND status!='canceled'",
           [message, retryCount, now, id],
         );
         persist();
@@ -345,7 +345,7 @@ export async function executeQueuedJob(job: Record<string, unknown>) {
         return;
       }
       database.run(
-        "UPDATE jobs SET status='queued',progress=0,error=?,retry_after=?,retry_count=?,updated_at=? WHERE id=? AND status!='canceled'",
+        "UPDATE jobs SET status='queued',progress=0,generation_stage='cloud_queue',error=?,retry_after=?,retry_count=?,updated_at=? WHERE id=? AND status!='canceled'",
         [
           `${modelLabel} 云端队列繁忙，正在自动重试（${retryCount}/${providerQueueRetryLimit}，约 ${Math.max(1, Math.ceil(retryDelayMs / 60000))} 分钟后）`,
           retryAfter,

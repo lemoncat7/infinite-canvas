@@ -10,10 +10,10 @@ export class MockGenerationProvider implements GenerationProvider {
       { delay: 1100, progress: 84 },
     ]) {
       await wait(stage.delay)
-      onUpdate({ status: 'running', progress: stage.progress })
+      onUpdate({ status: 'running', progress: stage.progress, stage: 'local_generation' })
     }
     await wait(1200)
-    const result: GenerationUpdate = { status: 'succeeded', progress: 100, resultUrl: `/api/mock/${input.kind}-${input.internalJobId}.webp` }
+    const result: GenerationUpdate = { status: 'succeeded', progress: 100, stage: 'local_generation', resultUrl: `/api/mock/${input.kind}-${input.internalJobId}.webp` }
     onUpdate(result)
     return result
   }

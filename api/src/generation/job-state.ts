@@ -18,10 +18,11 @@ export async function updateJob(id: string, update: GenerationUpdate) {
       resultUrl = await archiveJobResult(id, resultUrl);
     if (getOne('SELECT status FROM jobs WHERE id=?', [id])?.status === 'canceled') return;
     database.run(
-      "UPDATE jobs SET status = ?, progress = ?, result_url = COALESCE(?, result_url), result_metadata = COALESCE(?, result_metadata), error = ?, updated_at = ? WHERE id = ?",
+      "UPDATE jobs SET status = ?, progress = ?, generation_stage = COALESCE(?, generation_stage), result_url = COALESCE(?, result_url), result_metadata = COALESCE(?, result_metadata), error = ?, updated_at = ? WHERE id = ?",
       [
         update.status,
         update.progress,
+        update.stage ?? null,
         resultUrl ?? null,
         update.resultMetadata ? JSON.stringify(update.resultMetadata) : null,
         update.error ?? null,

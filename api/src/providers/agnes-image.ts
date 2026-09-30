@@ -24,7 +24,7 @@ export class AgnesImageProvider implements GenerationProvider {
 
   async run(input: GenerationInput, onUpdate: (update: GenerationUpdate) => void) {
     if (input.kind !== 'image') throw new Error('Agnes Image Adapter 仅支持图片任务')
-    onUpdate({ status:'running', progress:12 })
+    onUpdate({ status:'running', progress:12, stage:'cloud_generation' })
     const images = await prepareReferenceImages(input, URL_FIRST, { proxyUrl: this.proxyUrl })
     const aspectRatio = normalizedAspectRatio(input.parameters?.size)
     const body = {
@@ -51,7 +51,7 @@ export class AgnesImageProvider implements GenerationProvider {
     const image = payload?.data?.[0]
     const resultUrl = image?.url || (image?.b64_json ? `data:image/png;base64,${image.b64_json}` : undefined)
     if (!resultUrl) throw imageResponseError(response.status, { message: '未返回图片结果' }, response.requestId)
-    const result:GenerationUpdate = { status:'succeeded', progress:100, resultUrl }
+    const result:GenerationUpdate = { status:'succeeded', progress:100, stage:'cloud_generation', resultUrl }
     onUpdate(result)
     return result
   }

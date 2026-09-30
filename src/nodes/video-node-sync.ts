@@ -1,5 +1,6 @@
 import type { FlowLink, FlowNode } from "./node-types";
 import { isAgnesVideo, isAgnesVideo25 } from '../models/catalog';
+import { generationStageLabel, resolvedGenerationStage } from '../services/generation-stage';
 
 interface VideoNodeSyncOptions {
   element: HTMLElement;
@@ -75,20 +76,16 @@ export function syncVideoNodePanel(options: VideoNodeSyncOptions) {
       ".video-generation-count",
     )!.textContent =
       node.role === "result"
-        ? node.status === "queued"
-          ? "任务排队中"
-          : node.status === "running"
-            ? Number(node.progress ?? 0) > 0
-              ? `生成中 ${Math.round(node.progress ?? 0)}%`
-              : isAgnesVideo(node.model)
-                ? "云端处理中"
-                : "生成中 · 等待进度"
+        ? node.status === "queued" || node.status === "running"
+          ? generationStageLabel(node)
             : node.status === "failed"
               ? "生成失败"
               : node.videoResult?.seconds || node.videoResult?.size
                 ? `实际 ${node.videoResult.seconds ? `${node.videoResult.seconds}秒` : ""}${node.videoResult.seconds && node.videoResult.size ? " · " : ""}${node.videoResult.size || ""}`
                 : "生成结果"
         : `排队 ${queuedCount} · 生成中 ${runningCount} · 已生成 ${succeededCount}`;
+    const generationCount = element.querySelector<HTMLElement>(".video-generation-count")!;
+    generationCount.dataset.stage = resolvedGenerationStage(node) || "";
     element.querySelector<HTMLElement>(".video-result-model")!.textContent =
       displayModelName(node.model) || "未知模型";
     const description = videoPanel.querySelector<HTMLTextAreaElement>(

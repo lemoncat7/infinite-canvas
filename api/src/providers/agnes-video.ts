@@ -112,7 +112,7 @@ export class AgnesVideoProvider implements GenerationProvider {
       }
       if (totalBytes >= 50 * 1024 * 1024) throw new ModelConfigError('Agnes Video 2.5 参考图片总大小必须小于 50 MiB');
     }
-    onUpdate({ status: 'running', progress: 0 })
+    onUpdate({ status: 'running', progress: 0, stage: 'local_generation' })
     console.info('[agnes-video] preparing ordered inputs', { internalJobId: input.internalJobId, imageCount: images.length, orderedInputIndexes: images.map((_, index) => index + 1) })
     console.info('[agnes-video] credential assigned', { internalJobId:input.internalJobId, channel:credential.channel, channelCount:agnesCredentialPool.length })
     let response = await this.request('/v1/videos', { method: 'POST', body: createAgnesRequestBody(input, images, settings, this.defaultModel, referenceMode) }, this.timeoutForImages(images), credential.key)
@@ -139,6 +139,7 @@ export class AgnesVideoProvider implements GenerationProvider {
     const taskId = created.task_id || created.id || videoId
     if (!videoId) throw new Error('Agnes 创建任务响应中没有 video_id 或 task_id')
     input.saveAcceptedTask?.({ provider: this.name, id: videoId, taskId, key: currentProviderKeys()?.pinnedKey() ?? credential.key })
+    onUpdate({ status: 'running', progress: 0, stage: 'cloud_queue' })
     console.info('[agnes-video] task created', { internalJobId: input.internalJobId, videoId, model: input.model || this.defaultModel, imageCount: images.length, mode: images.length > 1 ? referenceMode : images.length ? 'ti2vid' : 'text' })
 
     return this.poll(input, onUpdate, videoId, taskId, credential.key)
@@ -181,11 +182,11 @@ export class AgnesVideoProvider implements GenerationProvider {
           videoId,
           taskId,
         }
-        const result: GenerationUpdate = { status: 'succeeded', progress: 100, resultUrl, resultMetadata }; onUpdate(result); return result
+        const result: GenerationUpdate = { status: 'succeeded', progress: 100, stage: 'cloud_generation', resultUrl, resultMetadata }; onUpdate(result); return result
       }
       const progress = Math.min(99, Math.max(0, Number(task.progress || 0)))
       console.info('[agnes-video] task progress', { internalJobId: input.internalJobId, videoId, status: task.status, progress })
-      onUpdate({ status: 'running', progress })
+      onUpdate({ status: 'running', progress, stage: ['pending', 'queued'].includes(task.status) ? 'cloud_queue' : 'cloud_generation' })
     }
     throw new TrackingDeferred()
   }

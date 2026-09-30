@@ -1,4 +1,5 @@
 import type { FlowNode } from "../nodes/node-types";
+import { generationStageLabel, resolvedGenerationStage } from "../services/generation-stage";
 
 type TaskStatus = {
   order: number;
@@ -136,14 +137,13 @@ export class TaskMonitorController {
   }
 
   private taskStatus(node: FlowNode): TaskStatus | null {
-    if (node.status === "running")
+    const stage = resolvedGenerationStage(node);
+    if (node.status === "running" || node.status === "queued")
       return {
-        order: 0,
-        label: `生成中${Number(node.progress ?? 0) > 0 ? ` ${Math.round(node.progress ?? 0)}%` : ""}`,
-        className: "running",
+        order: stage?.endsWith("generation") ? 0 : 1,
+        label: generationStageLabel(node),
+        className: stage?.endsWith("generation") ? "running" : "queued",
       };
-    if (node.status === "queued")
-      return { order: 1, label: "排队中", className: "queued" };
     if (node.agentAuto && node.status === "waiting")
       return { order: 2, label: "等待上游", className: "waiting" };
     if (node.status === "failed")
@@ -184,7 +184,7 @@ export class TaskMonitorController {
     const signature = tasks
       .map(
         ({ node }) =>
-          `${node.id}:${node.status}:${node.title}:${node.model}`,
+          `${node.id}:${node.status}:${node.generationStage}:${node.title}:${node.model}`,
       )
       .join("|");
     if (signature === this.signature) {

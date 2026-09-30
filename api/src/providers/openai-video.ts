@@ -31,7 +31,7 @@ export class OpenAiVideoProvider implements GenerationProvider {
       currentProviderKeys()?.restoreKey(input.acceptedTask.key)
       return this.poll(input, onUpdate, input.acceptedTask.id, [], input.acceptedTask.key)
     }
-    onUpdate({ status: 'queued', progress: 0 })
+    onUpdate({ status: 'running', progress: 0, stage: 'local_generation' })
     if ((input.inputUrls?.length ?? 0) > 7) throw new ModelConfigError(`参考图数量超出接口限制：当前 ${input.inputUrls!.length} 张，Grok 多图视频最多支持 7 张参考图片。请减少参考图后重新提交。`)
     // A conservative embedded payload budget, not an upstream image-size claim.
     const options = { proxyUrl: this.proxyUrl, embeddedBudget: Math.floor(768 * 1024 / Math.max(1, input.inputUrls?.length || 0)) }
@@ -75,6 +75,7 @@ export class OpenAiVideoProvider implements GenerationProvider {
     const id = text(created.request_id) || text(created.id) || text(created.video_id) || text(nested(created, 'data', 'id'))
     if (!id) throw new Error(`CPA/Grok 创建响应未返回 request_id（字段：${Object.keys(created).join(', ') || '空响应'}）`)
     input.saveAcceptedTask?.({ provider: this.name, id, key: currentProviderKeys()?.pinnedKey() ?? this.apiKey })
+    onUpdate({ status: 'running', progress: 0, stage: 'cloud_queue' })
     return this.poll(input, onUpdate, id, submittedImages)
   }
 
@@ -139,7 +140,7 @@ function normalize(payload: Payload, id?: string, baseUrl?: string): GenerationU
   const rawProgress = Number(payload.progress ?? nested(payload, 'data', 'progress') ?? (status === 'succeeded' ? 100 : 0))
   const direct = text(payload.video_url) || text(nested(payload, 'video', 'url')) || text(payload.url) || text(payload.result_url) || text(payload.output_url) || text(nested(payload, 'data', 'url')) || text(nested(payload, 'output', 'url'))
   const resultUrl = direct || (status === 'succeeded' && id && baseUrl ? `${baseUrl}/v1/videos/${encodeURIComponent(id)}/content` : undefined)
-  return { status, progress: Math.max(0, Math.min(100, Number.isFinite(rawProgress) ? rawProgress : 10)), resultUrl, error: text(nested(payload, 'error', 'message')) || text(payload.error) || text(payload.message) }
+  return { status, progress: Math.max(0, Math.min(100, Number.isFinite(rawProgress) ? rawProgress : 10)), stage: status === 'queued' ? 'cloud_queue' : 'cloud_generation', resultUrl, error: text(nested(payload, 'error', 'message')) || text(payload.error) || text(payload.message) }
 }
 function nested(value: Payload, first: string, second: string) { const child = value[first]; return child && typeof child === 'object' ? (child as Payload)[second] : undefined }
 function text(value: unknown) { return typeof value === 'string' && value ? value : undefined }

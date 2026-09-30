@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { mergeGenerationState } from "../src/services/generation-poller";
+import { generationStageLabel } from "../src/services/generation-stage";
 import { labelTextViewport } from "../src/nodes/label-text-layout";
 import { NODE_SNAP_GAP, snapNodeGroup } from "../src/canvas/node-snap-controller";
 import { positionDraggedNodes } from "../src/canvas/node-drag-positioner";
@@ -260,19 +261,46 @@ test("scrollable labels show complete visible lines without overflow markers", (
   expect(viewport.text).not.toContain("…");
 });
 
-test("generation state never regresses from running to queued", () => {
+test("generation state preserves stale progress but accepts an explicit cloud queue phase", () => {
   expect(
     mergeGenerationState(
       { status: "running", progress: 38 },
       { status: "queued", progress: 0 },
     ),
-  ).toEqual({ status: "running", progress: 38, terminal: false });
+  ).toEqual({ status: "running", progress: 38, terminal: false, generationStage: undefined });
   expect(
     mergeGenerationState(
       { status: "running", progress: 38 },
       { status: "running", progress: 20 },
     ).progress,
   ).toBe(38);
+  expect(
+    mergeGenerationState(
+      { status: "running", progress: 38, generationStage: "cloud_generation" },
+      { status: "queued", progress: 0, generation_stage: "cloud_queue" },
+    ),
+  ).toEqual({ status: "queued", progress: 0, terminal: false, generationStage: "cloud_queue" });
+  const stageNode = { kind: "video" as const, status: "running", progress: 10, model: "agnes-video-2.5-flash" };
+  expect(generationStageLabel({ ...stageNode, status: "queued", generationStage: "local_queue" })).toBe("本地排队");
+  expect(generationStageLabel({ ...stageNode, generationStage: "cloud_queue" })).toBe("云端排队");
+  expect(generationStageLabel({ ...stageNode, generationStage: "local_generation" })).toBe("本地生成 10%");
+  expect(generationStageLabel({ ...stageNode, generationStage: "cloud_generation" })).toBe("云端生成 10%");
+});
+
+test("video result card exposes the cloud queue phase at mobile width", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  const { canvas } = await mockApi(page, 1);
+  Object.assign(canvas.nodes[0], {
+    kind: "video", role: "result", model: "agnes-video-2.5-flash",
+    status: "running", progress: 0, generationStage: "cloud_queue",
+    title: "Flash 云端任务", body: "", width: 280, height: 220, x: -100, y: -90,
+  });
+  await page.goto("/?canvasPerf=1#/canvas");
+  await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
+  await page.mouse.click(187, 350);
+  const badge = page.locator('.flow-node[data-id="1"] .video-generation-count');
+  await expect(badge).toHaveText("云端排队", { timeout: 15_000 });
+  await expect(badge).toHaveAttribute("data-stage", "cloud_queue");
 });
 
 test("transparent image setting adds a mandatory alpha-background constraint", () => {

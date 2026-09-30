@@ -109,6 +109,13 @@ ensureColumn("jobs", "retry_after", "TEXT");
 
 ensureColumn("jobs", "retry_count", "INTEGER NOT NULL DEFAULT 0");
 
+ensureColumn("jobs", "generation_stage", "TEXT NOT NULL DEFAULT 'local_queue'");
+
+// Recover a meaningful phase for active jobs created before stage tracking existed.
+database.run("UPDATE jobs SET generation_stage='cloud_queue' WHERE generation_stage='local_queue' AND status='queued' AND retry_count>0 AND retry_after IS NOT NULL");
+database.run("UPDATE jobs SET generation_stage=CASE WHEN progress>0 THEN 'cloud_generation' ELSE 'cloud_queue' END WHERE generation_stage='local_queue' AND status='running' AND id IN (SELECT job_id FROM video_task_checkpoints)");
+database.run("UPDATE jobs SET generation_stage='local_generation' WHERE generation_stage='local_queue' AND status='running' AND id NOT IN (SELECT job_id FROM video_task_checkpoints)");
+
 ensureColumn("notifications", "priority", "TEXT NOT NULL DEFAULT 'normal'");
 
 ensureColumn("notifications", "auto_popup", "INTEGER NOT NULL DEFAULT 0");
