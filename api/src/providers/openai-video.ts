@@ -4,6 +4,7 @@ import { currentProviderKeys, ProviderKeyCooldownError } from '../models/key-poo
 import { TrackingDeferred } from './task-tracking.js'
 import { URL_FIRST, prepareReferenceImages, submitWithReferenceFallback } from './reference-transport.js'
 import { ModelConfigError } from '../models/types.js'
+import { videoResponseError } from './video-errors.js'
 import { canFallbackTerminalReference, isReferenceDownloadFailure, ReferenceDownloadFailure, runWithTerminalReferenceFallback } from './reference-transport.js'
 
 type Payload = Record<string, unknown>
@@ -47,10 +48,12 @@ export class OpenAiVideoProvider implements GenerationProvider {
     const parameters = input.parameters ?? {}
     const options = { proxyUrl: this.proxyUrl, embeddedBudget: Math.floor(768 * 1024 / Math.max(1, imageUrls.length)) }
     let submittedImages = imageUrls
-    const seconds = String(parameters.seconds || '5')
+    const seconds = String(parameters.seconds ?? '5')
+    if (!Number.isSafeInteger(Number(seconds)) || Number(seconds) < 1) throw new ModelConfigError('视频时长必须为正整数秒；尚未提交上游')
     const aspectRatio = String(parameters.aspect_ratio || '16:9')
     const requestedResolution = String(parameters.resolution || '720p')
-    const resolution = requestedResolution === '480p' ? '480p' : '720p'
+    if (!['480p', '720p'].includes(requestedResolution)) throw new ModelConfigError('当前视频适配器仅支持 480p、720p；尚未提交上游')
+    const resolution = requestedResolution
     const referenceMode = parameters.reference_mode === 'keyframes' ? 'keyframes' : 'references'
     if (referenceMode === 'keyframes') throw new Error('Grok 当前接口没有原生连续帧参数，请改用参考图模式')
     const prompt = imageUrls.length > 1 ? withNumberedReferences(input.prompt, imageUrls.length) : input.prompt
@@ -64,7 +67,7 @@ export class OpenAiVideoProvider implements GenerationProvider {
         ...(images.length > 1 ? { reference_images: images.map(url => ({ url })) } : images.length === 1 ? { input_reference: { image_url: images[0] } } : {}),
       }),
     }) }, () => prepareReferenceImages(input, URL_FIRST, { ...options, forceEmbedded: true }))
-    if (!submission.ok) throw new ModelConfigError(`视频创建失败（HTTP ${submission.status}），未自动重复提交`, submission.status)
+    if (!submission.ok) throw videoResponseError(submission.status, submission.payload, '视频创建', submission.requestId)
     const created = submission.payload
     const immediate = normalize(created)
     if (immediate.status === 'succeeded' && immediate.resultUrl) { onUpdate(immediate); return immediate }
@@ -107,20 +110,25 @@ export class OpenAiVideoProvider implements GenerationProvider {
 
   private throwTaskFailure(payload: Payload, images: string[]): never {
     if (isReferenceDownloadFailure(payload)) throw new ReferenceDownloadFailure(canFallbackTerminalReference(payload, images))
-    throw new ModelConfigError('上游视频任务已失败，未自动重复提交；请检查内容限制或联系服务商查询任务', 422)
+    throw videoResponseError(422, payload, '视频执行')
   }
 
   private async request(path: string, init: RequestInit = {}, key = this.apiKey) {
     const result = await this.response(path, init, key)
-    if (!result.ok) throw new ModelConfigError(`视频查询失败（HTTP ${result.status}）`, result.status)
+    if (!result.ok) throw videoResponseError(result.status, result.payload, '视频查询', result.requestId)
     return result.payload
   }
 
   private async response(path: string, init: RequestInit = {}, key = this.apiKey) {
     const response = await modelFetch(`${this.baseUrl}${path}`, { ...init, headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json', ...(init.headers as Record<string, string> | undefined) }, signal: AbortSignal.timeout(120000) }, this.proxyUrl)
     const body = await response.text(); let payload: Payload = {}
-    try { payload = body ? JSON.parse(body) as Payload : {} } catch { throw new Error(`CPA video API 返回了非 JSON 内容（${response.status}）`) }
-    return { ok: response.ok, status: response.status, payload }
+    try {
+      const parsed: unknown = body ? JSON.parse(body) : {}
+      payload = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Payload : {error: typeof parsed === 'string' ? parsed : 'Invalid JSON response'}
+    } catch {
+      throw new ModelConfigError(`视频接口返回非 JSON 响应（HTTP ${response.status}）；未自动重复提交，请先核对上游是否已接受任务`, response.ok ? 502 : response.status)
+    }
+    return { ok: response.ok, status: response.status, payload, requestId: response.headers.get('x-request-id') }
   }
 
 }

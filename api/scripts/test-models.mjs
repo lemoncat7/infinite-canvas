@@ -15,7 +15,7 @@ import { once } from 'node:events'
 import sharp from 'sharp'
 
 test('sanitized errors retain retry semantics without reflecting secrets', () => {
-  for (const [raw, expected] of [['queue is full PRIVATE', /队列已满/], ['ECONNRESET PRIVATE', /network/], ['timeout PRIVATE', /timeout/], ['401 PRIVATE', /认证/], ['PRIVATE', /正文已隐藏/]]) {
+  for (const [raw, expected] of [['queue is full PRIVATE', /队列已满/], ['ECONNRESET PRIVATE', /network/], ['curl: (35) SSL_ERROR_SYSCALL PRIVATE', /TLS\/代理连接失败/], ['curl: (92) HTTP\/2 stream PROTOCOL_ERROR PRIVATE', /代理协议连接失败/], ['timeout PRIVATE', /timeout/], ['401 PRIVATE', /认证/], ['PRIVATE', /正文已隐藏/]]) {
     const error = safeModelError(new Error(raw))
     assert.match(error.message, expected)
     assert.doesNotMatch(error.message, /PRIVATE/)
@@ -75,6 +75,25 @@ test('defaults protect enabled connections and models; unsupported inputs fail c
   store.saveModel({ ...m, enabled: false, revision: store.admin().revision }, m.id)
   assert.throws(() => store.resolve(m.id, 'image', 'image'), /停用/)
   assert.throws(() => store.resolve(undefined, 'image', 'image'), /未指定默认/)
+})
+
+test('deleting a global model clears defaults atomically and preserves its provider', t => {
+  const { store } = setup(t), p = provider(store), m = model(store, p.id)
+  store.saveDefaults({ revision: store.admin().revision, defaults: { image: m.id } })
+  const deleted = store.deleteModel(store.admin().revision, m.id)
+  assert.equal(deleted.models.some(item => item.id === m.id), false)
+  assert.equal(deleted.defaults.image, '')
+  assert.equal(deleted.providers.some(item => item.id === p.id), true)
+  assert.throws(() => store.deleteModel(deleted.revision, m.id), /可能已被其他管理员删除/)
+})
+
+test('generation concurrency uses environment only as its persisted initial value and validates updates', t => {
+  const { dir, store } = setup(t, { IMAGE_GENERATION_CONCURRENCY: '7', VIDEO_GENERATION_CONCURRENCY: '4' })
+  assert.deepEqual(store.generationConcurrency(), { image: 7, video: 4 })
+  const saved = store.saveGenerationConcurrency({ revision: store.admin().revision, concurrency: { image: 5, video: 3 } })
+  assert.deepEqual(saved.concurrency, { image: 5, video: 3 })
+  assert.deepEqual(new ModelStore(dir, { IMAGE_GENERATION_CONCURRENCY: '12', VIDEO_GENERATION_CONCURRENCY: '11' }).generationConcurrency(), { image: 5, video: 3 })
+  assert.throws(() => store.saveGenerationConcurrency({ revision: saved.revision, concurrency: { image: 0, video: 33 } }), /1–32/)
 })
 
 test('saved configuration upgrades without reading environment and preserves hand-edited models, credentials and backup', t => {
@@ -138,11 +157,12 @@ test('new installations ignore environment model definitions', t => {
 
 test('routes enforce admin, same-origin mutations, revision, and redact discovery failures', async t => {
   const { store } = setup(t), app = Fastify()
+  let concurrencyChanges = 0
   t.after(() => app.close())
   registerModelRoutes(app, store, {
     user: (request, reply) => request.headers.authorization ? true : (reply.code(401).send({ error: 'login' }), false),
     admin: (request, reply) => request.headers.authorization === 'admin' ? true : (reply.code(403).send({ error: 'admin only' }), false),
-  })
+  }, { generationConcurrencyChanged: () => { concurrencyChanges++ } })
   assert.equal((await app.inject({ url: '/models/catalog' })).statusCode, 401)
   assert.equal((await app.inject({ url: '/admin/models', headers: { authorization: 'user' } })).statusCode, 403)
   assert.equal((await app.inject({ url: '/admin/model-providers', method: 'POST', headers: { authorization: 'admin', origin: 'https://evil.example' }, payload: {} })).statusCode, 403)
@@ -156,7 +176,20 @@ test('routes enforce admin, same-origin mutations, revision, and redact discover
   const result = await app.inject({ url: '/admin/model-providers', method: 'POST', headers: { authorization: 'admin' }, payload: { revision: 0, name: 'No auth local', baseUrl: 'http://127.0.0.1:1', apiKey: 'PRIVATE_TEST_CREDENTIAL' } })
   assert.equal(result.statusCode, 200)
   assert.doesNotMatch(result.body, /PRIVATE_TEST_CREDENTIAL/)
-  const id = result.json().providers[0].id
+  let adminState = result.json()
+  const id = adminState.providers[0].id
+  const createdModel = await app.inject({ url: '/admin/models', method: 'POST', headers: { authorization: 'admin' }, payload: { revision: adminState.revision, name: 'Disposable', model: 'disposable', adapter: 'openai-image', providerId: id } })
+  assert.equal(createdModel.statusCode, 200)
+  adminState = createdModel.json()
+  const modelId = adminState.models[0].id
+  const deletedModel = await app.inject({ url: `/admin/models/${encodeURIComponent(modelId)}`, method: 'DELETE', headers: { authorization: 'admin' }, payload: { revision: adminState.revision } })
+  assert.equal(deletedModel.statusCode, 200)
+  assert.equal(deletedModel.json().models.length, 0)
+  assert.equal((await app.inject({ url: `/admin/models/${encodeURIComponent(modelId)}`, method: 'DELETE', headers: { authorization: 'user' }, payload: { revision: deletedModel.json().revision } })).statusCode, 403)
+  const concurrency = await app.inject({ url: '/admin/generation-concurrency', method: 'PUT', headers: { authorization: 'admin' }, payload: { revision: deletedModel.json().revision, concurrency: { image: 6, video: 4 } } })
+  assert.equal(concurrency.statusCode, 200)
+  assert.deepEqual(concurrency.json().concurrency, { image: 6, video: 4 })
+  assert.equal(concurrencyChanges, 1)
   const verification = { url: `/admin/model-providers/${id}/verify-key`, method: 'POST', payload: { keyId: credentialId('PRIVATE_TEST_CREDENTIAL') } }
   assert.equal((await app.inject({ ...verification, headers: { authorization: 'user' } })).statusCode, 403)
   assert.equal((await app.inject({ ...verification, headers: { authorization: 'admin', origin: 'https://evil.example' } })).statusCode, 403)
@@ -189,7 +222,8 @@ test('configured adapter calls the snapshotted endpoint/model, not environment d
 })
 
 test('real API queue retains submitted configuration and cost after admin edits', { timeout: 30000 }, async t => {
-  const { dir } = setup(t)
+  const dir = mkdtempSync(join(tmpdir(), 'canvas-model-api-test-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
   const upstream = Fastify(), calls = [], textCalls = []
   const png = (await sharp({ create: { width: 16, height: 16, channels: 3, background: '#808080' } }).png().toBuffer()).toString('base64')
   let release
@@ -221,7 +255,12 @@ test('real API queue retains submitted configuration and cost after admin edits'
   let cookie = ''
   async function request(path, body, admin = false, method = body ? 'POST' : 'GET') {
     const response = await fetch(base + path, { method, headers: { 'content-type': 'application/json', ...(admin ? { 'x-admin-key': 'test-admin-only' } : { cookie }) }, body: body ? JSON.stringify(body) : undefined })
-    if (path === '/auth/register' || path === '/auth/login') cookie = response.headers.getSetCookie().map(value => value.split(';')[0]).join('; ')
+    if (path === '/auth/register' || path === '/auth/login') {
+      const setCookies = typeof response.headers.getSetCookie === 'function'
+        ? response.headers.getSetCookie()
+        : (response.headers.get('set-cookie')?.split(/,(?=\s*[^;,\s=]+=)/) || [])
+      cookie = setCookies.map(value => value.split(';')[0].trim()).join('; ')
+    }
     const result = await response.json()
     assert.ok(response.ok, `${path}: ${response.status} ${JSON.stringify(result)}`)
     return result
@@ -242,6 +281,8 @@ test('real API queue retains submitted configuration and cost after admin edits'
   assert.equal((await request(`/jobs/${second.id}`)).status, 'queued')
   config = await request(`/admin/model-providers/${connection.id}`, { ...connection, revision: config.revision, apiKey: 'NEW_KEY' }, true, 'PUT')
   config = await request(`/admin/models/${selected.id}`, { ...selected, revision: config.revision, model: 'new-image', creditCost: 3 }, true, 'PUT')
+  config = await request('/admin/generation-concurrency', { revision: config.revision, concurrency: { image: 2, video: 2 } }, true, 'PUT')
+  await until(() => calls.length === 2)
   release()
   for (const job of [first, second]) {
     const finished = await until(async () => { const value = await request(`/jobs/${job.id}`); return ['succeeded', 'failed'].includes(value.status) && value })
@@ -261,7 +302,7 @@ test('real API queue retains submitted configuration and cost after admin edits'
   assert.equal(answer.finalPrompt, '一只蓝色小鸟')
   assert.deepEqual(textCalls, ['custom-text-model'])
   const identity = cookie.split('; ').find(value => value.startsWith('flow_browser_device='))
-  assert.ok(identity)
+  assert.ok(identity, `browser identity cookie missing from ${cookie}`)
   for (let i = 0; i < 3; i++) {
     await request('/auth/login', { email: 'ordinary-model-test@example.com', password: 'test-password-only' })
     assert.equal(cookie.split('; ').find(value => value.startsWith('flow_browser_device=')), identity)

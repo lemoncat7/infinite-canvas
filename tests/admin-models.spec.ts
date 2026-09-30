@@ -5,8 +5,9 @@ async function fixture(page: Page, admin = true, withNode = false) {
   const providers = [{ id: 'p', name: '测试服务商', baseUrl: 'https://example.com', proxyUrl: '', enabled: true, hasKey: true, readOnly: false, keyCount: 2, keys: [{ id: 'key-one-id', status: 'ready', cooldownUntil: null as string | null, reason: '' }, { id: 'key-two-id', status: 'cooling', cooldownUntil: '2026-09-20T20:00:00Z', reason: 'rate-limit' }] }]
   const models = [{ id: 'global:m', name: '全局图片模型', model: 'image-test', providerId: 'p', adapter: 'openai-image', kind: 'image', enabled: true, order: 0, creditCost: 0, capabilities: { referenceImages: 1, transparent: true, sizes: ['512x512', '1024x1024'], resolutions: [], aspectRatios: [], minSeconds: 1, maxSeconds: 18 } }]
   const defaults: Record<string, string> = { image: 'global:m' }
+  const concurrency = { image: 3, video: 2 }
   let devices = Array.from({ length: 9 }, (_, i) => ({ id: `device-${i}`, name: i === 0 ? '当前浏览器' : `设备 ${i}`, current: i === 0, lastUsedAt: new Date(Date.now() - i * 60000).toISOString() }))
-  const state = () => ({ revision, imported: true, providers, models, defaults })
+  const state = () => ({ revision, imported: true, providers, models, defaults, concurrency })
   await page.route('**/api/**', async route => {
     const req = route.request(), path = new URL(req.url()).pathname
     let body: unknown = {}; let status = 200
@@ -29,6 +30,13 @@ async function fixture(page: Page, admin = true, withNode = false) {
       const data = req.postDataJSON(); models.push({ ...data, kind: 'image', id: 'global:added' }); revision++; body = state()
     } else if (path === '/api/admin/models/global%3Am' && req.method() === 'PUT') {
       Object.assign(models[0], req.postDataJSON()); revision++; body = state()
+    } else if (path === '/api/admin/models/global%3Am' && req.method() === 'DELETE') {
+      models.splice(0, 1)
+      for (const purpose of Object.keys(defaults)) if (defaults[purpose] === 'global:m') defaults[purpose] = ''
+      revision++; body = state()
+    } else if (path === '/api/admin/generation-concurrency' && req.method() === 'PUT') {
+      Object.assign(concurrency, req.postDataJSON().concurrency)
+      revision++; body = state()
     } else if (path.endsWith('/discover')) body = { models: ['new-image-id', 'second-image-id'] }
     else if (path === '/api/admin/model-defaults') { Object.assign(defaults, req.postDataJSON().defaults); revision++; body = state() }
     else if (path.includes('notifications') || path.includes('assets') || path === '/api/user-api-models') body = []
@@ -62,6 +70,46 @@ test('provider models collapse preserves drafts and restores after search', asyn
   await expect(name).toBeHidden()
   await toggle.click()
   await expect(name).toHaveValue('尚未保存的模型名称')
+})
+
+test('administrator can delete a global model with clear destructive confirmation', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
+  await fixture(page)
+  await page.locator('#workspace-user').click()
+  await page.locator('#admin-actions summary').click()
+  await page.locator('#open-global-models').click()
+  const workspace = page.getByRole('dialog', { name: '全局模型管理', exact: true })
+  await workspace.getByRole('button', { name: '配置 全局图片模型', exact: true }).click()
+  await workspace.getByRole('button', { name: '删除模型', exact: true }).click()
+  const confirm = page.locator('.model-confirm')
+  await expect(confirm).toContainText('删除后无法恢复')
+  await expect(confirm).toContainText('图片生成默认模型')
+  await expect(confirm.getByRole('button', { name: '取消', exact: true })).toBeFocused()
+  const deleted = page.waitForRequest(request => request.method() === 'DELETE' && new URL(request.url()).pathname === '/api/admin/models/global%3Am')
+  await confirm.getByRole('button', { name: '删除模型', exact: true }).click()
+  expect((await deleted).postDataJSON()).toEqual({ revision: 1 })
+  await expect(workspace.getByText('全局图片模型', { exact: true })).toHaveCount(0)
+  await expect(workspace.getByRole('button', { name: '选择图片生成默认模型' })).toContainText('手动选择')
+  await expect(workspace.locator('output').first()).toContainText('已删除')
+  expect(errors).toEqual([])
+})
+
+test('administrator can change image and video generation concurrency', async ({ page }) => {
+  await fixture(page)
+  await page.locator('#workspace-user').click()
+  await page.locator('#admin-actions summary').click()
+  await page.locator('#open-global-models').click()
+  const workspace = page.getByRole('dialog', { name: '全局模型管理', exact: true })
+  await expect(workspace.getByLabel('同时生成图片')).toHaveValue('3')
+  await expect(workspace.getByLabel('同时生成视频')).toHaveValue('2')
+  await workspace.getByLabel('同时生成图片').fill('6')
+  await workspace.getByLabel('同时生成视频').fill('4')
+  const saved = page.waitForRequest(request => request.method() === 'PUT' && new URL(request.url()).pathname === '/api/admin/generation-concurrency')
+  await workspace.getByRole('button', { name: '保存并发数量', exact: true }).click()
+  expect((await saved).postDataJSON()).toEqual({ revision: 1, concurrency: { image: 6, video: 4 } })
+  await expect(workspace.getByLabel('同时生成图片')).toHaveValue('6')
+  await expect(workspace.getByLabel('同时生成视频')).toHaveValue('4')
+  await expect(workspace.locator('output').first()).toContainText('已保存')
 })
 
 for (const width of [375, 1024, 1440]) for (const theme of ['light', 'dark']) test(`global model workspace ${width} ${theme}`, async ({ page }) => {

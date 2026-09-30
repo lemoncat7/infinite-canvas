@@ -1,6 +1,6 @@
 import { loadModelCatalog, type Purpose } from './catalog'
 import { modelRequest, type AdminModels } from './admin-api'
-import { defaultsForm, escape, kinds, providerForm, purposes } from './admin-views'
+import { concurrencyForm, defaultsForm, escape, kinds, providerForm, purposes } from './admin-views'
 import { providerGroups } from './provider-groups'
 import { bindEditorDiscovery } from './editor-discovery'
 import { bindProviderKeys, providerDraft } from './provider-editor'
@@ -17,13 +17,14 @@ export class AdminModelController {
   private providerDirty = false
   private inline?: { form: HTMLFormElement; dirty: boolean }
   private defaultsDirty = false
+  private concurrencyDirty = false
   private loadVersion = 0
   private filter = ''
   private readonly collapsedProviders = new Set<string>()
   constructor(private readonly options: { isAdmin(): boolean; closeUserMenu(): void }) {
     this.page.className = 'model-workspace'
     this.page.setAttribute('aria-label', '全局模型管理')
-    this.page.innerHTML = `<header><div><h1>全局模型</h1><p>服务商连接、模型用途与计费，在这里统一管理。</p></div><button type="button" data-close>返回画布</button></header><div class="model-page-body"><output class="model-feedback" aria-live="polite"></output><section data-default-area aria-label="默认分配"></section><div class="model-section-heading"><div><h2>服务商</h2><p>一个连接，管理多个模型。</p></div><button type="button" class="model-primary" data-new>＋ 添加服务商</button></div><div class="model-toolbar"><input type="search" aria-label="搜索服务商或模型" placeholder="搜索服务商或模型" data-search><div class="model-kind-filters" aria-label="筛选模型类型"><button type="button" data-kind="" aria-pressed="true">全部</button>${Object.entries(kinds).map(([key, title]) => `<button type="button" data-kind="${key}" aria-pressed="false">${title}</button>`).join('')}</div><button type="button" data-refresh>刷新</button></div><section data-content aria-label="服务商与模型"></section></div>`
+    this.page.innerHTML = `<header><div><h1>全局模型</h1><p>服务商连接、生成并发、模型用途与计费，在这里统一管理。</p></div><button type="button" data-close>返回画布</button></header><div class="model-page-body"><output class="model-feedback" aria-live="polite"></output><section data-default-area aria-label="默认分配"></section><section data-concurrency-area aria-label="生成并发"></section><div class="model-section-heading"><div><h2>服务商</h2><p>一个连接，管理多个模型。</p></div><button type="button" class="model-primary" data-new>＋ 添加服务商</button></div><div class="model-toolbar"><input type="search" aria-label="搜索服务商或模型" placeholder="搜索服务商或模型" data-search><div class="model-kind-filters" aria-label="筛选模型类型"><button type="button" data-kind="" aria-pressed="true">全部</button>${Object.entries(kinds).map(([key, title]) => `<button type="button" data-kind="${key}" aria-pressed="false">${title}</button>`).join('')}</div><button type="button" data-refresh>刷新</button></div><section data-content aria-label="服务商与模型"></section></div>`
     this.editor.className = 'model-editor'
     this.editor.setAttribute('aria-label', '服务商配置')
     document.body.append(this.page, this.editor)
@@ -53,7 +54,7 @@ export class AdminModelController {
     })
     this.page.querySelector('[data-search]')!.addEventListener('input', () => this.filterContent())
     this.editor.addEventListener('cancel', event => { event.preventDefault(); void this.closeProvider() })
-    this.page.addEventListener('close', () => { this.loadVersion++; this.state = undefined; this.inline = undefined; this.defaultsDirty = false; this.page.querySelector('[data-content]')!.replaceChildren() })
+    this.page.addEventListener('close', () => { this.loadVersion++; this.state = undefined; this.inline = undefined; this.defaultsDirty = false; this.concurrencyDirty = false; this.page.querySelector('[data-content]')!.replaceChildren() })
   }
   async open() {
     if (!this.options.isAdmin() || this.page.open) return
@@ -66,8 +67,8 @@ export class AdminModelController {
   }
   private async refresh() { if (!this.busy && await this.discardDrafts()) await this.load() }
   private async discardDrafts() {
-    if ((this.inline?.dirty || this.defaultsDirty) && !(await this.confirm('放弃未保存的修改？', '模型或默认分配尚未保存。'))) return false
-    this.inline = undefined; this.defaultsDirty = false; return true
+    if ((this.inline?.dirty || this.defaultsDirty || this.concurrencyDirty) && !(await this.confirm('放弃未保存的修改？', '模型、默认分配或生成并发尚未保存。'))) return false
+    this.inline = undefined; this.defaultsDirty = false; this.concurrencyDirty = false; return true
   }
   private async load() {
     if (this.busy) return
@@ -76,7 +77,7 @@ export class AdminModelController {
     try {
       const state = await modelRequest<AdminModels>('/admin/models')
       if (version !== this.loadVersion || !this.page.open || !this.options.isAdmin()) return
-      this.state = state; this.render(); this.feedback(''); await loadModelCatalog()
+      this.state = state; this.defaultsDirty = false; this.concurrencyDirty = false; this.render(); this.feedback(''); await loadModelCatalog()
     } catch (error) { if (version === this.loadVersion && this.page.open) this.feedback((error as Error).message, true) }
   }
   private feedback(message: string, error = false) {
@@ -90,7 +91,26 @@ export class AdminModelController {
     defaults.querySelector('form')!.addEventListener('submit', event => {
       event.preventDefault()
       if (this.inline?.dirty) { this.feedback('请先保存或取消正在编辑的模型。', true); return }
+      if (this.concurrencyDirty) { this.feedback('请先保存或刷新生成并发设置。', true); return }
       void this.save('/admin/model-defaults', 'PUT', { defaults: Object.fromEntries(new FormData(event.target as HTMLFormElement)) })
+    })
+    const concurrency = this.page.querySelector<HTMLElement>('[data-concurrency-area]')!
+    concurrency.innerHTML = concurrencyForm(this.state)
+    const concurrencyFormElement = concurrency.querySelector<HTMLFormElement>('form')!
+    concurrencyFormElement.addEventListener('input', event => {
+      if (this.inline?.dirty || this.defaultsDirty) {
+        const input = event.target as HTMLInputElement
+        input.value = String(this.state!.concurrency[input.name as 'image' | 'video'])
+        this.feedback('请先保存或取消模型、默认分配的修改。', true)
+        return
+      }
+      this.concurrencyDirty = true
+    })
+    concurrencyFormElement.addEventListener('submit', event => {
+      event.preventDefault()
+      if (this.inline?.dirty || this.defaultsDirty) { this.feedback('请先保存或取消模型、默认分配的修改。', true); return }
+      const values = new FormData(concurrencyFormElement)
+      void this.save('/admin/generation-concurrency', 'PUT', { concurrency: { image: Number(values.get('image')), video: Number(values.get('video')) } })
     })
     this.page.querySelector('[data-content]')!.innerHTML = providerGroups(this.state, '', '') + '<p class="model-empty" data-filter-empty hidden>没有匹配的服务商或模型，请调整搜索条件。</p>'
     this.page.querySelectorAll<HTMLElement>('[data-provider]').forEach((group, index) => {
@@ -131,7 +151,7 @@ export class AdminModelController {
   }
   private async pickDefault(purpose: Purpose) {
     if (!this.state) return
-    if (this.inline?.dirty) { this.feedback('请先保存或取消模型修改，再调整默认分配。', true); return }
+    if (this.inline?.dirty || this.concurrencyDirty) { this.feedback('请先保存或取消模型、生成并发的修改，再调整默认分配。', true); return }
     const state = this.state, version = this.loadVersion
     const input = this.page.querySelector<HTMLInputElement>(`[data-defaults] [name=${purpose}]`)!
     const candidates = state.models.filter(m => m.enabled && modelPurposes(m).includes(purpose) && state.providers.some(p => p.id === m.providerId && p.enabled)).sort((a, b) => a.order - b.order)
@@ -155,7 +175,7 @@ export class AdminModelController {
     try {
       this.state = await modelRequest<AdminModels>(path, method, { ...body, revision: this.state.revision })
       if (!this.page.open || !this.options.isAdmin()) { this.state = undefined; return }
-      this.inline = undefined; this.providerDirty = false; this.defaultsDirty = false
+      this.inline = undefined; this.providerDirty = false; this.defaultsDirty = false; this.concurrencyDirty = false
       if (form && this.editor.contains(form)) { this.editor.close(); this.editor.replaceChildren() }
       this.render(); this.feedback('已保存，新请求立即生效。')
       await loadModelCatalog().catch(() => this.feedback('配置已保存，模型目录刷新失败，请点击刷新。', true))
@@ -166,7 +186,7 @@ export class AdminModelController {
   }
   private editProvider(id?: string) {
     if (!this.state || this.busy) return
-    if (this.inline?.dirty || this.defaultsDirty) { this.feedback('请先保存或取消模型和默认分配的修改。', true); return }
+    if (this.inline?.dirty || this.defaultsDirty || this.concurrencyDirty) { this.feedback('请先保存或取消模型、默认分配和生成并发的修改。', true); return }
     const provider = this.state.providers.find(p => p.id === id)
     this.providerDirty = false
     this.editor.innerHTML = `<header><div><h2>${id ? '连接配置' : '添加服务商'}</h2><p>连接信息供此服务商下的所有模型共用。</p></div><button type="button" data-cancel aria-label="关闭编辑">×</button></header><form><output tabindex="-1" aria-live="polite" class="model-feedback"></output><fieldset>${providerForm(provider)}</fieldset><footer><button type="button" data-cancel>取消</button><button type="submit" class="model-primary">保存服务商</button></footer></form>`
@@ -189,7 +209,7 @@ export class AdminModelController {
   }
   private async editModel(id?: string, providerId?: string, upstreamId = '') {
     if (!this.state || this.busy) return
-    if (this.defaultsDirty) { this.feedback('请先保存默认分配，再编辑模型。', true); return }
+    if (this.defaultsDirty || this.concurrencyDirty) { this.feedback('请先保存默认分配或生成并发，再编辑模型。', true); return }
     if (this.inline?.dirty && !(await this.confirm('放弃未保存的模型修改？', '当前模型尚未保存。'))) return
     const previous = this.inline?.form.closest<HTMLElement>('[data-model-entry]')
     if (id && previous?.dataset.modelEntry === id) {
@@ -212,6 +232,7 @@ export class AdminModelController {
     form.addEventListener('input', () => { if (this.inline) this.inline.dirty = true })
     form.addEventListener('submit', event => { event.preventDefault(); void this.save(`/admin/models${id ? '/' + encodeURIComponent(id) : ''}`, id ? 'PUT' : 'POST', inlineModelDraft(form), form) })
     form.querySelector('[data-model-test]')?.addEventListener('click', () => void this.testModel(id!, form))
+    form.querySelector('[data-model-delete]')?.addEventListener('click', () => void this.deleteModel(id!, model!.name, form))
     form.querySelector('[data-inline-cancel]')!.addEventListener('click', async () => {
       if (this.busy || (this.inline?.dirty && !(await this.confirm('放弃未保存的模型修改？', '当前模型尚未保存。')))) return
       form.remove(); this.inline = undefined; row?.querySelector('[data-edit-model]')?.setAttribute('aria-expanded', 'false'); this.filterContent()
@@ -220,7 +241,7 @@ export class AdminModelController {
   }
   private async discover(id: string) {
     if (this.busy || !this.state) return
-    if (this.inline?.dirty || this.defaultsDirty) { this.feedback('请先保存或取消当前修改，再添加模型。', true); return }
+    if (this.inline?.dirty || this.defaultsDirty || this.concurrencyDirty) { this.feedback('请先保存或取消当前修改，再添加模型。', true); return }
     const version = this.loadVersion
     this.busy = true; this.feedback('正在读取服务商模型列表…')
     try {
@@ -240,15 +261,38 @@ export class AdminModelController {
     catch (error) { output.textContent = (error as Error).message; output.classList.add('is-error') }
     finally { this.busy = false }
   }
-  private confirm(title: string, detail: string) {
+  private async deleteModel(id: string, name: string, form: HTMLFormElement) {
+    if (this.busy || !this.state) return
+    const defaultNames = Object.entries(this.state.defaults).filter(([, modelId]) => modelId === id).map(([purpose]) => purposes[purpose as Purpose])
+    const detail = `删除后无法恢复，已选择此模型的画布需要重新选择。${defaultNames.length ? `当前它还是${defaultNames.join('、')}默认模型，删除后这些用途会改为手动选择。` : ''}`
+    if (!(await this.confirm(`删除“${name}”？`, detail, '删除模型', true))) return
+    this.busy = true
+    const controls = [...this.page.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button,input,select')]
+    const disabled = controls.map(control => control.disabled)
+    controls.forEach(control => control.disabled = true)
+    const output = form.querySelector<HTMLOutputElement>('output')!
+    output.textContent = '正在删除模型…'; output.classList.remove('is-error')
+    this.feedback('正在删除模型…')
+    try {
+      this.state = await modelRequest<AdminModels>(`/admin/models/${encodeURIComponent(id)}`, 'DELETE', { revision: this.state.revision })
+      if (!this.page.open || !this.options.isAdmin()) { this.state = undefined; return }
+      this.inline = undefined; this.defaultsDirty = false
+      this.render(); this.feedback(`已删除“${name}”，新请求立即生效。`)
+      await loadModelCatalog().catch(() => this.feedback('模型已删除，模型目录刷新失败，请点击刷新。', true))
+    } catch (error) {
+      const message = (error as Error).message
+      this.feedback(message, true); output.textContent = message; output.classList.add('is-error'); output.focus()
+    } finally { this.busy = false; controls.forEach((control, index) => control.disabled = disabled[index]) }
+  }
+  private confirm(title: string, detail: string, confirmLabel = '确认', danger = false) {
     return new Promise<boolean>(resolve => {
       const dialog = document.createElement('dialog'); dialog.className = 'model-confirm'
-      dialog.innerHTML = `<h2>${escape(title)}</h2><p>${escape(detail)}</p><footer><button type="button" data-no>取消</button><button type="button" class="model-primary" data-yes>确认</button></footer>`
+      dialog.innerHTML = `<h2>${escape(title)}</h2><p>${escape(detail)}</p><footer><button type="button" data-no>取消</button><button type="button" class="${danger ? 'model-danger' : 'model-primary'}" data-yes>${escape(confirmLabel)}</button></footer>`
       const finish = (yes: boolean) => { dialog.close(); dialog.remove(); resolve(yes) }
       dialog.addEventListener('cancel', event => { event.preventDefault(); finish(false) })
       dialog.querySelector('[data-no]')!.addEventListener('click', () => finish(false))
       dialog.querySelector('[data-yes]')!.addEventListener('click', () => finish(true))
-      document.body.append(dialog); dialog.showModal()
+      document.body.append(dialog); dialog.showModal(); dialog.querySelector<HTMLButtonElement>('[data-no]')!.focus()
     })
   }
 }

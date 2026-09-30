@@ -28,8 +28,10 @@ export function friendlyGenerationError(raw: string, fallback: string) {
     return result("模型服务额度不足", "服务商余额或配额不足，无法完成生成。", "检查服务商账户的余额与配额后再提交。");
   if (/\b429\b|rate.?limit|too many requests|请求过多|请求过于频繁/.test(lower))
     return result("请求过于频繁", "上游接口触发了请求频率限制。", "稍后重试，并检查接口并发限制。");
-  if (/队列已满|queue.*full/.test(lower))
-    return result("模型服务队列已满", "上游当前没有空闲生成名额。", "若任务显示等待重试，无需重复提交；否则可稍后再试。");
+  if (/队列持续繁忙|已自动重试\s*\d+\s*次/.test(text))
+    return result("云端队列长时间繁忙", text, "本次任务尚未被上游接受；请稍后重新生成，或切换其他视频模型，不要连续重复提交。");
+  if (/队列已满|队列繁忙|queue.*full/.test(lower))
+    return result("模型服务队列已满", "上游当前没有空闲生成名额，画布会按提示自动重试。", "任务仍显示排队时无需重复提交；达到重试上限后可稍后重新生成，或切换其他视频模型。");
   if (/\beof\b|连接中断|econnreset|socket hang up/.test(lower))
     return result("上游连接中断", "连接在返回完整生成结果前被关闭，不是达到等待时限。", "先确认上游任务是否完成，避免重复提交；持续出现时检查服务商连接和代理。");
   if (/结果保存到资产库失败|result archive|下载生成结果失败/.test(lower))
@@ -40,6 +42,10 @@ export function friendlyGenerationError(raw: string, fallback: string) {
     const seconds = text.match(/(\d+)\s*秒等待上限/)?.[1];
     return result("生成等待超时", seconds ? `本次请求已达到 ${seconds} 秒等待上限，仍未收到完整结果。` : "在等待时限内未收到完整结果；旧记录可能没有保留具体阶段。", "先确认上游任务是否仍在执行，避免重复生成或计费；如经常达到上限，请管理员检查等待时限与服务商耗时。");
   }
+  if (/tls\/代理连接失败|ssl_error_syscall|curl:\s*\(35\)/.test(lower))
+    return result("TLS 或代理连接失败", "与模型服务建立安全连接时中断，未取得可确认的上游响应。", "检查代理连通性后重试；若持续出现，请管理员检查代理的 TLS 转发。");
+  if (/代理协议连接失败|protocol_error|curl:\s*\(92\)|http\/2 stream/.test(lower))
+    return result("代理协议连接失败", "代理与模型服务之间的 HTTP/2 连接异常。", "请使用 HTTP/1.1 或检查代理；确认上游任务状态后再重试。");
   if (/network|网络连接失败|econnrefused|fetch failed/.test(lower))
     return result("模型服务网络异常", "连接模型服务时失败，未取得完整生成结果。", "检查服务商可用性和代理连接，并确认上游任务状态后再试。");
   if (/download.*image|image.*download|读取.*图片|参考图片.*(?:读取|下载)|首帧图片/.test(lower))

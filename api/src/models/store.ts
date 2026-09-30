@@ -11,18 +11,24 @@ export class ModelStore {
   private config: ModelConfiguration
   readonly secrets: ModelSecrets
   private readonly path: string
-  constructor(directory: string, _env = process.env) {
+  constructor(directory: string, env = process.env) {
     mkdirSync(directory, { recursive: true })
     this.path = `${directory}/model-config.json`
     this.secrets = new ModelSecrets(directory, existsSync(this.path))
     const existing = existsSync(this.path)
-    this.config = existing ? this.secrets.open<ModelConfiguration>(readFileSync(this.path, 'utf8')) : { revision: 0, schemaVersion: 2, imported: true, providers: [], models: [], defaults: {} }
+    const concurrency = {
+      image: boundedConcurrency(env.IMAGE_GENERATION_CONCURRENCY, 3),
+      video: boundedConcurrency(env.VIDEO_GENERATION_CONCURRENCY, 2),
+    }
+    this.config = existing ? this.secrets.open<ModelConfiguration>(readFileSync(this.path, 'utf8')) : { revision: 0, schemaVersion: 2, imported: true, providers: [], models: [], defaults: {}, concurrency }
     if (!existing) writeFileSync(this.path, this.secrets.seal(this.config), { mode: 0o600, flag: 'wx' })
-    else if ((this.config.schemaVersion || 0) < 2) {
+    else if ((this.config.schemaVersion || 0) < 2 || !validConcurrency(this.config.concurrency)) {
       // Keep the encrypted pre-migration configuration beside its original key.
-      const backup = `${this.path}.before-provider-v2`
-      if (!existsSync(backup)) copyFileSync(this.path, backup, constants.COPYFILE_EXCL)
-      this.save(this.config.revision, draft => Object.assign(draft, upgradeModelConfiguration(draft)))
+      if ((this.config.schemaVersion || 0) < 2) {
+        const backup = `${this.path}.before-provider-v2`
+        if (!existsSync(backup)) copyFileSync(this.path, backup, constants.COPYFILE_EXCL)
+      }
+      this.save(this.config.revision, draft => Object.assign(draft, (draft.schemaVersion || 0) < 2 ? upgradeModelConfiguration(draft) : draft, { concurrency }))
     }
   }
   private effective(): ModelConfiguration {
@@ -70,6 +76,19 @@ export class ModelStore {
     if (!draft.providers.some(p => p.id === next.providerId)) throw new ModelConfigError('请选择有效服务商')
     draft.models = [...draft.models.filter(m => m.id !== next.id), next]
   }) }
+  deleteModel(revision: unknown, id: string) { return this.save(revision, draft => {
+    if (!draft.models.some(model => model.id === id)) throw new ModelConfigError('模型不存在，可能已被其他管理员删除；请刷新后确认', 404)
+    draft.models = draft.models.filter(model => model.id !== id)
+    for (const purpose of Object.keys(draft.defaults) as ModelPurpose[])
+      if (draft.defaults[purpose] === id) draft.defaults[purpose] = ''
+  }) }
+  generationConcurrency() { return { ...this.config.concurrency! } }
+  saveGenerationConcurrency(body: Record<string, unknown>) { return this.save(body.revision, draft => {
+    const value = body.concurrency as Record<string, unknown> | undefined
+    if (!value || !Number.isInteger(value.image) || !Number.isInteger(value.video) || !validConcurrency(value as { image: number; video: number }))
+      throw new ModelConfigError('图片和视频并发数必须是 1–32 的整数')
+    draft.concurrency = { image: value.image as number, video: value.video as number }
+  }) }
   saveDefaults(body: Record<string, unknown>) { return this.save(body.revision, draft => {
     const defaults = body.defaults as Record<string, unknown>
     if (!defaults || typeof defaults !== 'object') throw new ModelConfigError('默认模型配置无效')
@@ -97,4 +116,13 @@ export class ModelStore {
     if (!model.enabled || !connection?.enabled || model.kind !== kind || !modelPurposes(model).includes(purpose)) throw new ModelConfigError('模型已停用、用途或类型不匹配，请重新选择')
     return structuredClone({ revision: config.revision, model, connection })
   }
+}
+
+function boundedConcurrency(value: unknown, fallback: number) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? Math.min(32, Math.max(1, Math.floor(parsed))) : fallback
+}
+
+function validConcurrency(value: ModelConfiguration['concurrency']): value is { image: number; video: number } {
+  return !!value && Number.isInteger(value.image) && value.image >= 1 && value.image <= 32 && Number.isInteger(value.video) && value.video >= 1 && value.video <= 32
 }

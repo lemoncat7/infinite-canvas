@@ -10,6 +10,9 @@ test('sanitized errors keep distinct actionable reasons', () => {
     ['上游拒绝生成请求（HTTP 400）', '上游拒绝生成请求'],
     ['模型响应格式异常：未获得可用图片结果', '模型返回结果格式异常'],
     ['模型调用失败，上游错误正文已隐藏', '生成失败，具体原因未记录'],
+    ['Agnes Video 2.5 Flash 云端队列持续繁忙，已自动重试 24 次，任务尚未被上游接受。', '云端队列长时间繁忙'],
+    ['模型服务 TLS/代理连接失败（network）', 'TLS 或代理连接失败'],
+    ['模型服务代理协议连接失败（network）', '代理协议连接失败'],
   ]) expect(friendlyGenerationError(raw, '失败').title).toBe(title);
   expect(friendlyGenerationError('模型等待超时：已达到本次请求 180 秒等待上限', '失败').message).toContain('180 秒');
 });

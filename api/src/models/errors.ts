@@ -1,7 +1,7 @@
 import { ModelConfigError } from './types.js'
 export type ModelErrorContext = {
   status?: number
-  stage?: '图片生成' | '参考图片读取' | '生成结果校验'
+  stage?: '图片生成' | '参考图片读取' | '生成结果校验' | '视频创建' | '视频执行' | '视频查询'
   timeoutMs?: number
   requestId?: string | null
 }
@@ -35,7 +35,11 @@ export function safeModelError(error: unknown, context: ModelErrorContext = {}):
     return result('上游连接中断（network）：连接在返回完整结果前被关闭；不能确认上游任务是否完成')
   if (error instanceof Error && error.name === 'TimeoutError' || /ETIMEDOUT|timeout|timed out|aborted due to timeout|超时/i.test(message))
     return result(`模型等待超时（timeout）${context.timeoutMs && Number.isFinite(context.timeoutMs) ? `：已达到本次请求 ${Math.ceil(context.timeoutMs / 1000)} 秒等待上限` : ''}；未收到完整结果，请先确认上游任务状态，避免重复提交`)
-  if (/ECONNRESET|ECONNREFUSED|fetch failed|socket|network|temporar|HTTP\/2 stream.*not closed cleanly|curl:\s*\(18\)|502|503|504/i.test(message))
+  if (/curl:\s*\(35\)|SSL_ERROR_SYSCALL|TLS (?:connect|handshake)/i.test(message))
+    return result('模型服务 TLS/代理连接失败（network）；未获得可确认的上游响应，请检查代理连通性后重试')
+  if (/curl:\s*\(92\)|HTTP\/2 stream.*not closed cleanly|PROTOCOL_ERROR/i.test(message))
+    return result('模型服务代理协议连接失败（network）；上游 HTTP/2 连接异常，请改用 HTTP/1.1 或检查代理后重试')
+  if (/ECONNRESET|ECONNREFUSED|fetch failed|socket|network|temporar|curl:\s*\((?:18|52|55|56)\)|502|503|504/i.test(message))
     return result('模型服务网络连接失败（network）；请检查服务商连接与代理')
   if (context.status && context.status >= 500) return result('上游生成服务异常；请稍后检查服务状态')
   if (context.status === 400 || context.status === 422) return result('上游拒绝生成请求；请检查模型参数与输入要求，未获得更具体的失败原因')

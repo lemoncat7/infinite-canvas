@@ -2,7 +2,7 @@ import { apiFetch } from '../services/api'
 import type { Catalog } from './catalog'
 export type KeyStatus = { id: string; status: 'ready' | 'cooling'; cooldownUntil: string | null; reason?: string; discovery?: Omit<KeyStatus, 'discovery'> }
 export type ProviderView = { id: string; name: string; baseUrl: string; proxyUrl: string; enabled: boolean; hasKey: boolean; readOnly: boolean; keyCount?: number; keys?: KeyStatus[] }
-export type AdminModels = Catalog & { imported: boolean; providers: ProviderView[] }
+export type AdminModels = Catalog & { imported: boolean; providers: ProviderView[]; concurrency: { image: number; video: number } }
 export async function modelRequest<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   let response: Response
   try {

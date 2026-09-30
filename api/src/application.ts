@@ -20,7 +20,7 @@ import {
   startFallbackProbe,
   stopFallbackProbe,
 } from "./generation/fallback.js";
-import { stopGenerationQueue } from "./generation/queue.js";
+import { pumpGenerationQueue, stopGenerationQueue } from "./generation/queue.js";
 import { closeNotificationStreams } from "./notifications/service.js";
 import { registerGenerationRoutes } from "./generation/routes.js";
 import { app } from "./http/app.js";
@@ -43,6 +43,8 @@ startFallbackProbe();
 registerModelRoutes(app, modelStore, {
   user: requireUser,
   admin: requireAdmin,
+}, {
+  generationConcurrencyChanged: pumpGenerationQueue,
 });
 registerHttpStatusRoutes(app);
 registerSpeechRoutes(app);

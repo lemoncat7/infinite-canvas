@@ -80,10 +80,13 @@ OPENAI_IMAGE_DEFAULT_MODEL=gpt-image-2
 AGNES_VIDEO_BASE_URL=https://apihub.agnes-ai.com
 AGNES_VIDEO_API_KEY=
 AGNES_VIDEO_API_KEY_2=
+VIDEO_PROVIDER_QUEUE_MAX_RETRIES=24
 
 REGISTRATION_INVITE_CODE=
 GENERATION_PUBLIC_BASE_URL=
 ```
+
+管理员可在“全局模型 → 生成并发”中修改图片和视频并发数，保存后立即生效。环境变量只用于首次初始化，之后以已保存的全局设置为准。
 
 请勿提交 `.env`。模型密钥、代理地址和管理员密钥只应进入 API 容器，不应发送到浏览器或写入仓库。
 
@@ -95,9 +98,9 @@ GENERATION_PUBLIC_BASE_URL=
 
 当前生成任务会先写入数据库队列，再由后端工作器领取执行：
 
-- 图片任务默认最多并发 8 个
-- 视频任务默认最多并发 2 个
+- 图片、视频任务使用各自独立的全局并发上限，超出的任务排队等待
 - Agnes 支持多密钥轮换和单密钥冷却
+- 视频上游队列繁忙时自动退避重试，达到配置上限后给出明确失败原因
 - 生成结果成功后自动写入当前项目资产库
 - 服务重启时会将中断任务标记为失败，避免节点永久停留在生成中
 

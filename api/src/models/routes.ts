@@ -10,9 +10,9 @@ import { verifyProviderKey } from './key-verification.js'
 export function registerModelRoutes(app: FastifyInstance, store: ModelStore, guards: {
   user(request: FastifyRequest, reply: FastifyReply): unknown;
   admin(request: FastifyRequest, reply: FastifyReply): unknown;
-}) {
+}, events: { generationConcurrencyChanged?(): void } = {}) {
   const busy = new Set<string>()
-  const route = (method: 'GET' | 'POST' | 'PUT', url: string, action: (body: Record<string, unknown>, id: string) => unknown, admin = true) => {
+  const route = (method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, action: (body: Record<string, unknown>, id: string) => unknown, admin = true) => {
     app.route({ method, url, handler: async (request, reply) => {
       if (!(admin ? guards.admin : guards.user)(request, reply)) return
       reply.header('cache-control', 'no-store')
@@ -36,7 +36,13 @@ export function registerModelRoutes(app: FastifyInstance, store: ModelStore, gua
   route('PUT', '/admin/model-providers/:id', (body, id) => store.saveProvider(body, id))
   route('POST', '/admin/models', body => store.saveModel(body))
   route('PUT', '/admin/models/:id', (body, id) => store.saveModel(body, id))
+  route('DELETE', '/admin/models/:id', (body, id) => store.deleteModel(body.revision, id))
   route('PUT', '/admin/model-defaults', body => store.saveDefaults(body))
+  route('PUT', '/admin/generation-concurrency', body => {
+    const result = store.saveGenerationConcurrency(body)
+    events.generationConcurrencyChanged?.()
+    return result
+  })
   async function exclusive<T>(key: string, run: () => Promise<T>) {
     if (busy.has(key) || busy.size >= 10) throw new ModelConfigError('已有测试正在执行，请稍后重试', 429)
     busy.add(key); try { return await run() } finally { busy.delete(key) }

@@ -199,7 +199,10 @@ export class AgnesVideoProvider implements GenerationProvider {
     // compatible with the configured LAN proxy; Undici stalls on this proxy/API pair.
     const marker = '\n__AGNES_HTTP_STATUS__:'
     const args = [
-      '--silent', '--show-error', '--dump-header', '-',
+      // The configured LAN proxies have intermittently reset negotiated HTTP/2
+      // streams. Agnes does not require HTTP/2, so keep this transport on the
+      // more predictable HTTP/1.1 path.
+      '--http1.1', '--silent', '--show-error', '--dump-header', '-',
       '--connect-timeout', '10', '--max-time', String(Math.ceil(timeout / 1000)),
       '--write-out', `${marker}%{http_code}`,
       '--header', `Authorization: Bearer ${apiKey}`,

@@ -62,5 +62,5 @@ export function validateGeneration(model: GlobalModel, references: number, param
   for (const [key, values] of [['size', c.sizes], ['resolution', c.resolutions], ['aspect_ratio', c.aspectRatios]] as const) {
     if (parameters[key] !== undefined && values.length && !values.includes(String(parameters[key]))) throw new ModelConfigError(`模型不支持当前 ${key}，请重新选择`)
   }
-  if (model.kind === 'video' && parameters.seconds !== undefined && (!Number.isFinite(Number(parameters.seconds)) || Number(parameters.seconds) < c.minSeconds || Number(parameters.seconds) > c.maxSeconds)) throw new ModelConfigError(`视频时长须为 ${c.minSeconds}–${c.maxSeconds} 秒`)
+  if (model.kind === 'video' && parameters.seconds !== undefined && (!Number.isSafeInteger(Number(parameters.seconds)) || Number(parameters.seconds) < c.minSeconds || Number(parameters.seconds) > c.maxSeconds)) throw new ModelConfigError(`视频时长须为 ${c.minSeconds}–${c.maxSeconds} 秒的整数；当前填写 ${String(parameters.seconds).slice(0, 24)}`)
 }

@@ -26,6 +26,11 @@ export const configuredImageEditConcurrency = Number(
   process.env.IMAGE_EDIT_CONCURRENCY || 3,
 );
 
+export const providerQueueRetryLimit = Math.max(
+  1,
+  Math.floor(Number(process.env.VIDEO_PROVIDER_QUEUE_MAX_RETRIES || 24) || 24),
+);
+
 export const generationConcurrency: Record<JobInput["kind"], number> = {
   image: Number.isFinite(configuredImageConcurrency)
     ? Math.max(1, Math.floor(configuredImageConcurrency))
@@ -78,6 +83,7 @@ export function scheduleGenerationQueueWake() {
 
 export function pumpGenerationQueue() {
   if (stopping || queuePumpRunning) return;
+  Object.assign(generationConcurrency, modelStore.generationConcurrency());
   if (!recoveredTracking) { recoverTracking(); recoveredTracking = true; }
   queuePumpRunning = true;
   try {
@@ -320,10 +326,28 @@ export async function executeQueuedJob(job: Record<string, unknown>) {
           Math.floor(Math.random() * 5000),
         retryAfter = new Date(Date.now() + retryDelayMs).toISOString(),
         now = new Date().toISOString();
+      const modelLabel = model === "agnes-video-2.5-flash"
+        ? "Agnes Video 2.5 Flash"
+        : model === "agnes-video-2.5"
+          ? "Agnes Video 2.5"
+          : "视频模型";
+      if (retryCount >= providerQueueRetryLimit) {
+        const message = `${modelLabel} 云端队列持续繁忙，已自动重试 ${retryCount} 次，任务尚未被上游接受。请稍后重新生成，或切换其他视频模型。`;
+        database.run(
+          "UPDATE jobs SET status='failed',progress=0,error=?,retry_after=NULL,retry_count=?,updated_at=? WHERE id=? AND status!='canceled'",
+          [message, retryCount, now, id],
+        );
+        persist();
+        logger.warn(
+          { jobId: id, retryCount, retryLimit: providerQueueRetryLimit },
+          "video provider queue retry limit reached",
+        );
+        return;
+      }
       database.run(
         "UPDATE jobs SET status='queued',progress=0,error=?,retry_after=?,retry_count=?,updated_at=? WHERE id=? AND status!='canceled'",
         [
-          "Agnes 云端队列繁忙，正在等待自动重试",
+          `${modelLabel} 云端队列繁忙，正在自动重试（${retryCount}/${providerQueueRetryLimit}，约 ${Math.max(1, Math.ceil(retryDelayMs / 60000))} 分钟后）`,
           retryAfter,
           retryCount,
           now,

@@ -17,6 +17,7 @@ export type GlobalModel = {
 export type ModelConfiguration = {
   revision: number; imported: boolean; schemaVersion?: number; providers: ProviderConnection[]; models: GlobalModel[];
   defaults: Partial<Record<ModelPurpose, string>>;
+  concurrency?: { image: number; video: number };
 }
 export type ResolvedModel = { revision: number; model: GlobalModel; connection: ProviderConnection }
 export class ModelConfigError extends Error {
