@@ -18,8 +18,10 @@ test('MCP and existing HTTP routes share authorization, canvas conflicts, jobs a
   delete process.env.SDCPP_IMAGE_BASE_URL;
   delete process.env.MCP_ALLOWED_HOSTS;
   delete process.env.MCP_ALLOWED_ORIGINS;
-  delete process.env.MCP_PUBLIC_BASE_URL;
-  delete process.env.GENERATION_PUBLIC_BASE_URL;
+  // Neither legacy MCP nor generation-provider origins may override client links.
+  process.env.MCP_PUBLIC_BASE_URL = 'https://old-mcp.invalid';
+  process.env.GENERATION_PUBLIC_BASE_URL = 'https://provider-only.invalid';
+  delete process.env.MCP_TRUSTED_PROXY_IPS;
   let providerCalls = 0;
   const upstream = createServer(async (req, res) => {
     providerCalls++;
@@ -150,6 +152,22 @@ test('MCP and existing HTTP routes share authorization, canvas conflicts, jobs a
     assert.equal(data.kind, 'image');
     assert.equal(data.download.path, job.result_url);
     assert.ok(data.download.url.startsWith(base + '/api/asset-downloads/'));
+    // A different client origin must never reuse the previous client's origin.
+    for (const host of ['192.168.2.9:4173', 'canvas.example:1443']) {
+      const result = await api('POST', '/mcp', {
+        jsonrpc: '2.0', id: 31, method: 'tools/call',
+        params: { name: 'viora_asset_get', arguments: { jobId: job.id } },
+      }, alice, { host, accept: 'application/json, text/event-stream' });
+      assert.equal(result.statusCode, 200);
+      const output = result.json().result;
+      assert.ok(!output.isError);
+      const link = new URL(output.structuredContent.data.download.url);
+      assert.equal(link.origin, `http://${host}`);
+      assert.ok(output.content.some(item => item.type === 'resource_link' && item.uri === link.href));
+      const bytes = await app.inject({ method: 'GET', url: link.pathname.slice(4) + link.search });
+      assert.equal(bytes.statusCode, 200);
+      assert.ok(bytes.rawPayload.length > 0);
+    }
     const signedUrl = new URL(data.download.url);
     const route = signedUrl.pathname.slice(4) + signedUrl.search;
     const original = await app.inject({ method: 'GET', url: route });

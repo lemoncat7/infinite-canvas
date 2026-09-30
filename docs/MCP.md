@@ -147,7 +147,9 @@ node scripts/mcp-upload-image.mjs <项目ID> /本地路径/参考图.png
 
 链接签名密钥 `asset-download.key` 保存在数据目录（权限 600），需要随数据库一起备份；重启不会无故使未过期链接失效。API 和内置 Nginx 对短时下载路由禁用请求访问日志。若还有外部反向代理／网关，也应避免记录这一地址的查询参数。
 
-有 HTTPS、端口转发或多层代理时，建议设置 `MCP_PUBLIC_BASE_URL=https://你的域名:端口` 为用户可访问的**网页站点根地址**（不要包含 `/api/mcp`）。未设置时优先使用 `GENERATION_PUBLIC_BASE_URL`，再根据 MCP 请求的协议和 Host 推导。直连 API 端口时也应配置网页入口，避免拿到不可访问的 `/api` 地址。Compose 已透传此配置。
+MCP 资产链接随当前连接的协议、Host 和端口返回：例如通过 `http://192.168.2.9:4173/api/mcp` 连接，下载也使用该 IP 和端口；通过 HTTPS 域名连接则保留该域名。`MCP_PUBLIC_BASE_URL` 不再覆盖 MCP 链接，`GENERATION_PUBLIC_BASE_URL` 仅供生成服务商使用，不影响 MCP 客户端。
+
+MCP 应连接网页入口的 `/api/mcp`（下载路径使用 `/api/asset-downloads/`），不要直连未提供 `/api/` 前缀的后端端口。反向代理须保留 Host（含端口）。HTTPS 在代理终止时，设置 `MCP_TRUSTED_PROXY_IPS` 为 API **直接连接的代理 IP**，逗号分隔；该代理须覆盖并提供准确的 `X-Forwarded-Proto`，如改写 Host 还需覆盖 `X-Forwarded-Host`。未信任的连接所带转发头一律忽略，多层代理需由受控配置传递原始协议，不接受客户端自行指定。Compose 已透传此配置。部署升级时需同步检查此代理配置，旧的固定公网地址配置不能替代它。
 
 默认拒绝带 `Origin` 的浏览器跨域请求。确有可信浏览器客户端时，配置 `MCP_ALLOWED_ORIGINS` 为精确 Origin 的逗号分隔白名单（例如 `https://agent.example.com`）；这不启用通用 CORS。可用 `MCP_ALLOWED_HOSTS` 限制精确 Host（含非默认端口），反向代理应保留原 Host。原有 Nginx `/api/` 转发已兼容，无需另开公网端口。
 

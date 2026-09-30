@@ -4,6 +4,7 @@ import { currentUser } from "../auth/service.js";
 import { VioraGateway } from "./gateway.js";
 import { createVioraMcp } from "./tools.js";
 import { UploadSessions } from './upload-sessions.js';
+import { mcpRequestOrigin } from './request-origin.js';
 
 /** Stateless MCP: each request has its own server/transport and authenticated user.
  * No in-memory session can leak between tokens or become stale after a restart.
@@ -47,24 +48,17 @@ export function registerMcpRoutes(app: FastifyInstance) {
           .code(405)
           .header("allow", "POST")
           .send({ error: "Stateless MCP supports POST only" });
-      const configuredOrigin =
-        process.env.MCP_PUBLIC_BASE_URL ||
-        process.env.GENERATION_PUBLIC_BASE_URL;
-      const forwarded = request.headers["x-forwarded-proto"];
-      const protocol = forwarded === "https" ? "https" : request.protocol;
-      const origin = new URL(
-        configuredOrigin || `${protocol}://${request.headers.host}`,
-      );
-      if (
-        !["http:", "https:"].includes(origin.protocol) ||
-        origin.username ||
-        origin.password
-      )
+      let origin: string;
+      try {
+        origin = mcpRequestOrigin(request);
+        if (hosts.size && !hosts.has(new URL(origin).host)) throw new Error('Host not allowed');
+      } catch {
         return reply
-          .code(503)
-          .send({ error: "Invalid MCP public URL configuration" });
+          .code(400)
+          .send({ error: "Invalid MCP request origin" });
+      }
       const server = createVioraMcp(
-        new VioraGateway(app, authorization, origin.origin),
+        new VioraGateway(app, authorization, origin),
         uploads,
       );
       const transport = new StreamableHTTPServerTransport({
