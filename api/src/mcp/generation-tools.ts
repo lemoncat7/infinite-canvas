@@ -5,6 +5,7 @@ import { identifier, requestId, result } from "./contracts.js";
 import { ApiFailure, projectPath, type VioraGateway } from "./gateway.js";
 import { syncGenerationCanvas, type McpJob } from './generation-canvas.js';
 import { assertReferenceInputs } from './reference-inputs.js';
+import { generationRecovery } from './generation-recovery.js';
 
 export function registerGenerationTools(server: McpServer, api: VioraGateway) {
   server.registerTool(
@@ -18,7 +19,7 @@ export function registerGenerationTools(server: McpServer, api: VioraGateway) {
         requestId,
         kind: z.enum(["image", "video"]),
         prompt: z.string().trim().min(1).max(4000),
-        model: identifier.optional(),
+        model: identifier.optional().describe('Prefer the enabled model id returned by viora_models_list (including global: IDs). A unique upstream model name is also accepted, but duplicate names are ambiguous. Job responses may contain the upstream model name rather than the selected catalog ID; these need not be equal.'),
         inputUrls: z.array(z.string().min(1).max(4000)).max(16).optional().describe('Actual reference image URLs in input order. For video, must match every connected image on the GENERATOR in the same order; mismatches are rejected before billing. MCP links references to the generator, never the video result.'),
         parameters: z
           .object({
@@ -69,7 +70,7 @@ export function registerGenerationTools(server: McpServer, api: VioraGateway) {
         // A failed follow-up must still report that generation was accepted.
         try {
           const latest = await api.call<McpJob>('GET', `/jobs/${encodeURIComponent(String(job.id))}`);
-          return { ...job, ...latest, ...await syncGenerationCanvas(api, latest, { createMissing: true }) };
+          return { ...job, ...latest, recovery: generationRecovery(latest), ...await syncGenerationCanvas(api, latest, { createMissing: true }) };
         } catch {
           return { ...job, canvasLinked: false, canvasSync: 'pending',
             warning: 'Job accepted. Retry viora_generation_get or viora_generation_sync with this jobId; do not generate again.' };
@@ -86,7 +87,11 @@ export function registerGenerationTools(server: McpServer, api: VioraGateway) {
     },
     ({ jobId, syncCanvas }) => result(async () => {
       const job = await api.call<McpJob>('GET', `/jobs/${encodeURIComponent(jobId)}`);
-      return syncCanvas ? { ...job, ...await syncGenerationCanvas(api, job) } : job;
+      const response = { ...job, recovery: generationRecovery(job) };
+      if (!syncCanvas) return response;
+      try { return { ...response, ...await syncGenerationCanvas(api, job) }; }
+      catch { return { ...response, canvasSync: 'pending', canvasLinked: false,
+        warning: 'Job status was read successfully; only canvas synchronization failed. Retry generation_sync with this jobId. Do not submit another generation.' }; }
     }),
   );
   server.registerTool(
@@ -98,7 +103,7 @@ export function registerGenerationTools(server: McpServer, api: VioraGateway) {
     },
     ({ jobId, createMissing }) => result(async () => {
       const job = await api.call<McpJob>('GET', `/jobs/${encodeURIComponent(jobId)}`);
-      return { ...job, ...await syncGenerationCanvas(api, job, { createMissing, repairReferences: true }) };
+      return { ...job, recovery: generationRecovery(job), ...await syncGenerationCanvas(api, job, { createMissing, repairReferences: true }) };
     }),
   );
 }

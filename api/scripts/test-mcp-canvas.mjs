@@ -5,6 +5,37 @@ import { prepareMcpNodes } from '../dist/mcp/canvas-node-contract.js';
 import { ApiFailure } from '../dist/mcp/gateway.js';
 import { registerGenerationTools } from '../dist/mcp/generation-tools.js';
 import { createHash } from 'node:crypto';
+import { generationRecovery } from '../dist/mcp/generation-recovery.js';
+
+test('terminal generation failures tell callers to stop polling and never auto-resubmit', () => {
+  for (const status of ['failed', 'canceled', 'cancelled']) {
+    const recovery = generationRecovery({ id: 'failed-job', status });
+    assert.equal(recovery.terminal, true);
+    assert.equal(recovery.mayResubmit, false);
+    assert.match(recovery.message, /requestId/);
+  }
+  assert.equal(generationRecovery({ id: 'job', status: 'running' }).nextAction, 'poll_same_job');
+  assert.equal(generationRecovery({ id: 'job', status: 'succeeded', result_url: 'asset' }).nextAction, 'retrieve_asset');
+});
+
+test('job status and recovery survive canvas sync failure; read-only queries never touch canvas', async () => {
+  const tools = new Map(), calls = [];
+  const job = { id: 'failed-job', status: 'failed', error: 'network', project_id: 'p', node_id: 1 };
+  const api = { async call(method, path) {
+    calls.push({ method, path });
+    if (path.startsWith('/jobs/')) return job;
+    throw new Error('canvas unavailable');
+  } };
+  registerGenerationTools({ registerTool(name, _schema, handler) { tools.set(name, handler); } }, api);
+  const response = await tools.get('viora_generation_get')({ jobId: job.id, syncCanvas: true });
+  assert.equal(response.structuredContent.data.status, 'failed');
+  assert.equal(response.structuredContent.data.error, 'network');
+  assert.equal(response.structuredContent.data.canvasSync, 'pending');
+  assert.equal(response.structuredContent.data.recovery.terminal, true);
+  calls.length = 0;
+  await tools.get('viora_generation_get')({ jobId: job.id, syncCanvas: false });
+  assert.deepEqual(calls, [{ method: 'GET', path: '/jobs/failed-job' }]);
+});
 
 function fixture(kind = 'video') {
   const source = { id: 1, kind, x: 0, y: 0, width: 280, height: 220, title: 'Source', body: 'Keep my prompt', model: 'chosen-model', status: 'idle' };
