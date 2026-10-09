@@ -13,6 +13,7 @@ import { localImageFallback } from "./fallback.js";
 import { updateJob } from "./job-state.js";
 import { checkTracking, deferTracking, loadAcceptedTask, recoverTracking, saveAcceptedTask } from './task-tracking.js';
 import { TrackingDeferred, TrackingStopped } from '../providers/task-tracking.js';
+import { AgnesQueueCapacityError } from '../providers/agnes-errors.js';
 
 export const configuredImageConcurrency = Number(
   process.env.IMAGE_GENERATION_CONCURRENCY || 3,
@@ -330,6 +331,7 @@ export async function executeQueuedJob(job: Record<string, unknown>) {
       return;
     }
     if (kind === "video" && isProviderQueueCapacityError(error)) {
+      const diagnostic = error instanceof AgnesQueueCapacityError ? `；${error.message}` : '';
       const retryCount = Number(job.retry_count || 0) + 1,
         retryDelayMs =
           Math.min(300_000, 20_000 * 2 ** Math.min(4, retryCount - 1)) +
@@ -342,22 +344,22 @@ export async function executeQueuedJob(job: Record<string, unknown>) {
           ? "Agnes Video 2.5"
           : "视频模型";
       if (retryCount >= providerQueueRetryLimit) {
-        const message = `${modelLabel} 云端队列持续繁忙，已自动重试 ${retryCount} 次，任务尚未被上游接受。请稍后重新生成，或切换其他视频模型。`;
+        const message = `${modelLabel} 等待上游接单失败，已自动重试 ${retryCount} 次；上游尚未返回任务 ID，并未进入云端生成队列。请稍后重新生成，或切换其他视频模型${diagnostic}`;
         database.run(
-          "UPDATE jobs SET status='failed',progress=0,progress_estimated=0,generation_stage='cloud_queue',error=?,retry_after=NULL,retry_count=?,updated_at=? WHERE id=? AND status!='canceled'",
+          "UPDATE jobs SET status='failed',progress=0,progress_estimated=0,generation_stage='upstream_submission',error=?,retry_after=NULL,retry_count=?,updated_at=? WHERE id=? AND status!='canceled'",
           [message, retryCount, now, id],
         );
         persist();
         logger.warn(
-          { jobId: id, retryCount, retryLimit: providerQueueRetryLimit },
+          { jobId: id, retryCount, retryLimit: providerQueueRetryLimit, diagnostic },
           "video provider queue retry limit reached",
         );
         return;
       }
       database.run(
-        "UPDATE jobs SET status='queued',progress=0,progress_estimated=0,generation_stage='cloud_queue',error=?,retry_after=?,retry_count=?,updated_at=? WHERE id=? AND status!='canceled'",
+        "UPDATE jobs SET status='queued',progress=0,progress_estimated=0,generation_stage='upstream_submission',error=?,retry_after=?,retry_count=?,updated_at=? WHERE id=? AND status!='canceled'",
         [
-          `${modelLabel} 云端队列繁忙，正在自动重试（${retryCount}/${providerQueueRetryLimit}，约 ${Math.max(1, Math.ceil(retryDelayMs / 60000))} 分钟后）`,
+          `${modelLabel} 等待上游接单，尚无任务 ID；正在本地等待重试（${retryCount}/${providerQueueRetryLimit}，约 ${Math.max(1, Math.ceil(retryDelayMs / 60000))} 分钟后）${diagnostic}`,
           retryAfter,
           retryCount,
           now,
@@ -366,7 +368,7 @@ export async function executeQueuedJob(job: Record<string, unknown>) {
       );
       persist();
       logger.warn(
-        { jobId: id, retryCount, retryAfter, retryDelayMs },
+        { jobId: id, retryCount, retryAfter, retryDelayMs, diagnostic },
         "video provider queue full, job requeued",
       );
       return;
@@ -380,6 +382,7 @@ export async function executeQueuedJob(job: Record<string, unknown>) {
 }
 
 export function isProviderQueueCapacityError(error: unknown) {
+  if (error instanceof AgnesQueueCapacityError) return true;
   const message = error instanceof Error ? error.message : String(error);
   return /video queue is full|queue full|queue is full|server queue.*full|队列.*(?:已满|繁忙)/i.test(
     message,

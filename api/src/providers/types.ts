@@ -1,6 +1,6 @@
 export type GenerationKind = 'image' | 'video'
 export type GenerationStatus = 'queued' | 'running' | 'succeeded' | 'failed'
-export type GenerationStage = 'local_queue' | 'cloud_queue' | 'local_generation' | 'cloud_generation'
+export type GenerationStage = 'local_queue' | 'upstream_submission' | 'cloud_queue' | 'local_generation' | 'cloud_generation'
 
 export type GenerationInput = {
   internalJobId: string

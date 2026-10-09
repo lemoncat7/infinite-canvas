@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { currentProviderKeys, ProviderKeyCooldownError } from '../models/key-pool.js'
 import { agnesResponseError } from './agnes-errors.js'
+import { readAgnesTask as readTask, agnesTaskIdentity, type AgnesTask } from './agnes-task.js'
 import { createAgnes25Body, isAgnesVideo25 } from './agnes-video-v25.js'
 import { ModelConfigError } from '../models/types.js'
 import sharp from 'sharp'
@@ -10,27 +11,6 @@ import { EMBEDDED_ONLY, URL_FIRST, prepareReferenceImages, canFallbackReference 
 import { TrackingDeferred } from './task-tracking.js'
 import type { AcceptedVideoTask } from './task-tracking.js'
 import { estimatedVideoProgress, exactProgress, expectedVideoDuration, timestampMilliseconds } from './progress.js'
-
-type AgnesTask = {
-  id?: string
-  task_id?: string
-  video_id?: string
-  status?: string
-  progress?: number
-  url?: string
-  seconds?: string
-  size?: string
-  created_at?: number | string
-  started_at?: number | string
-  completed_at?: number | string
-  internal_progress?: number
-  internal_status?: string
-  metadata?: { url?: string; size_mapping?: Record<string, unknown> }
-  error?: { message?: string } | string | null
-  message?: string
-  code?: string
-  data?: { param?: string }
-}
 
 const agnesCooldownMs = Math.max(1000, Number(process.env.AGNES_VIDEO_KEY_COOLDOWN_MS || 60000))
 const agnesCredentialPool = [process.env.AGNES_VIDEO_API_KEY, process.env.AGNES_VIDEO_API_KEY_2, ...(process.env.AGNES_VIDEO_API_KEYS || '').split(',')]
@@ -120,6 +100,7 @@ export class AgnesVideoProvider implements GenerationProvider {
     onUpdate({ status: 'running', progress: 0, stage: 'local_generation' })
     console.info('[agnes-video] preparing ordered inputs', { internalJobId: input.internalJobId, imageCount: images.length, orderedInputIndexes: images.map((_, index) => index + 1) })
     console.info('[agnes-video] credential assigned', { internalJobId:input.internalJobId, channel:credential.channel, channelCount:agnesCredentialPool.length })
+    onUpdate({ status: 'running', progress: 0, progressEstimated: false, stage: 'upstream_submission' })
     let response = await this.request('/v1/videos', { method: 'POST', body: createAgnesRequestBody(input, images, settings, this.defaultModel, referenceMode) }, this.timeoutForImages(images), credential.key)
     let created = await readTask(response)
     if (!response.ok && canFallbackReference(response.status, created, images)) {
@@ -139,13 +120,13 @@ export class AgnesVideoProvider implements GenerationProvider {
       response = await this.request('/v1/videos', { method:'POST', body:createAgnesRequestBody(input, images, reducedSettings, this.defaultModel, referenceMode) }, this.timeoutForImages(images), credential.key)
       created = await readTask(response)
     }
-    if (!response.ok) throw agnesResponseError(response.status, created, 'create')
-    const videoId = created.video_id || created.task_id || created.id
-    const taskId = created.task_id || created.id || videoId
-    if (!videoId) throw new Error('Agnes 创建任务响应中没有 video_id 或 task_id')
+    if (!response.ok) throw agnesResponseError(response.status, created, 'create', response.headers)
+    const identity = agnesTaskIdentity(created)
+    if (!identity) throw new ModelConfigError('上游返回成功但未返回有效任务 ID，无法确认是否已接单；已停止自动提交，请联系服务商核查，避免重复生成', 502)
+    const { id: videoId, taskId } = identity
     const acceptedTask: AcceptedVideoTask = { provider: this.name, id: videoId, taskId, key: currentProviderKeys()?.pinnedKey() ?? credential.key }
     input.saveAcceptedTask?.(acceptedTask)
-    onUpdate({ status: 'running', progress: 0, stage: 'cloud_queue' })
+    onUpdate({ status: 'running', progress: 0, stage: 'cloud_queue', resultMetadata: { videoId, taskId } })
     console.info('[agnes-video] task created', { internalJobId: input.internalJobId, videoId, model: input.model || this.defaultModel, imageCount: images.length, mode: images.length > 1 ? referenceMode : images.length ? 'ti2vid' : 'text' })
 
     return this.poll(input, onUpdate, acceptedTask)
@@ -258,7 +239,7 @@ export class AgnesVideoProvider implements GenerationProvider {
         headers = new Headers()
         for (const line of body.slice(0, boundary.index).split(/\r?\n/).slice(1)) {
           const colon = line.indexOf(':')
-          if (colon > 0 && line.slice(0, colon).toLowerCase() === 'retry-after') headers.set('retry-after', line.slice(colon + 1).trim())
+          if (colon > 0 && ['retry-after', 'x-request-id'].includes(line.slice(0, colon).toLowerCase())) headers.set(line.slice(0, colon), line.slice(colon + 1).trim())
         }
         body = body.slice(boundary.index + boundary[0].length)
       }
@@ -392,7 +373,6 @@ function reduceAgnesFrames(settings: Record<string, unknown>) {
   return { ...settings, frame_rate:frameRate, num_frames:Math.min(241, numFrames) }
 }
 
-async function readTask(response: Response) { try { return await response.json() as AgnesTask } catch { return {} } }
 function taskError(task: AgnesTask) { return typeof task.error === 'string' ? task.error : task.error?.message || task.message || '' }
 function wait(ms: number) { return new Promise(resolve => setTimeout(resolve, ms)) }
 function required(name: string) { const value = process.env[name]; if (!value) throw new Error(`${name} is required`); return value }

@@ -1,8 +1,8 @@
 import type { FlowNode } from '../nodes/node-types'
 
-export type GenerationStage = 'local_queue' | 'cloud_queue' | 'local_generation' | 'cloud_generation'
+export type GenerationStage = 'local_queue' | 'upstream_submission' | 'cloud_queue' | 'local_generation' | 'cloud_generation'
 
-const stages = new Set<GenerationStage>(['local_queue', 'cloud_queue', 'local_generation', 'cloud_generation'])
+const stages = new Set<GenerationStage>(['local_queue', 'upstream_submission', 'cloud_queue', 'local_generation', 'cloud_generation'])
 
 export function resolvedGenerationStage(node: Pick<FlowNode, 'status' | 'progress' | 'model' | 'generationStage' | 'kind'>): GenerationStage | undefined {
   if (node.status !== 'queued' && node.status !== 'running') return undefined
@@ -16,6 +16,7 @@ export function generationStageLabel(node: Pick<FlowNode, 'status' | 'progress' 
   if (!stage) return ''
   const label: Record<GenerationStage, string> = {
     local_queue: '本地排队',
+    upstream_submission: '等待上游接单',
     cloud_queue: '云端排队',
     local_generation: '本地生成',
     cloud_generation: '云端生成',

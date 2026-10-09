@@ -28,3 +28,21 @@ is unchanged for an uninterrupted execution; resumed jobs conservatively do not
 resubmit a failed task.
 
 Regression command: `cd api && npm run test:tracking`.
+
+## Submission versus acceptance (Agnes)
+
+- `upstream_submission` means **等待上游接单**. A capacity rejection such as
+  HTTP 503 / `video_queue_full` contains no task ID; retries happen locally.
+  These errors retain sanitized HTTP status, error code and `X-Request-Id`.
+  Ordinary HTTP 429 is not classified as queue capacity.
+- `cloud_queue` is emitted only after a valid task identity has been saved.
+  Creation accepts string `video_id`, `task_id` or `id`, including a `data`
+  object wrapper. The public `result_metadata` contains the accepted IDs only;
+  credentials remain exclusively in the encrypted checkpoint.
+- A successful HTTP response without a valid ID is ambiguous: fail with a
+  specific explanation and **do not automatically resubmit**. No ID is invented
+  from an error or a request correlation ID.
+- Queued legacy capacity retries without checkpoints migrate to the submission
+  phase. Already accepted tasks retain their phase and resume their original ID.
+- Regression: `cd api && npm run test:agnes`; browser coverage verifies the
+  admission label at mobile width and resets stale progress to zero.

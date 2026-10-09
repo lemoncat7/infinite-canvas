@@ -283,6 +283,8 @@ test("generation state preserves stale progress but accepts an explicit cloud qu
   const stageNode = { kind: "video" as const, status: "running", progress: 10, model: "agnes-video-2.5-flash" };
   expect(generationStageLabel({ ...stageNode, status: "queued", generationStage: "local_queue" })).toBe("本地排队");
   expect(generationStageLabel({ ...stageNode, generationStage: "cloud_queue" })).toBe("云端排队");
+  expect(generationStageLabel({ ...stageNode, generationStage: "upstream_submission" })).toBe("等待上游接单");
+  expect(mergeGenerationState({ status: "running", progress: 38 }, { status: "queued", progress: 0, generation_stage: "upstream_submission" }).progress).toBe(0);
   expect(generationStageLabel({ ...stageNode, generationStage: "local_generation" })).toBe("本地生成 · 10%");
   expect(generationStageLabel({ ...stageNode, generationStage: "cloud_generation", progressEstimated: true })).toBe("云端生成 · 预计 10%");
 });
@@ -301,6 +303,22 @@ test("video result card exposes the cloud queue phase at mobile width", async ({
   const badge = page.locator('.flow-node[data-id="1"] .video-generation-count');
   await expect(badge).toHaveText("云端排队", { timeout: 15_000 });
   await expect(badge).toHaveAttribute("data-stage", "cloud_queue");
+});
+
+test("video result card distinguishes admission wait from accepted cloud queue", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  const { canvas } = await mockApi(page, 1);
+  Object.assign(canvas.nodes[0], {
+    kind: "video", role: "result", model: "agnes-video-2.5-flash",
+    status: "queued", progress: 0, generationStage: "upstream_submission",
+    title: "等待接单", body: "", width: 280, height: 220, x: -100, y: -90,
+  });
+  await page.goto("/?canvasPerf=1#/canvas");
+  await expect(page.locator("#canvas-pixi")).toBeVisible({ timeout: 15_000 });
+  await page.mouse.click(187, 350);
+  const badge = page.locator('.flow-node[data-id="1"] .video-generation-count');
+  await expect(badge).toHaveText("等待上游接单", { timeout: 15_000 });
+  await expect(badge).toHaveAttribute("data-stage", "upstream_submission");
 });
 
 test("transparent image setting adds a mandatory alpha-background constraint", () => {

@@ -13,6 +13,10 @@ test('sanitized errors keep distinct actionable reasons', () => {
     ['Agnes Video 2.5 Flash 云端队列持续繁忙，已自动重试 24 次，任务尚未被上游接受。', '云端队列长时间繁忙'],
     ['模型服务 TLS/代理连接失败（network）', 'TLS 或代理连接失败'],
     ['模型服务代理协议连接失败（network）', '代理协议连接失败'],
+    ['等待上游接单失败，已自动重试 24 次；HTTP 503，错误码 video_queue_full', '上游尚未接单'],
+    ['上游队列已满，尚未接单，未返回任务 ID（HTTP 429，错误码 video_queue_full）', '上游暂不接单'],
+    ['模型服务请求限流（HTTP 429）', '请求过于频繁'],
+    ['上游返回成功但未返回有效任务 ID，无法确认是否已接单', '上游任务编号缺失'],
   ]) expect(friendlyGenerationError(raw, '失败').title).toBe(title);
   expect(friendlyGenerationError('模型等待超时：已达到本次请求 180 秒等待上限', '失败').message).toContain('180 秒');
 });

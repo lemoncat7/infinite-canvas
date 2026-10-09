@@ -26,7 +26,13 @@ export function friendlyGenerationError(raw: string, fallback: string) {
     return result("接口没有访问权限", "当前账号或密钥无权执行这项生成任务。", "检查模型授权、账号权限或代理服务配置。");
   if (/insufficient_quota|quota.?exceeded|额度不足|余额不足/.test(lower))
     return result("模型服务额度不足", "服务商余额或配额不足，无法完成生成。", "检查服务商账户的余额与配额后再提交。");
-  if (/\b429\b|rate.?limit|too many requests|请求过多|请求过于频繁/.test(lower))
+  if (/等待上游接单失败/.test(text))
+    return result("上游尚未接单", text, "重试已停止；上游没有返回任务 ID。稍后重试或切换模型，可将技术详情中的请求 ID 提供给服务商。");
+  if (/video_queue_full|上游队列已满，尚未接单/.test(lower))
+    return result("上游暂不接单", "上游生成队列已满，未返回任务 ID；当前并未进入云端生成队列。", "画布会按任务状态等待再次提交，无需重复创建任务。");
+  if (/未返回有效任务 id/.test(lower))
+    return result("上游任务编号缺失", "上游返回成功，但没有可用于查询的有效任务 ID，无法确认是否已经接单。", "已停止自动提交，请联系服务商核查，避免重复生成。");
+  if (/\b429\b|rate.?limit|too many requests|请求过多|请求过于频繁|请求限流/.test(lower))
     return result("请求过于频繁", "上游接口触发了请求频率限制。", "稍后重试，并检查接口并发限制。");
   if (/队列持续繁忙|已自动重试\s*\d+\s*次/.test(text))
     return result("云端队列长时间繁忙", text, "本次任务尚未被上游接受；请稍后重新生成，或切换其他视频模型，不要连续重复提交。");

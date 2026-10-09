@@ -118,6 +118,8 @@ database.run("UPDATE jobs SET generation_stage='cloud_queue' WHERE generation_st
 database.run("UPDATE jobs SET generation_stage=CASE WHEN progress>0 THEN 'cloud_generation' ELSE 'cloud_queue' END WHERE generation_stage='local_queue' AND status='running' AND id IN (SELECT job_id FROM video_task_checkpoints)");
 database.run("UPDATE jobs SET generation_stage='local_generation' WHERE generation_stage='local_queue' AND status='running' AND id NOT IN (SELECT job_id FROM video_task_checkpoints)");
 database.run("UPDATE jobs SET progress_estimated=1 WHERE status='running' AND generation_stage='cloud_generation' AND model LIKE 'agnes-video%' AND progress>0 AND progress<100");
+// Old capacity retries were labelled as accepted cloud tasks. Never relabel a checkpointed task.
+database.run("UPDATE jobs SET generation_stage='upstream_submission' WHERE kind='video' AND status='queued' AND generation_stage='cloud_queue' AND retry_count>0 AND id NOT IN (SELECT job_id FROM video_task_checkpoints)");
 
 ensureColumn("notifications", "priority", "TEXT NOT NULL DEFAULT 'normal'");
 

@@ -14,7 +14,7 @@ export function mergeGenerationState(
   incoming: Pick<GenerationJob, "status" | "progress" | "progress_estimated" | "generation_stage">,
 ) {
   const terminal = ["succeeded", "failed", "canceled"].includes(incoming.status);
-  const explicitQueueStage = incoming.generation_stage === "local_queue" || incoming.generation_stage === "cloud_queue";
+  const explicitQueueStage = incoming.generation_stage === "local_queue" || incoming.generation_stage === "cloud_queue" || incoming.generation_stage === "upstream_submission";
   const preventQueueRegression = current.status === "running" && incoming.status === "queued" && !explicitQueueStage;
   const status = preventQueueRegression ? "running" : incoming.status;
   const progress =
