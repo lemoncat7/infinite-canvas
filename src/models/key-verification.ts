@@ -20,7 +20,9 @@ export function bindKeyVerification(form: HTMLFormElement, provider?: ProviderVi
     const button = document.createElement('button'); button.type = 'button'; button.textContent = '重新验证'
     button.setAttribute('aria-label', `重新验证 Key ${index + 1}`)
     const output = document.createElement('output'); output.setAttribute('aria-live', 'polite')
-    row.append(button, output); label.after(row)
+    const wrapper = document.createElement('div'); wrapper.className = 'model-key-row'
+    label.before(wrapper); wrapper.append(label, row)
+    row.append(button, output)
     button.addEventListener('click', async () => {
       const data = new FormData(form)
       if (String(data.get('baseUrl')).trim() !== provider.baseUrl || String(data.get('proxyUrl') || '').trim() !== provider.proxyUrl || !checkbox.checked) {

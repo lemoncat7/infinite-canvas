@@ -4,10 +4,13 @@ import { identifier, requestId, result } from './contracts.js';
 import { ApiFailure, projectPath, type VioraGateway } from './gateway.js';
 import { uploadImage } from './upload-tools.js';
 import { MAX_UPLOAD_BYTES, type UploadSessions } from './upload-sessions.js';
+import type { BinaryUploads } from './binary-upload.js';
 
-export function registerChunkedUploadTools(server: McpServer, api: VioraGateway, sessions: UploadSessions) {
-  server.registerTool('viora_asset_upload_chunked', {
-    description: 'Upload images up to 100 MiB without enlarging MCP messages. begin: supply requestId, projectId, name, mimeType, size (bytes), sha256, optional placement. write: uploadId, zero-based index, raw base64 of 1 MiB chunks (last is remaining bytes). status: uploadId, returns received indices and cached result. complete: uploadId, validates SHA-256 and uses existing image upload API. cancel: uploadId, discards only uncommitted chunks. Same chunks and completion retries are deduplicated for 30 minutes in this server process. Restart loses sessions: inspect assets before starting over. Use a local script to send file bytes, not LLM-generated base64.',
+export function registerChunkedUploadTools(server: McpServer, api: VioraGateway, sessions: UploadSessions, binary?: BinaryUploads) {
+  server.registerTool(binary ? 'viora_asset_upload_local' : 'viora_asset_upload_chunked', {
+    description: binary
+      ? 'Upload a local image directly without Base64. begin requires requestId, projectId, filename name, mimeType, size in bytes, sha256, optional placement; returns a short-lived PUT URL and headers. Use your local shell HTTP client to send raw file bytes, then complete with uploadId to import and optionally place on canvas. status retrieves progress/result; cancel discards uncommitted data. Up to 100 MiB, PNG/JPEG/WebP/GIF/AVIF only. Server cannot read client paths. Retry same bytes and complete safely. Sessions expire after 30 minutes and are lost on restart; inspect project assets before restarting an ambiguous completion. Never expose the temporary ticket in user-facing replies.'
+      : 'Upload images up to 100 MiB in Base64 chunks. Prefer viora_asset_upload_local for local files. begin requires requestId, projectId, name, mimeType, size, sha256, optional placement. write requires uploadId, index and data (1 MiB chunks, last remainder). status/complete/cancel require uploadId. Sessions expire after 30 minutes and do not survive restart. Complete retries are deduplicated.',
     inputSchema: {
       action: z.enum(['begin', 'write', 'status', 'complete', 'cancel']),
       uploadId: identifier.optional(), requestId: requestId.optional(), projectId: identifier.optional(),
@@ -26,12 +29,17 @@ export function registerChunkedUploadTools(server: McpServer, api: VioraGateway,
       const { requestId, projectId, name, mimeType, size, sha256, placement } = args;
       if (!requestId || !projectId || !name || !mimeType || !size || !sha256) throw new ApiFailure(400, 'begin requires requestId, projectId, name, mimeType, size and sha256');
       await api.call('GET', `${projectPath(projectId)}/assets`);
-      return sessions.begin(owner, requestId, { projectId, name, mimeType, size, sha256, placement });
+      const session = sessions.begin(owner, requestId, { projectId, name, mimeType, size, sha256, placement });
+      if (!binary) return session;
+      return { ...session, upload: { method: 'PUT', url: api.downloadUrl(`/api/mcp-uploads/${session.uploadId}`),
+        headers: { Authorization: `Bearer ${binary.ticket(owner, session.uploadId)}`, 'Content-Type': 'application/octet-stream' } },
+        instructions: 'Use a local HTTP tool to PUT raw file bytes (curl --data-binary @LOCAL_FILE) with the returned headers. No Base64, no long-lived API token. Then call this tool action=complete with uploadId. The remote server cannot read your local path. Tickets expire with the session after 30 minutes; restart discards unfinished transfers. Images only.' };
     }
     if (!args.uploadId) throw new ApiFailure(400, 'uploadId required');
     if (args.action === 'status') return sessions.status(owner, args.uploadId);
     if (args.action === 'cancel') return sessions.cancel(owner, args.uploadId);
     if (args.action === 'write') {
+      if (binary) throw new ApiFailure(400, 'Use HTTP PUT with raw file bytes from begin, not MCP write');
       if (args.index === undefined || !args.data) throw new ApiFailure(400, 'write requires index and data');
       return sessions.write(owner, args.uploadId, args.index, args.data);
     }

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, writeFileSync, rmSync, unlinkSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, unlinkSync, statSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Fastify from 'fastify'
@@ -30,6 +30,31 @@ function setup(t, env = {}) {
 function provider(store, values = {}) { return store.saveProvider({ revision: store.admin().revision, name: 'Test connection', baseUrl: 'https://example.com/v1', apiKey: 'PRIVATE_TEST_CREDENTIAL', ...values }).providers.at(-1) }
 function model(store, providerId, values = {}) { return store.saveModel({ revision: store.admin().revision, name: '中文模型', model: 'image-v1', adapter: 'openai-image', providerId, capabilities: { referenceImages: 1, transparent: true }, ...values }).models.at(-1) }
 
+test('plaintext copy follows encrypted saves but is never read as configuration', t => {
+  const { dir, store } = setup(t)
+  const path = join(dir, 'model-config-decrypt.json')
+  assert.equal(JSON.parse(readFileSync(path, 'utf8')).revision, 0)
+  const p = provider(store)
+  assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), store.secrets.open(readFileSync(join(dir, 'model-config.json'), 'utf8')))
+  if (process.platform !== 'win32') assert.equal(statSync(path).mode & 0o777, 0o600)
+  writeFileSync(path, 'invalid external edit')
+  const restored = new ModelStore(dir, {})
+  assert.equal(restored.connection(p.id).apiKey, 'PRIVATE_TEST_CREDENTIAL')
+  assert.equal(JSON.parse(readFileSync(path, 'utf8')).revision, store.admin().revision)
+  unlinkSync(path)
+  new ModelStore(dir, {})
+  assert.equal(JSON.parse(readFileSync(path, 'utf8')).revision, store.admin().revision)
+})
+
+test('plaintext copy failure does not fail an encrypted save', t => {
+  const { dir, store } = setup(t)
+  const path = join(dir, 'model-config-decrypt.json')
+  unlinkSync(path)
+  mkdirSync(path)
+  const p = provider(store)
+  assert.equal(new ModelStore(dir, {}).connection(p.id).apiKey, 'PRIVATE_TEST_CREDENTIAL')
+})
+
 test('replacement Key persists after restart and old unchecked Keys are actually removed', t => {
   const { dir, store } = setup(t)
   const p = provider(store, { apiKeys: ['old-one', 'old-two'] })
@@ -38,6 +63,16 @@ test('replacement Key persists after restart and old unchecked Keys are actually
   assert.deepEqual(restored.connection(p.id).apiKeys, ['new-key'])
   assert.equal(restored.connection(p.id).apiKey, 'new-key')
   assert.deepEqual(restored.admin().providers[0].keys.map(k => k.id), [credentialId('new-key')])
+})
+
+test('a third distinct Key persists with both retained Keys across restart', t => {
+  const { dir, store } = setup(t)
+  const p = provider(store, { apiKeys: ['first-test-key', 'second-test-key'] })
+  const updated = store.saveProvider({ ...p, revision: store.admin().revision,
+    retainedKeyIds: p.keys.map(k => k.id), apiKeys: ['third-test-key'] }, p.id)
+  assert.equal(updated.providers.find(x => x.id === p.id).keyCount, 3)
+  assert.deepEqual(new ModelStore(dir, {}).connection(p.id).apiKeys,
+    ['first-test-key', 'second-test-key', 'third-test-key'])
 })
 
 test('encrypted persistence, no credentials in public/admin output, restart and immutable execution snapshot', t => {

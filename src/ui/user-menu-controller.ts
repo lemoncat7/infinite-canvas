@@ -1,5 +1,6 @@
 import { apiFetch } from "../services/api";
 import { TrustedDevicesController } from "./trusted-devices-controller";
+import { bindMcpConfigCopy } from './mcp-config-copy';
 
 export type AuthUser = {
   id: string;
@@ -40,6 +41,7 @@ export class UserMenuController {
     this.renameButton.textContent = "✎";
     options.menu.querySelector("header")!.append(this.renameButton);
     this.devices = new TrustedDevicesController(options.menu.querySelector(".trusted-device-section")!, () => options.getUser()?.id);
+    bindMcpConfigCopy(options.menu.querySelector('.user-token-section')!);
     this.bindEvents();
   }
 

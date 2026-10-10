@@ -10,3 +10,5 @@ model-config.key
 asset-download.key
 model-config.json
 model-config.json.*.tmp
+model-config-decrypt.json
+model-config-decrypt.json.*.tmp

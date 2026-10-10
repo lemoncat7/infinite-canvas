@@ -8,13 +8,14 @@ import { registerAssetTools } from "./asset-tools.js";
 import { registerUploadTools } from "./upload-tools.js";
 import { registerChunkedUploadTools } from './chunked-upload-tools.js';
 import type { UploadSessions } from './upload-sessions.js';
+import type { BinaryUploads } from './binary-upload.js';
 
-export function createVioraMcp(gateway: VioraGateway, uploads: UploadSessions) {
+export function createVioraMcp(gateway: VioraGateway, uploads: UploadSessions, binary?: BinaryUploads) {
   const server = new McpServer(
     { name: "viora-infinite-canvas", version: "1.2.0" },
     {
       instructions:
-        "For local images over 1 MiB use viora_asset_upload_chunked (up to 100 MiB), preferably from a local script that reads and sends chunks without copying base64 into conversation. Upload sessions expire after 30 minutes and do not survive restart. " +
+        "Prefer viora_asset_upload_local for local images up to 100 MiB: begin, PUT raw file bytes using returned temporary headers and URL from your local shell, then complete. Never put base64 in conversation. Upload sessions expire after 30 minutes and do not survive restart. Chunked upload remains a fallback. " +
         "Video submission returns a separate resultNodeId. Poll viora_generation_get with syncCanvas=true through the final state to persist the result. Repair pending canvas links with viora_generation_sync, never a new generation; createMissing=true is an explicit request to add a missing result. syncCanvas=false is strictly read-only. " +
         "Use the current model catalog. Read the canvas version and allocate node IDs before writing. Preserve full node records on updates. A 409 requires re-reading and reconciling, not overwriting. Generation is asynchronous and can cost credits: submit once with a stable requestId, then poll the job. To deliver generated files, call viora_asset_get for a temporary no-header download URL, save it into the current session working directory using your local tools, then send the saved file as an attachment. Never request/expose the long-lived MCP token or claim a local path before downloading. V1 does not expose administrator configuration or deletion tools.",
     },
@@ -80,5 +81,6 @@ export function createVioraMcp(gateway: VioraGateway, uploads: UploadSessions) {
   registerAssetTools(server, gateway);
   registerUploadTools(server, gateway);
   registerChunkedUploadTools(server, gateway, uploads);
+  if (binary) registerChunkedUploadTools(server, gateway, uploads, binary);
   return server;
 }

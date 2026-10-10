@@ -3,3 +3,5 @@ dist
 .git
 *.log
 api/data
+**/model-config-decrypt.json
+**/model-config-decrypt.json.*.tmp

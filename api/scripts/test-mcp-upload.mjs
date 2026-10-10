@@ -2,9 +2,24 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { UploadSessions, CHUNK_BYTES, MAX_UPLOAD_BYTES } from '../dist/mcp/upload-sessions.js';
+import { BinaryUploads } from '../dist/mcp/binary-upload.js';
 
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const manifest = bytes => ({ projectId: 'project', name: 'x.png', mimeType: 'image/png', size: bytes.length, sha256: sha(bytes) });
+
+test('binary tickets are scoped, expire, and do not survive restart', t => {
+  let now = Date.now();
+  const store = new UploadSessions(() => now); t.after(() => store.close());
+  const binary = new BinaryUploads(store), owner = 'a'.repeat(64);
+  const { uploadId } = store.begin(owner, 'binary-001', manifest(Buffer.from('abc')));
+  const ticket = binary.ticket(owner, uploadId);
+  assert.equal(binary.verify(uploadId, ticket), owner);
+  assert.throws(() => binary.verify(uploadId, ticket.slice(0, -1) + (ticket.endsWith('0') ? '1' : '0')), /403/);
+  assert.throws(() => new BinaryUploads(store).verify(uploadId, ticket), /403/);
+  assert.throws(() => binary.verify('other-upload', ticket), /404/);
+  now += 31 * 60 * 1000;
+  assert.throws(() => binary.verify(uploadId, ticket), /404/);
+});
 
 test('chunk sessions support out-of-order writes, exact retries and concurrent completion without duplicate commits', async t => {
   const store = new UploadSessions(); t.after(() => store.close());

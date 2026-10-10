@@ -1,5 +1,7 @@
 # Viora MCP
 
+用户菜单的 **API Token → 复制 MCP 配置** 可复制当前网页地址对应的 Streamable HTTP 配置（保留协议、域名/IP 和端口，路径为 `/api/mcp`）。将 `headers.Authorization` 的 `Bearer YOUR_API_TOKEN` 中占位符替换为完整 Token，保留 `Bearer ` 前缀。此操作不会生成/刷新 Token，也不会复制 DSH 私有的凭据引用。若浏览器不允许自动复制（例如普通 HTTP 内网访问），页面提供只读文本框供手动复制。MCP 客户端需能访问复制出的地址，远程客户端不能用指向浏览器本机的 `localhost`。
+
 Viora / infinite-canvas 内置 MCP 服务，与网页共用用户、项目、模型目录、资产库和生成队列。不需要额外启动进程或开放端口。
 
 ## 连接
@@ -45,6 +47,7 @@ Viora / infinite-canvas 内置 MCP 服务，与网页共用用户、项目、模
 | `viora_generation_sync` | 修复已有任务与画布的关联，不重新生成、不消耗生成点数 |
 | `viora_assets_list` | 分页查询资产及受认证保护的下载路径 |
 | `viora_asset_upload` | 上传本地图片内容到指定项目，可选创建画布图片节点 |
+| `viora_asset_upload_local` | 本地图片二进制直传，短时上传票据、校验及幂等完成，不经过模型传 Base64 |
 | `viora_asset_upload_chunked` | 最大 100 MiB 图片分片上传、查询进度、校验合并及取消未完成上传 |
 | `viora_asset_get` | 通过资产 ID 或生成任务 ID 获取文件详情、图片内联预览及原文件下载方式 |
 
@@ -88,6 +91,12 @@ Viora / infinite-canvas 内置 MCP 服务，与网页共用用户、项目、模
 实际 ID 必须来自 `allocate_ids`，版本必须来自当前画布。数组分页返回 `total` 与 `nextOffset`；节点和连线分别判断是否还有下一页。
 
 ## 重试与并发
+
+### 本地图片直传（推荐）
+
+使用 `viora_asset_upload_local`：`begin` 提供 `requestId/projectId/name/mimeType/size/sha256` 和可选 `placement`，返回短时 PUT 地址和请求头。在文件所在机器用 HTTP 工具发送原文件，例如 `curl --fail-with-body -X PUT -H 'Content-Type: application/octet-stream' -H 'Authorization: Bearer <短时票据>' --data-binary @./reference.png '<上传地址>'`，再调用 `complete`（传 `uploadId`）入库。不要向用户展示票据，无需暴露 MCP 长期 Token。
+
+`status` 查询进度及结果，`cancel` 清理未提交数据。同文件 PUT 和 complete 可重试，大小及 SHA-256 必须一致。支持 PNG/JPEG/WebP/GIF/AVIF，最大 100 MiB；不支持任意视频/文档。远端不能读取客户端路径，需要 Agent 本地 HTTP 执行能力。会话有效期 30 分钟，重启会丢失；完成结果不确定时先查询项目资产。内部沿用图片校验入库，Base64 不经过模型上下文。
 
 ### 上传本地图片
 

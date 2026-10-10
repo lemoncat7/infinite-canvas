@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, openSync, fsyncSync, closeSync, unlinkSync, copyFileSync, constants } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { ModelSecrets } from './secrets.js'
+import { savePlaintextModelCopy } from './plaintext-copy.js'
 import { upgradeModelConfiguration } from './config-upgrade.js'
 import { AUTO_MODEL, modelPurposes, resolvedDefaults } from './purposes.js'
 import { connectionKeys, providerKeyStatus } from './key-pool.js'
@@ -11,9 +12,11 @@ export class ModelStore {
   private config: ModelConfiguration
   readonly secrets: ModelSecrets
   private readonly path: string
+  private readonly plaintextPath: string
   constructor(directory: string, env = process.env) {
     mkdirSync(directory, { recursive: true })
     this.path = `${directory}/model-config.json`
+    this.plaintextPath = `${directory}/model-config-decrypt.json`
     this.secrets = new ModelSecrets(directory, existsSync(this.path))
     const existing = existsSync(this.path)
     const concurrency = {
@@ -30,6 +33,7 @@ export class ModelStore {
       }
       this.save(this.config.revision, draft => Object.assign(draft, (draft.schemaVersion || 0) < 2 ? upgradeModelConfiguration(draft) : draft, { concurrency }))
     }
+    savePlaintextModelCopy(this.plaintextPath, this.config)
   }
   private effective(): ModelConfiguration {
     return this.config
@@ -60,6 +64,7 @@ export class ModelStore {
       const fd = openSync(temp, 'r'); try { fsyncSync(fd) } finally { closeSync(fd) }
       renameSync(temp, this.path)
       this.config = draft
+      savePlaintextModelCopy(this.plaintextPath, draft)
     } finally { if (existsSync(temp)) unlinkSync(temp) }
     return this.admin()
   }

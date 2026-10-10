@@ -68,7 +68,7 @@ test('MCP and existing HTTP routes share authorization, canvas conflicts, jobs a
       assert.ok(app.hasRoute({ method, url }), `Original HTTP route was not registered: ${route}`);
     }
     const { tools } = await client.listTools();
-    assert.equal(tools.length, 13);
+    assert.equal(tools.length, 14);
     assert.ok(tools.every(tool => !/delete|admin|clear/.test(tool.name)));
     assert.equal((await app.inject({ method: 'POST', url: '/mcp', payload: {} })).statusCode, 401);
     const cookie = `flow_session=${sessionStore.createSession('alice')}`;
@@ -271,6 +271,38 @@ test('MCP and existing HTTP routes share authorization, canvas conflicts, jobs a
     assert.equal((await other.callTool({ name: 'viora_generation_sync', arguments: { jobId, createMissing: true } })).isError, true);
     assert.equal(providerCalls, calls);
     assert.equal(getOne('SELECT credits FROM users WHERE id=?', ['alice']).credits, credits);
+  });
+
+  await t.test('omitted image references create no job and reserve no credits', async () => {
+    const beforeJobs = getOne('SELECT count(*) AS count FROM jobs WHERE user_id=?', ['alice']).count;
+    const beforeCredits = getOne('SELECT credits,reserved_credits FROM users WHERE id=?', ['alice']);
+    const response = await client.callTool({ name: 'viora_generation_submit', arguments: {
+      projectId, nodeId: nodeId + 1, kind: 'image', prompt: 'must use the linked image', model, requestId: 'missing-image-reference',
+    } });
+    assert.equal(response.isError, true);
+    assert.equal(JSON.parse(response.content[0].text).details.code, 'REFERENCE_MISMATCH');
+    assert.equal(getOne('SELECT count(*) AS count FROM jobs WHERE user_id=?', ['alice']).count, beforeJobs);
+    assert.deepEqual(getOne('SELECT credits,reserved_credits FROM users WHERE id=?', ['alice']), beforeCredits);
+  });
+
+  await t.test('local binary upload validates bytes and deduplicates completion', async () => {
+    const bytes = await sharp({ create: { width: 8, height: 8, channels: 3, background: 'red' } }).png().toBuffer();
+    const args = { action: 'begin', requestId: 'binary-test-001', projectId, name: 'local.png', mimeType: 'image/png', size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
+    const session = await call('viora_asset_upload_local', args);
+    assert.equal((await call('viora_asset_upload_local', args)).uploadId, session.uploadId);
+    const url = new URL(session.upload.url).pathname.replace(/^\/api/, '');
+    const put = (payload, headers = session.upload.headers) => app.inject({ method: 'PUT', url, payload, headers });
+    assert.equal((await put(bytes, { 'content-type': 'application/octet-stream' })).statusCode, 403);
+    assert.equal((await put(Buffer.alloc(bytes.length))).statusCode, 422);
+    assert.equal((await put(bytes.subarray(1))).statusCode, 400);
+    assert.equal((await put(bytes)).statusCode, 200);
+    assert.equal((await put(bytes)).statusCode, 200);
+    const complete = { action: 'complete', uploadId: session.uploadId };
+    assert.equal((await other.callTool({ name: 'viora_asset_upload_local', arguments: complete })).isError, true);
+    const outcome = await call('viora_asset_upload_local', complete);
+    assert.deepEqual(await call('viora_asset_upload_local', complete), outcome);
+    assert.deepEqual((await api('GET', outcome.asset.url.slice(4))).rawPayload, bytes);
+    assert.equal((await put(bytes)).statusCode, 409);
   });
 
   await t.test('MCP image upload reuses validation, ownership and optionally creates a canvas node', async () => {

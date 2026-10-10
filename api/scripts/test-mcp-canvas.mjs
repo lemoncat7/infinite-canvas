@@ -6,6 +6,24 @@ import { ApiFailure } from '../dist/mcp/gateway.js';
 import { registerGenerationTools } from '../dist/mcp/generation-tools.js';
 import { createHash } from 'node:crypto';
 import { generationRecovery } from '../dist/mcp/generation-recovery.js';
+import { validateSubmissionReferences } from '../dist/mcp/reference-inputs.js';
+
+test('reference readiness accepts completed results and rejects stale results and invalid assets', async () => {
+  const url = '/api/assets/ref/content/image.png';
+  const canvas = { nodes: [{ id: 1, kind: 'image' }, { id: 2, kind: 'image', mediaUrl: url, jobId: 'ref-job', status: 'succeeded' }], links: [{ from: 2, to: 1 }] };
+  let job = { status: 'succeeded', result_url: url }, asset = { mimeType: 'image/png', size: 123 };
+  const api = { downloadUrl: () => 'https://canvas.test/', async call(method, path) { return path.startsWith('/jobs/') ? job : asset; } };
+  await validateSubmissionReferences(api, canvas, 1, [url]);
+  job = { status: 'succeeded', result_url: '/api/assets/new/content/new.png' };
+  await assert.rejects(validateSubmissionReferences(api, canvas, 1, [url]), error => error.details.code === 'REFERENCE_NOT_READY');
+  job.result_url = url;
+  for (const invalid of [{ mimeType: 'video/mp4', size: 123 }, { mimeType: 'image/png', size: 0 }]) {
+    asset = invalid;
+    await assert.rejects(validateSubmissionReferences(api, canvas, 1, [url]), error => error.details.code === 'REFERENCE_ASSET_UNAVAILABLE');
+  }
+  await assert.rejects(validateSubmissionReferences(api, { nodes: [], links: [] }, 1, ['  ']), error => error.details.code === 'REFERENCE_EMPTY');
+  await validateSubmissionReferences(api, { nodes: [], links: [] }, 1, []);
+});
 
 test('terminal generation failures tell callers to stop polling and never auto-resubmit', () => {
   for (const status of ['failed', 'canceled', 'cancelled']) {
@@ -45,6 +63,7 @@ function fixture(kind = 'video') {
   const api = { async call(method, path, body) {
     calls.push({ method, path, body });
     if (path.startsWith('/jobs/')) return structuredClone(job);
+    if (path.startsWith('/assets/')) return { mimeType: 'image/png', size: 123 };
     if (path.endsWith('/id-block')) return { start: nextId++ };
     if (method === 'GET') return structuredClone(canvas);
     if (path === '/jobs') return { id: job.id, status: job.status, progress: job.progress, replayed: true };
@@ -130,6 +149,29 @@ test('MCP rejects omitted, missing, swapped video inputs and result-card submiss
   f.source.role = 'result';
   assert.equal((await submit(urls)).isError, true);
   assert.equal(f.calls.filter(c => c.path === '/jobs').length, 1);
+});
+
+test('image and video submissions block empty, failed, running, stale and missing references before jobs', async () => {
+  for (const kind of ['image', 'video']) {
+    for (const patch of [ { mediaUrl: '' }, { status: 'queued' }, { status: 'running' }, { status: 'failed' }, { status: 'waiting' }, { status: 'canceled' }, { jobId: 'still-running-job', status: 'succeeded' } ]) {
+      const f = fixture(kind), tools = new Map();
+      const url = '/api/assets/reference/content/ref.png';
+      f.canvas.nodes.push({ id: 2, kind: 'image', mediaUrl: url, ...patch });
+      f.canvas.links.push({ from: 2, to: 1 });
+      registerGenerationTools({ registerTool(name, config, handler) { tools.set(name, handler); } }, f.api);
+      const response = await tools.get('viora_generation_submit')({ projectId: 'project', nodeId: 1, kind, prompt: 'test', requestId: 'readiness-test-01', inputUrls: [url] });
+      assert.equal(response.isError, true, JSON.stringify({ kind, patch, response }));
+      const details = JSON.parse(response.content[0].text).details;
+      assert.equal(details.code, 'REFERENCE_NOT_READY');
+      assert.equal(details.issues[0].nodeId, 2);
+      assert.equal(f.calls.filter(c => c.path === '/jobs').length, 0);
+    }
+    const f = fixture(kind), tools = new Map();
+    f.canvas.links.push({ from: 404, to: 1 });
+    registerGenerationTools({ registerTool(name, config, handler) { tools.set(name, handler); } }, f.api);
+    assert.equal((await tools.get('viora_generation_submit')({ projectId: 'project', nodeId: 1, kind, prompt: 'test', requestId: 'missing-reference' })).isError, true);
+    assert.equal(f.calls.filter(c => c.path === '/jobs').length, 0);
+  }
 });
 
 test('legacy result reference links require explicit repair and move without creating a generation', async () => {

@@ -5,12 +5,15 @@ import { VioraGateway } from "./gateway.js";
 import { createVioraMcp } from "./tools.js";
 import { UploadSessions } from './upload-sessions.js';
 import { mcpRequestOrigin } from './request-origin.js';
+import { BinaryUploads, registerBinaryUploadRoute } from './binary-upload.js';
 
 /** Stateless MCP: each request has its own server/transport and authenticated user.
  * No in-memory session can leak between tokens or become stale after a restart.
  */
 export function registerMcpRoutes(app: FastifyInstance) {
   const uploads = new UploadSessions();
+  const binary = new BinaryUploads(uploads);
+  registerBinaryUploadRoute(app, uploads, binary);
   app.addHook('onClose', async () => uploads.close());
   const origins = new Set(
     (process.env.MCP_ALLOWED_ORIGINS || "")
@@ -60,6 +63,7 @@ export function registerMcpRoutes(app: FastifyInstance) {
       const server = createVioraMcp(
         new VioraGateway(app, authorization, origin),
         uploads,
+        binary,
       );
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,

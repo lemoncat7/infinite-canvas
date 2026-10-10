@@ -1,5 +1,18 @@
 .topbar:has(#workspace-user-menu.open) { z-index: 80; }
 #workspace-user-menu { max-height: calc(100dvh - 88px); overflow-y: auto; overscroll-behavior: contain; box-sizing: border-box; }
+#workspace-user-menu, #workspace-user-menu [data-trusted-devices] { scrollbar-width: none; }
+#workspace-user-menu::-webkit-scrollbar, #workspace-user-menu [data-trusted-devices]::-webkit-scrollbar { display: none; width: 0; height: 0; }
+#workspace-user-menu .user-token-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0; border: 0; }
+#workspace-user-menu .user-token-section .user-token-heading small { font-size: 12px; }
+#workspace-user-menu .user-token-section button { font-size: 12px; min-height: 32px; height: auto; color: var(--ui-text-secondary); background: var(--ui-surface-raised); border-color: var(--ui-border); }
+#workspace-user-menu .user-token-section button:hover { color: var(--ui-text); background: var(--ui-menu-item-hover); }
+#workspace-user-menu .user-token-section button:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
+#workspace-user-menu .user-token-section p { color: var(--ui-text-secondary); font-size: 12px; line-height: 1.5; }
+#workspace-user-menu .user-token-section .mcp-config-help { margin-top: 4px; }
+#workspace-user-menu .mcp-copy-status { color: var(--ui-text-secondary); font-size: 12px; line-height: 1.5; }
+#workspace-user-menu .mcp-copy-status:empty { display: none; }
+#workspace-user-menu .user-token-section textarea { width: 100%; min-width: 0; resize: vertical; padding: 8px; border: 1px solid var(--ui-border); border-radius: 6px; background: var(--ui-surface-solid); color: var(--ui-text); font: 12px/1.5 ui-monospace,monospace; }
+#workspace-user-menu .user-token-section textarea[hidden] { display: none; }
 #workspace-user-menu #admin-actions[hidden], #lab-modal form[hidden] { display: none !important; }
 #workspace-user-menu #admin-actions > summary { display: flex; align-items: center; gap: 9px; min-height: 40px; padding: 6px 8px; list-style: none; border-radius: 8px; cursor: pointer; color: var(--ui-text); font: inherit; }
 #workspace-user-menu #admin-actions > summary::-webkit-details-marker { display: none; }
@@ -21,5 +34,6 @@
 #workspace-user-menu .device-list-status:empty { display: none; }
 #lab-modal.credit-admin-mode .lab-orbit, #lab-modal.credit-admin-mode .credit-balance, #lab-modal.credit-admin-mode .credit-rule, #lab-modal.credit-admin-mode h2 + p { display: none; }
 @media (max-width: 640px) {
+  #workspace-user-menu .user-token-section button { min-height: 44px; }
   #workspace-user-menu #admin-actions > summary, #workspace-user-menu .admin-submenu button, #workspace-user-menu .device-list-controls button, #workspace-user-menu [data-trusted-devices] button { min-height: 44px; }
 }

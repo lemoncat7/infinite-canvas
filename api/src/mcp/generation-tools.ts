@@ -4,7 +4,7 @@ import type { CanvasSnapshot } from "./canvas-tools.js";
 import { identifier, requestId, result } from "./contracts.js";
 import { ApiFailure, projectPath, type VioraGateway } from "./gateway.js";
 import { syncGenerationCanvas, type McpJob } from './generation-canvas.js';
-import { assertReferenceInputs } from './reference-inputs.js';
+import { validateSubmissionReferences } from './reference-inputs.js';
 import { generationRecovery } from './generation-recovery.js';
 
 export function registerGenerationTools(server: McpServer, api: VioraGateway) {
@@ -12,7 +12,7 @@ export function registerGenerationTools(server: McpServer, api: VioraGateway) {
     "viora_generation_submit",
     {
       description:
-        "Submit one asynchronous image/video job on an existing matching generator node. Video inputUrls must match its connected image inputs and order. Images link to the generator; only the generator links to the separate video result. Returns resultNodeId and canvasSync. May spend credits. Reuse the SAME requestId and inputs on retries. Poll generation_get with syncCanvas=true until terminal, including the final poll, to persist results on the canvas. If linking fails use generation_sync; NEVER submit another billable job to repair the canvas.",
+        "Submit one asynchronous image/video job on an existing matching generator node. For BOTH images and videos, all connected reference images must be ready and inputUrls must match them completely and in order. Pending, failed, empty or stale references are rejected before billing; wait for dependencies and sync results, never omit references to bypass validation. Images link to the generator; only the generator links to the separate video result. Returns resultNodeId and canvasSync. May spend credits. Reuse the SAME requestId and inputs on retries. Poll generation_get with syncCanvas=true until terminal, including the final poll, to persist results on the canvas. If linking fails use generation_sync; NEVER submit another billable job to repair the canvas.",
       inputSchema: {
         projectId: identifier,
         nodeId: z.number().int().positive(),
@@ -20,7 +20,7 @@ export function registerGenerationTools(server: McpServer, api: VioraGateway) {
         kind: z.enum(["image", "video"]),
         prompt: z.string().trim().min(1).max(4000),
         model: identifier.optional().describe('Prefer the enabled model id returned by viora_models_list (including global: IDs). A unique upstream model name is also accepted, but duplicate names are ambiguous. Job responses may contain the upstream model name rather than the selected catalog ID; these need not be equal.'),
-        inputUrls: z.array(z.string().min(1).max(4000)).max(16).optional().describe('Actual reference image URLs in input order. For video, must match every connected image on the GENERATOR in the same order; mismatches are rejected before billing. MCP links references to the generator, never the video result.'),
+        inputUrls: z.array(z.string().trim().min(1).max(4000)).max(16).optional().describe('Actual reference image URLs in input order. For image AND video, must match every connected image on the GENERATOR in the same order; unready references and mismatches are rejected before billing. Never omit unfinished dependencies.'),
         parameters: z
           .object({
             size: z.string().optional(),
@@ -56,8 +56,8 @@ export function registerGenerationTools(server: McpServer, api: VioraGateway) {
           );
         if (input.kind === 'video') {
           if (target.role === 'result' || target.mediaUrl || target.jobId) throw new ApiFailure(400, 'Use a video generator node, not a video result card. No job was created.');
-          assertReferenceInputs(api, canvas, input.nodeId, input.inputUrls ?? []);
         }
+        await validateSubmissionReferences(api, canvas, input.nodeId, input.inputUrls ?? []);
         console.info('[mcp-generation] validated submission', { requestId, projectId: input.projectId, nodeId: input.nodeId, kind: input.kind, inputReferenceCount: input.inputUrls?.length ?? 0, canvasVersion: canvas.version });
         const job = await api.call<Record<string, unknown>>(
           "POST",

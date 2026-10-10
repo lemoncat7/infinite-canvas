@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { secureTextEqual } from "../auth/crypto.js";
 import { type JobInput } from "../core/types.js";
 import {
@@ -16,13 +16,20 @@ export function validateOwnedInputUrls(
   kind: JobInput["kind"],
 ) {
   for (const source of urls) {
+    if (!source.trim()) throw new Error('参考图片地址为空');
     const match = source.match(/^\/api\/assets\/([^/]+)\/content(?:\/|$)/);
     if (!match) continue;
     const asset = getOne(
-      "SELECT size FROM assets WHERE id = ? AND user_id = ?",
+      "SELECT size, mime_type, storage_name FROM assets WHERE id = ? AND user_id = ?",
       [decodeURIComponent(match[1]), userId],
     );
     if (!asset) throw new Error("输入素材不存在或不属于当前用户");
+    if (!String(asset.mime_type).startsWith('image/') || Number(asset.size) <= 0)
+      throw new Error('参考素材不是有效图片或内容为空');
+    try {
+      const file = statSync(`${uploadDirectory}/${asset.storage_name}`);
+      if (!file.isFile() || file.size <= 0 || file.size !== Number(asset.size)) throw new Error('Invalid file');
+    } catch { throw new Error('参考图片文件缺失、为空或不完整，请重新上传或生成'); }
     if (kind === "video" && Number(asset.size ?? 0) > 15 * 1024 * 1024)
       throw new Error("参考图片超过 15MB");
   }

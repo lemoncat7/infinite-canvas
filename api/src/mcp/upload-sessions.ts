@@ -57,6 +57,17 @@ export class UploadSessions {
     return this.summary(session);
   }
   status(owner: string, id: string) { return this.summary(this.get(owner, id)); }
+  writeBinary(owner: string, id: string, bytes: Buffer) {
+    const session = this.get(owner, id);
+    if (session.state !== 'receiving') throw new ApiFailure(409, 'Upload is not receiving; inspect status');
+    if (bytes.length !== session.manifest.size) throw new ApiFailure(400, 'File byte length does not match manifest');
+    if (createHash('sha256').update(bytes).digest('hex') !== session.manifest.sha256)
+      throw new ApiFailure(422, 'File SHA-256 mismatch');
+    // Validate the entire file before replacing chunks: interrupted/rejected retries are harmless.
+    for (let index = 0; index < Math.ceil(bytes.length / CHUNK_BYTES); index++)
+      session.chunks.set(index, bytes.subarray(index * CHUNK_BYTES, (index + 1) * CHUNK_BYTES));
+    return this.summary(session);
+  }
   write(owner: string, id: string, index: number, data: string) {
     const session = this.get(owner, id);
     if (session.state !== 'receiving') throw new ApiFailure(409, 'Upload is not receiving chunks; inspect status');
