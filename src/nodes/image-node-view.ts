@@ -1,4 +1,5 @@
 import type { FlowLink, FlowNode } from "./node-types";
+import { mediaThumbnailUrl } from "../canvas/thumbnail-surface-renderer";
 import { bindCatalogSettings, normalizeModelSettings } from '../models/node-settings';
 import { bindNodeConfigPanel } from "../ui/node-editor";
 import {
@@ -106,7 +107,7 @@ export function bindImageNodePanel(options: ImageNodePanelOptions) {
     activeMention = Math.min(activeMention, Math.max(0, references.length - 1));
     mentionList.innerHTML = references.length
       ? references.map(({ source, order }, index) =>
-          `<button type="button" class="${index === activeMention ? "active" : ""}" data-image-mention-source="${source.id}"><span>${source.mediaUrl ? `<img src="${escapeHtml(source.mediaUrl)}" alt="">` : "等待"}</span><b>图${order}</b><small>${escapeHtml(source.title || "未命名素材")}</small></button>`,
+          `<button type="button" class="${index === activeMention ? "active" : ""}" data-image-mention-source="${source.id}"><span>${source.mediaUrl ? `<img src="${escapeHtml(mediaThumbnailUrl(source.mediaUrl))}" decoding="async" alt="">` : "等待"}</span><b>图${order}</b><small>${escapeHtml(source.title || "未命名素材")}</small></button>`,
         ).join("")
       : "<p>没有匹配的连接素材</p>";
     mentionMenu.hidden = false;

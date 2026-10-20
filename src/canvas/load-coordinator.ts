@@ -1,12 +1,13 @@
 import type { FlowLink, FlowNode } from "../nodes/node-types";
 import { hydrateGenerationState } from "../services/generation";
 import { normalizeCanvasDocument } from "./document-normalizer";
-import { repairRestoredCanvas } from "./restoration";
+import { removeFailedRestoredResults, repairRestoredCanvas } from "./restoration";
 import { diffCanvasSnapshots, normalizeCanvasLinks, type CanvasSyncSnapshot } from "./sync";
 import { fetchCanvasDocument } from "./sync-client";
 import type { CanvasSaveCoordinator } from "./save-coordinator";
 
 export class CanvasLoadCoordinator {
+  private recovery?: AbortController;
   constructor(
     private readonly deps: {
       save: CanvasSaveCoordinator;
@@ -40,11 +41,13 @@ export class CanvasLoadCoordinator {
   ) {}
 
   async load(keepLoadingStatus = false) {
+    this.recovery?.abort();
+    const recovery = this.recovery = new AbortController();
     const sequence = this.deps.save.beginLoad();
     try {
       const projectId = this.deps.projectId();
       const lease = this.deps.getLease();
-      this.deps.setBootStatus("正在读取画布与生成任务");
+      this.deps.setBootStatus("正在读取画布");
       this.deps.cancelPolling();
       const result = await fetchCanvasDocument(projectId);
       if (!this.deps.save.isCurrentLoad(sequence, projectId)) return;
@@ -64,7 +67,6 @@ export class CanvasLoadCoordinator {
       document.links = normalized.links;
       this.deps.clearViews();
       this.deps.nodes.splice(0, this.deps.nodes.length, ...normalized.nodes);
-      await hydrateGenerationState(this.deps.nodes);
       this.deps.links.splice(
         0,
         this.deps.links.length,
@@ -105,14 +107,25 @@ export class CanvasLoadCoordinator {
         diffCanvasSnapshots(normalized.baseline, this.deps.capture()).length
       )
         this.deps.scheduleSave();
-      this.deps.nodes
-        .filter(
-          (node) =>
-            node.jobId &&
-            (node.status === "queued" || node.status === "running"),
-        )
-        .forEach(this.deps.pollJob);
-      queueMicrotask(this.deps.runAgentWorkflow);
+      // Paint saved media first. Historical terminal jobs need no round trip;
+      // recover only unfinished/missing results, without blocking first paint.
+      const isCurrent = () => this.deps.save.isCurrentLoad(sequence, projectId);
+      void hydrateGenerationState([...this.deps.nodes], {
+        signal: recovery.signal,
+        isCurrent: (node) => isCurrent() && this.deps.nodes.includes(node),
+        onRecovered: (node, changed) => {
+          if (changed) {
+            if (node.kind === "video" && node.status === "failed")
+              removeFailedRestoredResults(this.deps.nodes, this.deps.links);
+            this.deps.update();
+            this.deps.draw();
+            this.deps.scheduleSave();
+          }
+          if (node.status === "queued" || node.status === "running") this.deps.pollJob(node);
+        },
+      }).then(() => {
+        if (isCurrent() && !recovery.signal.aborted) this.deps.runAgentWorkflow();
+      }).catch(() => { /* A background refresh must not hide the loaded canvas. */ });
       if (!keepLoadingStatus) {
         const version = this.deps.setBootStatus("已同步服务器最新版本");
         this.deps.hideBootStatus(version, 650);

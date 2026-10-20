@@ -461,6 +461,26 @@ async function mockApi(page: Page, count = 400, preserveLocalCanvas = false) {
   return { canvas, syncPayloads };
 }
 
+test("completed image canvas loads thumbnails without original downloads or historical job requests", async ({ page }) => {
+  const { canvas } = await mockApi(page, 95, true);
+  canvas.nodes.forEach((node, index) => Object.assign(node, {
+    kind: "image", status: "succeeded", jobId: `finished-${index}`,
+    mediaUrl: "/api/assets/test-image/content/test.png",
+  }));
+  const requests: string[] = [];
+  page.on("request", request => requests.push(new URL(request.url()).pathname));
+  await page.goto("/?canvasPerf=1#/canvas");
+  const surface = page.locator('.flow-node[data-id="1"] .node-media-surface');
+  await expect(surface).toHaveAttribute("data-thumbnail-state", "ready");
+  expect(requests.filter(path => path.startsWith("/api/jobs/"))).toHaveLength(0);
+  expect(requests.filter(path => path.includes("/content/"))).toHaveLength(0);
+  expect(requests).toContain("/api/assets/test-image/thumbnail");
+  // The original must remain available for intentional full-size previews.
+  await page.locator('.flow-node[data-id="1"]').dblclick();
+  await expect(page.locator("#asset-preview")).toHaveClass(/open/);
+  await expect.poll(() => requests.filter(path => path.includes("/content/")).length).toBeGreaterThan(0);
+});
+
 test("homepage defers Pixi until the workspace is opened", async ({ page }) => {
   await mockApi(page, 20);
   const pixiRequests: string[] = [];

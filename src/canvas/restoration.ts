@@ -15,8 +15,15 @@ export function repairRestoredCanvas(nodes: FlowNode[], links: FlowLink[]) {
     Object.assign(node, position); repositionedResult = true;
   });
 
+  const removedInvalidResults = removeFailedRestoredResults(nodes, links);
+  return { repositionedResult, removedInvalidResults };
+}
+
+// Also used after background job recovery, without repositioning cards that
+// the user may already be editing or dragging.
+export function removeFailedRestoredResults(nodes: FlowNode[], links: FlowLink[]) {
   const invalidResults = nodes.filter((node) => node.kind === "video" && node.status === "failed" && !node.mediaUrl
     && links.some((link) => link.to === node.id && nodes.some((source) => source.id === link.from && source.kind === "video")));
   for (const node of invalidResults) removeResultNode(node, nodes, links);
-  return { repositionedResult, removedInvalidResults: invalidResults.length };
+  return invalidResults.length;
 }

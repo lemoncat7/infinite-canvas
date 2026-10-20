@@ -39,8 +39,8 @@ export async function submitGenerationJob(request: GenerationJobRequest) {
   return job;
 }
 
-export async function fetchGenerationJob(jobId: string) {
-  const response = await apiFetch(`/api/jobs/${encodeURIComponent(jobId)}`),
+export async function fetchGenerationJob(jobId: string, signal?: AbortSignal) {
+  const response = await apiFetch(`/api/jobs/${encodeURIComponent(jobId)}`, { signal }),
     job = (await response.json().catch(() => ({}))) as GenerationJob;
   if (!response.ok) throw new Error(job.error || "任务状态获取失败");
   return job;
@@ -98,28 +98,57 @@ export async function runGenerationJob(options: {
   }
 }
 
-export async function hydrateGenerationState(nodes: FlowNode[]) {
-  await Promise.all(nodes
-    .filter((node) => node.jobId)
-    .map(async (node) => {
+export function needsGenerationRecovery(node: FlowNode) {
+  return Boolean(node.jobId) && !["failed", "canceled"].includes(node.status ?? "")
+    && !(node.status === "succeeded" && node.mediaUrl);
+}
+
+export async function hydrateGenerationState(nodes: FlowNode[], options: {
+  signal: AbortSignal;
+  isCurrent: (node: FlowNode) => boolean;
+  onRecovered: (node: FlowNode, changed: boolean) => void;
+}) {
+  const groups = new Map<string, FlowNode[]>();
+  for (const node of nodes.filter(needsGenerationRecovery)) {
+    const group = groups.get(node.jobId!) ?? [];
+    group.push(node);
+    groups.set(node.jobId!, group);
+  }
+  const queue = [...groups];
+  let cursor = 0;
+  await Promise.all(Array.from({ length: Math.min(4, queue.length) }, async () => {
+    while (!options.signal.aborted && cursor < queue.length) {
+      const [jobId, group] = queue[cursor++];
+      const snapshots = new Map(group.map((node) => [node, { status: node.status, mediaUrl: node.mediaUrl }]));
+      let job: GenerationJob | undefined;
       try {
-        const job = await fetchGenerationJob(node.jobId!);
-        node.status = job.status;
-        node.progress = Number(job.progress ?? 0);
-        node.progressEstimated = Boolean(job.progress_estimated);
-        node.generationStage = job.generation_stage;
-        if (job.result_url) node.mediaUrl = job.result_url;
-        if (job.result_metadata) {
-          try {
-            const metadata = JSON.parse(job.result_metadata);
-            if (metadata && typeof metadata === "object") node.videoResult = metadata;
-          } catch { /* 保留旧任务中可用的画布元数据。 */ }
+        job = await fetchGenerationJob(jobId, AbortSignal.any([options.signal, AbortSignal.timeout(10_000)]));
+      } catch { /* Keep saved content; active jobs resume through the poller. */ }
+      for (const node of group) {
+        if (options.signal.aborted || !options.isCurrent(node) || node.jobId !== jobId) continue;
+        const snapshot = snapshots.get(node)!;
+        if (node.status !== snapshot.status || node.mediaUrl !== snapshot.mediaUrl) continue;
+        const before = JSON.stringify(node);
+        if (job) {
+          node.status = job.status;
+          node.progress = Number(job.progress ?? 0);
+          node.progressEstimated = Boolean(job.progress_estimated);
+          node.generationStage = job.generation_stage;
+          if (job.result_url) node.mediaUrl = job.result_url;
+          if (job.result_metadata) {
+            try {
+              const metadata = JSON.parse(job.result_metadata);
+              if (metadata && typeof metadata === "object") node.videoResult = metadata;
+            } catch { /* 保留旧任务中可用的画布元数据。 */ }
+          }
+          if (job.prompt) {
+            node.generationPrompt = job.prompt;
+            if (node.body === "生成完成 · 结果已回写" || node.body === job.prompt)
+              node.body = "";
+          }
         }
-        if (job.prompt) {
-          node.generationPrompt = job.prompt;
-          if (node.body === "生成完成 · 结果已回写" || node.body === job.prompt)
-            node.body = "";
-        }
-      } catch { /* 保留现有内容，等待用户手动修正 */ }
-    }));
+        options.onRecovered(node, before !== JSON.stringify(node));
+      }
+    }
+  }));
 }

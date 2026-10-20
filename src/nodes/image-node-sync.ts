@@ -1,4 +1,5 @@
 import type { FlowLink, FlowNode } from "./node-types";
+import { mediaThumbnailUrl } from "../canvas/thumbnail-surface-renderer";
 import {
   orderedImageReferences,
   synchronizeImageReferenceMentions,
@@ -80,15 +81,21 @@ export function syncImageNodePanel(options: ImageNodeSyncOptions) {
       ".image-reference-manager",
     )!;
     manager.hidden = references.length === 0 && !node.mediaUrl;
-    manager.querySelector<HTMLElement>("[data-image-reference-list]")!.innerHTML =
-      (node.mediaUrl
-        ? `<span class="image-reference-base"><i><img src="${escapeHtml(node.mediaUrl)}" alt=""></i><b>图1</b><small>当前图片</small></span>`
+    const referenceList = manager.querySelector<HTMLElement>("[data-image-reference-list]")!;
+    // Hidden <img> elements still download. Populate only the open panel, and
+    // keep the DOM stable while progress updates repaint the canvas.
+    const referenceMarkup = !imagePanelOpen ? "" : (node.mediaUrl
+        ? `<span class="image-reference-base"><i><img src="${escapeHtml(mediaThumbnailUrl(node.mediaUrl))}" decoding="async" alt=""></i><b>图1</b><small>当前图片</small></span>`
         : "") + references
         .map(
           ({ source, order }) =>
-            `<button type="button" data-image-reference-source="${source.id}" title="图${order} · ${escapeHtml(source.title)}"><span>${source.mediaUrl ? `<img src="${escapeHtml(source.mediaUrl)}" alt="">` : "等待"}</span><b>图${order}</b><small>${escapeHtml(source.title || "未命名素材")}</small></button>`,
+            `<button type="button" data-image-reference-source="${source.id}" title="图${order} · ${escapeHtml(source.title)}"><span>${source.mediaUrl ? `<img src="${escapeHtml(mediaThumbnailUrl(source.mediaUrl))}" decoding="async" alt="">` : "等待"}</span><b>图${order}</b><small>${escapeHtml(source.title || "未命名素材")}</small></button>`,
         )
         .join("");
+    if (referenceList.dataset.markup !== referenceMarkup) {
+      referenceList.innerHTML = referenceMarkup;
+      referenceList.dataset.markup = referenceMarkup;
+    }
     const model = imagePanel.querySelector<HTMLSelectElement>(
         '[data-image-field="model"]',
       )!,
